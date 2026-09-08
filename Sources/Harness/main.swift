@@ -19,7 +19,7 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
         window.center()
 
         guard let contentView = window.contentView else { return }
-        saverView = IdlesseView(frame: contentView.bounds, isPreview: false)!
+        saverView = IdlesseView(frame: contentView.bounds, isPreview: false)
         saverView.autoresizingMask = [.width, .height]
         contentView.addSubview(saverView)
 

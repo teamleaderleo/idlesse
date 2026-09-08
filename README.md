@@ -18,6 +18,8 @@ Early prototype. The code is intentionally AppKit-first inside the screen saver 
 
 The project uses Apple's `ScreenSaver` framework and produces a classic `.saver` bundle. This remains the documented third-party screen saver format, while modern first-party screen savers use a newer extension mechanism that is still awkward territory for third-party distribution.
 
+GitHub Actions compiles both the preview app and the universal saver on a macOS runner so compiler regressions are caught before changes land.
+
 ## Requirements
 
 - macOS 14 or newer
