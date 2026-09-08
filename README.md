@@ -84,7 +84,9 @@ Tahoe may show an **Options…** button for Idlesse that does nothing. That is a
 
 The companion app and the sandboxed screen saver must see the same preferences. `ScreenSaverDefaults` is redirected by the `legacyScreenSaver` container, so an external app cannot reliably configure the saver through defaults alone.
 
-Idlesse now stores one JSON settings file inside the legacy screen-saver container. The companion app reaches it through the user's normal home directory; the saver reaches the same file through its sandboxed home directory. The selected folder is stored as a read-only security-scoped bookmark.
+Idlesse stores one JSON settings document inside the legacy screen-saver container. The companion app reaches it through the user's real home directory; the saver reaches the same underlying file through its sandboxed home directory.
+
+The selected image folder is stored as a **document-scoped, read-only security-scoped bookmark** owned by that shared settings document. The owner-document model is important here: the folder grant can be redeemed by the sandboxed saver because it already has access to the document containing the bookmark. Early prototype app-scoped bookmarks are still accepted when possible, and choosing the folder again in Idlesse.app upgrades it to the transferable format.
 
 The old prototype's `ScreenSaverDefaults` values are migrated by Idlesse.app when possible.
 
@@ -92,7 +94,7 @@ The old prototype's `ScreenSaverDefaults` values are migrated by Idlesse.app whe
 
 Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item. Ordered modes support name, file creation date, and file modification date in both directions.
 
-The selected folder is rescanned every 15 seconds. Added images enter the next rebuilt order automatically, removed images stop being selected, and an empty folder begins playing again when new images appear.
+The selected folder is rescanned every 15 seconds. Added images enter the next rebuilt order automatically, removed images stop being selected, and an empty folder begins playing again when new images appear. The installed saver also checks the shared settings document on that interval, so changes saved in Idlesse.app can take effect without waiting for a new saver process.
 
 The multi-display modes share one per-process shuffle seed. In **Same image on every display**, saver instances use the same deck; in **Different image on each display**, each screen starts at a different offset in that deck. Exact transition timing still follows when macOS starts each saver instance.
 
@@ -108,4 +110,4 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next work: verify that the companion app's shared folder bookmark is redeemable by the installed Tahoe saver, then harden installation/distribution and continue the Photos-source investigation.
+Next work: verify the document-scoped folder bookmark in the installed Tahoe saver, then harden installation/distribution and continue the Photos-source investigation.
