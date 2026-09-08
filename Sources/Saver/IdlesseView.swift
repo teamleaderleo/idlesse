@@ -29,11 +29,40 @@ final class IdlesseView: ScreenSaverView {
         commonInit()
     }
 
-    override var hasConfigureSheet: Bool { true }
+    override var hasConfigureSheet: Bool {
+        NSLog("Idlesse: hasConfigureSheet requested")
+        return true
+    }
 
     override var configureSheet: NSWindow? {
+        NSLog("Idlesse: configureSheet requested")
         configureController.reload()
-        return configureController.window
+
+        let optionsWindow = configureController.window
+
+        // Tahoe has a known legacyScreenSaver regression where System Settings can
+        // ask a saver for its configuration window but then fail to present that
+        // window. Give the host a chance to attach the sheet normally, then fall
+        // back to showing the very same window ourselves if it never gets a parent.
+        if #available(macOS 26.0, *) {
+            optionsWindow.level = .floating
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak optionsWindow] in
+                guard let optionsWindow else { return }
+
+                if optionsWindow.sheetParent == nil {
+                    NSLog("Idlesse: Tahoe host did not attach configureSheet; presenting fallback window")
+                    optionsWindow.center()
+                    optionsWindow.makeKeyAndOrderFront(nil)
+                    optionsWindow.orderFrontRegardless()
+                    NSApp.activate(ignoringOtherApps: true)
+                } else {
+                    NSLog("Idlesse: configureSheet attached by host")
+                }
+            }
+        }
+
+        return optionsWindow
     }
 
     override func startAnimation() {
