@@ -25,7 +25,7 @@ final class ConfigureSheetController: NSObject {
         self.onSave = onSave
         self.window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
-            styleMask: [.titled, .closable],
+            styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
@@ -256,13 +256,15 @@ final class ConfigureSheetController: NSObject {
     }
 
     private func dismiss() {
-        // ScreenSaverView's configureSheet contract says the controller must end
-        // the document-modal session through NSApplication. Do that exact thing when
-        // System Settings is running us as a sheet, then order the reusable window out.
+        // ScreenSaverView's configureSheet contract requires the controller to end
+        // the document-modal session through NSApplication. Let AppKit perform the
+        // native sheet dismissal animation; standalone development windows simply
+        // order themselves out.
         if window.sheetParent != nil {
             NSApp.endSheet(window)
+        } else {
+            window.orderOut(nil)
         }
-        window.orderOut(nil)
     }
 
     private func setFolderPath(_ path: String?) {
