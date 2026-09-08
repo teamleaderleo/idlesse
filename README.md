@@ -6,7 +6,8 @@ Current prototype features:
 
 - choose a folder of images
 - optionally include subfolders
-- random shuffle-bag or ordered playback
+- automatically notice images added to or removed from that folder while running
+- random shuffle-bag playback or ordered playback by name, creation date, or modification date
 - keep each image up for seconds, minutes, or hours
 - crossfade gently between images
 - fit, fill, or show at actual size
@@ -18,9 +19,7 @@ Current prototype features:
 
 Early prototype. The code is intentionally AppKit-first inside the screen saver bundle. A separate preview harness is included for quicker iteration.
 
-The project uses Apple's `ScreenSaver` framework and produces a classic `.saver` bundle. This remains the documented third-party screen saver format, while modern first-party screen savers use a newer extension mechanism that is still awkward territory for third-party distribution.
-
-GitHub Actions compiles both the preview app and the universal saver on a macOS runner and smoke-tests the Options UI at runtime.
+The project uses Apple's `ScreenSaver` framework and produces a classic `.saver` bundle. GitHub Actions compiles both the preview app and the universal saver on a macOS runner and smoke-tests the Options UI at runtime.
 
 ## Requirements
 
@@ -60,14 +59,20 @@ Then open **System Settings → Screen Saver**, select **Idlesse**, and use **Op
 
 The screen saver host is sandboxed on modern macOS, so folder access is stored as a security-scoped bookmark created from an `NSOpenPanel` selection.
 
-Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item.
+Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item. Ordered modes support name, file creation date, and file modification date in both directions.
+
+The selected folder is rescanned every 15 seconds. Added images enter the next rebuilt order automatically, removed images stop being selected, and an empty folder begins playing again when new images appear.
 
 The multi-display modes share one per-process shuffle seed. In **Same image on every display**, saver instances use the same deck; in **Different image on each display**, each screen starts at a different offset in that deck. Exact transition timing still follows when macOS starts each saver instance.
 
 The real compatibility test is always the installed `.saver` inside the system screen saver host.
 
+## Photos source
+
+Photo library / album support is the next isolated slice. Apple PhotoKit provides album discovery through `PHAssetCollection`, asset fetching through `PHAsset`, and image delivery through `PHImageManager`. It requires explicit Photos authorization and a photo-library usage description. Because assets can live in iCloud, this source needs an asynchronous image-provider path instead of pretending Photos assets are ordinary local files. See `docs/photos-source.md`.
+
 ## Product direction
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next parity work: Photos library / album sources, live folder refresh, richer ordering options, and deeper multi-display testing on macOS 26.
+Next parity work: Photos library / album sources and deeper multi-display testing on macOS 26.
