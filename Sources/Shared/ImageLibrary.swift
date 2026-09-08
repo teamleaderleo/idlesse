@@ -252,14 +252,14 @@ final class ImageLibrary {
         return entries
     }
 
-    private var resourceKeys: Set<URLResourceKey> {
+    private var resourceKeys: [URLResourceKey] {
         [.isRegularFileKey, .creationDateKey, .contentModificationDateKey]
     }
 
     private func makeEntry(_ url: URL) -> Entry? {
         guard isImageFile(url) else { return nil }
 
-        let values = try? url.resourceValues(forKeys: resourceKeys)
+        let values = try? url.resourceValues(forKeys: Set(resourceKeys))
         if values?.isRegularFile == false { return nil }
 
         return Entry(
