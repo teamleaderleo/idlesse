@@ -69,6 +69,8 @@ final class IdlesseView: ScreenSaverView {
 
     private func restartSlideshow() {
         stopTimers()
+
+        library.playbackOffset = preferences.multiDisplayMode == .different ? currentDisplayIndex : 0
         library.reload()
 
         currentURL = nil
@@ -77,6 +79,7 @@ final class IdlesseView: ScreenSaverView {
         canvas.nextImage = nil
         canvas.transitionProgress = 0
         canvas.scalingMode = preferences.scalingMode
+        canvas.backdropColor = preferences.backgroundColor
         canvas.message = library.lastError
 
         guard let first = library.next(excluding: nil) else {
@@ -91,6 +94,25 @@ final class IdlesseView: ScreenSaverView {
         if running {
             scheduleNextImage()
         }
+    }
+
+    private var currentDisplayIndex: Int {
+        guard let currentScreen = window?.screen else { return 0 }
+
+        let screens = NSScreen.screens.sorted { lhs, rhs in
+            if lhs.frame.minX == rhs.frame.minX {
+                return lhs.frame.minY < rhs.frame.minY
+            }
+            return lhs.frame.minX < rhs.frame.minX
+        }
+
+        return screens.firstIndex { screen in
+            screenNumber(screen) == screenNumber(currentScreen)
+        } ?? 0
+    }
+
+    private func screenNumber(_ screen: NSScreen) -> NSNumber? {
+        screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
     }
 
     private func scheduleNextImage() {

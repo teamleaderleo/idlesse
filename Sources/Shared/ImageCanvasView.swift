@@ -17,6 +17,10 @@ final class ImageCanvasView: NSView {
         didSet { needsDisplay = true }
     }
 
+    var backdropColor: NSColor = .black {
+        didSet { needsDisplay = true }
+    }
+
     var message: String? {
         didSet { needsDisplay = true }
     }
@@ -24,7 +28,7 @@ final class ImageCanvasView: NSView {
     override var isOpaque: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.setFill()
+        backdropColor.setFill()
         NSBezierPath(rect: bounds).fill()
 
         let progress = min(1, max(0, transitionProgress))
@@ -93,7 +97,7 @@ final class ImageCanvasView: NSView {
         let fontSize = max(14, min(22, bounds.width / 34))
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: fontSize, weight: .regular),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+            .foregroundColor: messageColor,
             .paragraphStyle: paragraph,
         ]
 
@@ -115,5 +119,14 @@ final class ImageCanvasView: NSView {
             with: textRect,
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
+    }
+
+    private var messageColor: NSColor {
+        let color = backdropColor.usingColorSpace(.sRGB) ?? .black
+        let luminance = 0.2126 * color.redComponent
+            + 0.7152 * color.greenComponent
+            + 0.0722 * color.blueComponent
+        let base: NSColor = luminance > 0.55 ? .black : .white
+        return base.withAlphaComponent(0.72)
     }
 }
