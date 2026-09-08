@@ -220,6 +220,23 @@ enum WallpaperSmoke {
         let loudAudioPixels = try audioRenderer.renderProbe(signals: .init(audio: .init(level: 0.8)))
         precondition(quietAudioPixels != loudAudioPixels, "Audio levels must affect Metal output")
         audioRenderer.releaseResources()
+        var effectNode = SceneNode(content: .gradient)
+        effectNode.style.effects = [.init(type: .exposure, amount: 1), .init(type: .bloom, amount: 1)]
+        let effectRenderer = try MetalSceneRenderer(playable: SceneDescriptor(title: "Effects", nodes: [effectNode]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let glowPixels = try effectRenderer.renderProbe()
+        effectNode.style.effects.reverse()
+        precondition(effectRenderer.updateScene(SceneDescriptor(title: "Reordered", nodes: [effectNode])))
+        let reorderedPixels = try effectRenderer.renderProbe()
+        precondition(glowPixels != reorderedPixels, "Effect order must change GPU output")
+        effectNode.style.effects = [.init(type: .blur, amount: 24)]
+        precondition(effectRenderer.updateScene(SceneDescriptor(title: "Blur", nodes: [effectNode])))
+        let blurredPixels = try effectRenderer.renderProbe()
+        effectNode.style.effects = []
+        precondition(effectRenderer.updateScene(SceneDescriptor(title: "Plain", nodes: [effectNode])))
+        let plainPixels = try effectRenderer.renderProbe()
+        precondition(blurredPixels != plainPixels, "Blur must change GPU output")
+        effectRenderer.releaseResources()
         let manyStandard = try LayeredSceneRenderer(playable: sixteenImages,
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
         precondition(manyStandard.view.subviews.count == 16)
@@ -230,7 +247,17 @@ enum WallpaperSmoke {
         let manyPixels = try manyMetal.renderProbe()
         precondition(Set(manyPixels).count > 1)
         precondition(manyMetal.updateScene(SceneDescriptor(title: "Reordered", nodes: sixteenImages.nodes.reversed())))
+        let effectedImages = sixteenImages.nodes.map { original -> SceneNode in
+            var node = original
+            node.style.effects = [.init(type: .blur, amount: 8), .init(type: .bloom, amount: 0.5)]
+            return node
+        }
+        precondition(manyMetal.updateScene(SceneDescriptor(title: "Sixteen effects", nodes: effectedImages)))
+        _ = try manyMetal.renderProbe()
+        precondition(manyMetal.intermediateTextureBytes > 0 && manyMetal.intermediateTextureBytes <= SceneBudget.intermediateTextureBytes)
         manyMetal.releaseResources()
+        wait { manyMetal.intermediateTextureBytes == 0 }
+        precondition(manyMetal.intermediateTextureBytes == 0)
         // Exercise the experimental compositor through real GPU readback.
         let metalImage = try MetalSceneRenderer(playable: SceneDescriptor(title: "image", nodes: [
             SceneNode(content: .image(imageURL), opacity: 0.5,

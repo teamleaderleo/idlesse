@@ -3,7 +3,19 @@
     {
       "id": "D3F83815-1B44-4E42-BFAE-3B354DA47819",
       "type": "gradient",
-      "name": "Audio Glow"
+      "name": "Audio Glow",
+      "style": {
+        "effects": [
+          {
+            "type": "exposure",
+            "amount": 0.8
+          },
+          {
+            "type": "bloom",
+            "amount": 0.9
+          }
+        ]
+      }
     }
   ],
   "bindings": [

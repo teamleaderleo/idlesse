@@ -1,1 +1,7 @@
-{"version":14,"title":"Audio Aurora","capabilities":["audio"]}
+{
+  "version": 15,
+  "title": "Audio Aurora",
+  "capabilities": [
+    "audio"
+  ]
+}
