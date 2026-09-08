@@ -18,14 +18,11 @@ jobs:
           xcodebuild -version
           swiftc --version
 
-      - name: Build companion app and universal saver
+      - name: Build development preview and universal saver
         run: ./build.sh
 
       - name: Smoke-test settings UI
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
-
-      - name: Show shared settings path
-        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --print-settings-path'
 
       - name: Verify bundles
         run: |
