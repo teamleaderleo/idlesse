@@ -43,6 +43,27 @@ import Foundation
         clock.setPaused(false)
         instant = 101
         precondition(clock.time == 3)
+        var authoredNow = 0.0
+        let authored = SceneClock(now: { authoredNow })
+        try authored.configure(timeline: .init(duration: 6, mode: .pingPong))
+        authored.setPaused(false)
+        authoredNow = 8
+        precondition(authored.time == 4)
+        authored.setPaused(true)
+        authoredNow = 20
+        authored.setPaused(false)
+        authoredNow = 21
+        precondition(authored.time == 3) // Still travelling backwards after pause.
+        try authored.seek(to: 2)
+        precondition(authored.time == 2)
+        try authored.configure(timeline: .init(duration: 6, mode: .loop, rate: 2))
+        authoredNow = 25
+        precondition(authored.time == 2)
+        try authored.configure(timeline: .init(duration: 6, mode: .once))
+        authoredNow = 40
+        precondition(authored.time == 6)
+        do { try authored.configure(timeline: .init(duration: .nan, mode: .loop)); fatalError("Accepted invalid duration") } catch is SceneError {}
+        precondition(authored.time == 6)
         var transportNow = 0.0
         let transport = SceneClock(now: { transportNow })
         try transport.configure(time: 2, rate: 2, loop: nil)
@@ -371,6 +392,14 @@ import Foundation
         precondition(try! keyed.bindings[0].target.value(in: sampled.nodes) == 0.5)
         try Data(#"{"version":9,"title":"Old","capabilities":[]}"#.utf8).write(to: keyedPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(keyedPackage); fatalError("Accepted keyframes in v9") } catch is SceneError {}
+        keyed.timeline = .init(duration: 6, mode: .pingPong, rate: 0.5)
+        let timedPackage = root.appendingPathComponent("Timed.idlesse")
+        try ScenePackageWriter.write(keyed, to: timedPackage)
+        let timedLoaded = try await source.resolve(timedPackage)
+        precondition(timedLoaded.timeline == keyed.timeline)
+        precondition(timedLoaded.replacingNodes(timedLoaded.nodes).timeline == keyed.timeline)
+        try Data(#"{"version":10,"title":"Old","capabilities":[]}"#.utf8).write(to: timedPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(timedPackage); fatalError("Accepted timeline in v10") } catch is SceneError {}
         let movedKey = try track.movingKey(at: 0, to: 2)
         precondition(movedKey.keys[0].time == 2 && movedKey.keys[0].value == track.keys[0].value)
         let blockedKey = try track.movingKey(at: 0, to: 10)

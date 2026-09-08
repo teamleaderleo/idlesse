@@ -34,5 +34,10 @@
         ]
       }
     }
-  ]
+  ],
+  "timeline": {
+    "duration": 6,
+    "mode": "loop",
+    "rate": 1
+  }
 }

@@ -107,6 +107,20 @@ extension StudioWindowController {
         precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 4 && editor.renderer === keyRenderer)
         editor.document.undoManager.redo()
         precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 3)
+        var editedTrack = editor.scene.bindings[0].keyframes!
+        editedTrack.keys[1].value = 0.6
+        editor.timeline.onEditTrack?(target, editedTrack, "Move Keyframe")
+        precondition(editor.scene.bindings[0].keyframes?.keys[1].value == 0.6 && editor.renderer === keyRenderer)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.bindings[0].keyframes?.keys[1].value == 1 && editor.renderer === keyRenderer)
+        var timed = editor.scene
+        timed.timeline = .init(duration: 6, mode: .pingPong, rate: 0.5)
+        precondition(editor.applyEdit(timed.nodes, selected: 1, name: "Change Playback", controls: timed))
+        precondition(editor.clock.playbackRate == 0.5 && editor.renderer === keyRenderer)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.timeline == nil && editor.clock.playbackRate == 1)
+        editor.document.undoManager.redo()
+        precondition(editor.scene.timeline == timed.timeline && editor.clock.playbackRate == 0.5)
         editor.renderer?.releaseResources()
     }
 }
@@ -193,6 +207,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             self.scene = target.scene
             let updated = self.renderer?.updateScene(target.scene) ?? false
             if !updated { self.rebuild() }
+            if (updated || self.renderer !== renderer), previous.timeline != target.scene.timeline {
+                try? self.clock.configure(timeline: target.scene.timeline)
+                self.renderer?.refreshSceneTime()
+            }
             self.scene = previous
             self.updateInspector()
             self.nodePicker.selectItem(at: selection)
@@ -260,7 +278,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let fit = NSButton(title: "Fit", target: self, action: #selector(fitCanvas))
         let transport = NSButton(title: "Time…", target: self, action: #selector(editTransport))
         transport.toolTip = "Seek, change motion speed, or loop scene animation in Metal"
-        let controls = NSStackView(views: [open, sample, pauseButton, transport, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
+        let playback = NSButton(title: "Playback…", target: self, action: #selector(editAuthoredPlayback))
+        playback.toolTip = "Save scene duration, looping, and speed in the document"
+        let controls = NSStackView(views: [open, sample, pauseButton, transport, playback, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
         controls.spacing = 10
         nodePicker.onVisibility = { [weak self] in self?.editor.toggleVisibility($0) }
         nodePicker.onLock = { [weak self] in self?.editor.toggleLock($0) }
@@ -396,6 +416,17 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 guard moved != track else { return }
                 next.bindings[bindingIndex].keyframes = moved
                 _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Move Keyframe", controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+        timeline.onEditTrack = { [weak self] target, track, name in
+            guard let self, !self.saving, self.editor.selectedNode?.id == target.nodeID,
+                  self.editor.selectedNode?.locked == false else { return }
+            var next = self.scene
+            guard let index = next.bindings.firstIndex(where: { $0.target == target && $0.keyframes != nil }) else { return }
+            do {
+                _ = try track.sample(at: 0)
+                next.bindings[index].keyframes = track
+                _ = self.applyEdit(next.nodes, selected: self.nodePicker.indexOfSelectedItem, name: name, controls: next)
             } catch { self.detailLabel.stringValue = error.localizedDescription }
         }
         timeline.onLoop = { [weak self] end in
@@ -564,6 +595,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let updated = renderer?.updateScene(scene) ?? false
         if !updated { rebuild() }
         guard updated || renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
+        if previous.timeline != scene.timeline {
+            try? clock.configure(timeline: scene.timeline)
+            renderer?.refreshSceneTime()
+        }
         document.record(snapshot, name: name)
         if savedScene == nil { savedScene = previous }
         cancelLoading()
@@ -851,6 +886,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             selectNode()
             return false
         }
+        try? clock.configure(timeline: scene.timeline)
+        renderer?.refreshSceneTime()
         self.savedScene = nil
         clearEditHistory()
         releaseImportedScopes()
@@ -981,6 +1018,45 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         if measurementResult != nil { measureButton.title = "Measure Again" }
     }
     @objc private func togglePause() { paused.toggle(); updatePlayback() }
+    @objc private func editAuthoredPlayback() {
+        guard !saving else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Scene Playback"
+        dialog.informativeText = "Saved with the scene and used on the desktop. Controls motion and gradients; videos still play independently. Time… temporarily overrides playback in Studio."
+        dialog.addButton(withTitle: "Apply")
+        dialog.addButton(withTitle: "Cancel")
+        dialog.addButton(withTitle: "Remove")
+        let duration = NSTextField(string: String(scene.timeline?.duration ?? 8))
+        let rate = NSTextField(string: String(scene.timeline?.rate ?? 1))
+        let mode = NSPopUpButton()
+        mode.addItems(withTitles: ["Once", "Loop", "Ping-pong"])
+        let modes: [SceneTimeline.Mode] = [.once, .loop, .pingPong]
+        mode.selectItem(at: modes.firstIndex(of: scene.timeline?.mode ?? .loop) ?? 1)
+        duration.setAccessibilityLabel("Scene duration in seconds")
+        rate.setAccessibilityLabel("Authored playback speed")
+        mode.setAccessibilityLabel("Authored playback mode")
+        let fields = NSStackView(views: [NSTextField(labelWithString: "Duration (seconds)"), duration,
+            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, mode])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 160)
+        dialog.accessoryView = fields
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response != .alertSecondButtonReturn else { return }
+            do {
+                var next = self.scene
+                if response == .alertThirdButtonReturn { next.timeline = nil }
+                else {
+                    guard let seconds = Double(duration.stringValue), let speed = Double(rate.stringValue) else {
+                        throw SceneError.invalid("Enter numeric duration and speed values.")
+                    }
+                    next.timeline = SceneTimeline(duration: seconds, mode: modes[mode.indexOfSelectedItem], rate: speed)
+                    try next.timeline?.validate()
+                }
+                guard next.timeline != self.scene.timeline else { return }
+                _ = self.applyEdit(next.nodes, selected: self.nodePicker.indexOfSelectedItem, name: "Change Playback", controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+    }
     @objc private func editTransport() {
         guard renderer is MetalSceneRenderer else {
             detailLabel.stringValue = "Select Metal to use scene transport."; return
@@ -1053,6 +1129,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         window.representedURL = nil
         applyButton.isEnabled = false
         scene = SceneDescriptor(title: "Aurora", nodes: [SceneNode(content: .gradient)])
+        try? clock.configure(timeline: nil)
         rebuild()
     }
     @objc private func choose() {
@@ -1089,8 +1166,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 self.scene = next
                 self.rebuild()
                 guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; return }
-                if self.selectedURL != url {
-                    try self.clock.configure(time: 0, rate: 1, loop: nil)
+                if self.selectedURL != url || previous.timeline != next.timeline {
+                    try self.clock.configure(timeline: next.timeline)
                     self.renderer?.refreshSceneTime()
                 }
                 self.pointerToggle.state = self.clock.pointerEnabled ? .on : .off

@@ -1,5 +1,19 @@
 import Foundation
 
+struct SceneTimeline: Codable, Sendable, Equatable {
+    enum Mode: String, Codable, Sendable { case once, loop, pingPong }
+    var duration: Double
+    var mode: Mode
+    var rate: Double = 1
+    func validate() throws {
+        guard duration.isFinite, (0.01...86400).contains(duration),
+              rate.isFinite, (0.1...4).contains(rate) else {
+            throw SceneError.invalid("Use a duration of 0.01–86400 seconds and speed of 0.1–4.")
+        }
+    }
+}
+
+
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Sendable {
     enum Kind: String, Codable, Sendable { case image, video, gradient, group }
@@ -7,6 +21,7 @@ struct SceneDescriptor: Sendable {
     let nodes: [SceneNode]
     var parameters: [String: SceneParameter] = [:]
     var bindings: [SceneParameterBinding] = []
+    var timeline: SceneTimeline? = nil
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
@@ -15,21 +30,22 @@ struct SceneDescriptor: Sendable {
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { usesDrivers || usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var requiresMetal: Bool { timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool { usesSignals || nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = []) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline
     }
     func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
-        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) })
+        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) }, timeline: timeline)
     }
     func evaluated(signals: SceneSignals = .init(), validating: Bool = true) throws -> SceneDescriptor {
         if validating {
+            try timeline?.validate()
             guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
             for (id, parameter) in parameters {
                 guard !id.isEmpty, id.utf8.count <= 64, !parameter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parameter.name.count <= 80,
@@ -258,6 +274,7 @@ struct LocalSceneSource: SceneSource {
     private struct Scene: Decodable {
         let parameters: [String: SceneParameter]?
         let bindings: [SceneParameterBinding]?
+        let timeline: SceneTimeline?
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
@@ -320,7 +337,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...10).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...11).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -366,7 +383,8 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version >= 7 || (scene.parameters == nil && scene.bindings == nil) else {
             throw SceneError.invalid("Parameters and bindings require scene version 7.")
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [])
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline)
+        guard scene.timeline == nil || manifest.version >= 11 else { throw SceneError.invalid("Authored playback requires scene version 11.") }
         guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
         guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
@@ -511,12 +529,16 @@ enum ScenePackageWriter {
         }
         let nodes = try scene.nodes.map(encode)
         var contents: [String: Any] = ["nodes": nodes]
+        if let timeline = scene.timeline {
+            try timeline.validate()
+            contents["timeline"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(timeline))
+        }
         let controlled = !scene.parameters.isEmpty || !scene.bindings.isEmpty
         if controlled {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

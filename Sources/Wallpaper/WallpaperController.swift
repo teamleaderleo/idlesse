@@ -211,7 +211,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 guard !Task.isCancelled, request == self.generation else { return }
                 // Build before replacing the old wallpaper, so a bad file leaves it intact.
-                let candidateClock = reloading ? self.clock : SceneClock()
+                let reuseClock = reloading && self.playable?.timeline == playable.timeline
+                let candidateClock = reuseClock ? self.clock : SceneClock()
+                if !reuseClock {
+                    try candidateClock.configure(timeline: playable.timeline)
+                    candidateClock.pointerEnabled = reloading && self.clock.pointerEnabled
+                }
                 let replacement = self.suspended ? [] :
                     try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
                 self.releaseSurfaces()

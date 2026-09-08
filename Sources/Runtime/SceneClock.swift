@@ -6,6 +6,7 @@ final class SceneClock {
     private let now: () -> TimeInterval
     private var anchor: TimeInterval
     private var accumulated: TimeInterval = 0
+    private var authored: SceneTimeline?
     private(set) var playbackRate: Double = 1
     private(set) var loopRange: Range<TimeInterval>?
     private(set) var isPaused = true
@@ -15,8 +16,24 @@ final class SceneClock {
         self.now = now
         anchor = now()
     }
-    var time: TimeInterval { wrapped(accumulated + (isPaused ? 0 : max(0, now() - anchor) * playbackRate)) }
+    private var phase: TimeInterval { accumulated + (isPaused ? 0 : max(0, now() - anchor) * playbackRate) }
+    var time: TimeInterval { wrapped(phase) }
+    func configure(timeline: SceneTimeline?) throws {
+        try timeline?.validate()
+        try configure(time: 0, rate: timeline?.rate ?? 1, loop: nil)
+        authored = timeline
+    }
     private func wrapped(_ value: TimeInterval) -> TimeInterval {
+        if let authored {
+            let duration = authored.duration
+            switch authored.mode {
+            case .once: return min(value, duration)
+            case .loop: return value.truncatingRemainder(dividingBy: duration)
+            case .pingPong:
+                let position = value.truncatingRemainder(dividingBy: duration * 2)
+                return position <= duration ? position : duration * 2 - position
+            }
+        }
         guard let loopRange else { return value }
         let duration = loopRange.upperBound - loopRange.lowerBound
         return loopRange.lowerBound + max(0, value - loopRange.lowerBound).truncatingRemainder(dividingBy: duration)
@@ -32,17 +49,20 @@ final class SceneClock {
                 throw SceneError.invalid("Use a loop within 0–86400 seconds, at least 0.01 seconds long.")
             }
         }
+        authored = nil
         loopRange = loop
         playbackRate = rate
         accumulated = wrapped(time)
         anchor = now()
     }
     func seek(to time: TimeInterval) throws {
-        try configure(time: time, rate: playbackRate, loop: loopRange)
+        guard time.isFinite, (0...86400).contains(time) else { throw SceneError.invalid("Use a time of 0–86400 seconds.") }
+        accumulated = time
+        anchor = now()
     }
     func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
-        accumulated = time
+        accumulated = phase
         anchor = now()
         isPaused = paused
     }
