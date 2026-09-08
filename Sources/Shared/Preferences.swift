@@ -52,9 +52,10 @@ enum IdlessePlaybackOrder: String, CaseIterable, Codable {
 
 final class IdlessePreferences {
     static let moduleIdentifier = "com.teamleaderleo.idlesse"
+    static let settingsChangedNotification = Notification.Name("com.teamleaderleo.idlesse.settingsChanged")
     static let shared = IdlessePreferences()
 
-    private enum LegacyKey {
+    private enum Key {
         static let folderBookmark = "folderBookmark"
         static let folderDisplayPath = "folderDisplayPath"
         static let displayDuration = "displayDuration"
@@ -67,48 +68,67 @@ final class IdlessePreferences {
         static let includeSubfolders = "includeSubfolders"
     }
 
-    private var settings: IdlesseStoredSettings
+    let defaults: UserDefaults
 
     private init() {
-        if let stored = IdlesseSettingsFile.read() {
-            settings = stored
-            return
+        if let saverDefaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) {
+            defaults = saverDefaults
+        } else {
+            defaults = .standard
         }
 
-        let migration = Self.readLegacySettings()
-        settings = migration.settings
+        let hadPlaybackOrder = defaults.object(forKey: Key.playbackOrder) != nil
+        let legacyShuffle = (defaults.object(forKey: Key.shuffle) as? NSNumber)?.boolValue
 
-        // The old preview harness already wrote ScreenSaverDefaults. Migrate those
-        // values once from the companion-app process. The saver process deliberately
-        // does not create an empty shared file before the app gets a chance to migrate.
-        if !IdlesseSettingsFile.isSaverProcess, migration.shouldMigrate {
-            try? IdlesseSettingsFile.write(settings)
+        defaults.register(defaults: [
+            Key.displayDuration: 300.0,
+            Key.transitionDuration: 2.0,
+            Key.scalingMode: IdlesseScalingMode.fit.rawValue,
+            Key.backgroundColor: [0.0, 0.0, 0.0, 1.0],
+            Key.multiDisplayMode: IdlesseMultiDisplayMode.same.rawValue,
+            Key.playbackOrder: IdlessePlaybackOrder.random.rawValue,
+            Key.includeSubfolders: true,
+        ])
+
+        if !hadPlaybackOrder, let legacyShuffle {
+            defaults.set(
+                legacyShuffle ? IdlessePlaybackOrder.random.rawValue : IdlessePlaybackOrder.nameAscending.rawValue,
+                forKey: Key.playbackOrder
+            )
         }
     }
 
     var folderDisplayPath: String? {
-        settings.folderDisplayPath
+        defaults.string(forKey: Key.folderDisplayPath)
     }
 
     var displayDuration: TimeInterval {
-        get { max(1, settings.displayDuration) }
-        set { settings.displayDuration = max(1, newValue) }
+        get { max(1, defaults.double(forKey: Key.displayDuration)) }
+        set { defaults.set(max(1, newValue), forKey: Key.displayDuration) }
     }
 
     var transitionDuration: TimeInterval {
-        get { max(0, settings.transitionDuration) }
-        set { settings.transitionDuration = min(30, max(0, newValue)) }
+        get { max(0, defaults.double(forKey: Key.transitionDuration)) }
+        set { defaults.set(min(30, max(0, newValue)), forKey: Key.transitionDuration) }
     }
 
     var scalingMode: IdlesseScalingMode {
-        get { settings.scalingMode }
-        set { settings.scalingMode = newValue }
+        get {
+            guard let raw = defaults.string(forKey: Key.scalingMode),
+                  let mode = IdlesseScalingMode(rawValue: raw) else {
+                return .fit
+            }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.scalingMode) }
     }
 
     var backgroundColor: NSColor {
         get {
-            let values = settings.backgroundRGBA
-            guard values.count >= 4 else { return .black }
+            let values = defaults.array(forKey: Key.backgroundColor)?
+                .compactMap { ($0 as? NSNumber)?.doubleValue }
+
+            guard let values, values.count >= 4 else { return .black }
             return NSColor(
                 srgbRed: CGFloat(values[0]),
                 green: CGFloat(values[1]),
@@ -118,155 +138,87 @@ final class IdlessePreferences {
         }
         set {
             let color = newValue.usingColorSpace(.sRGB) ?? .black
-            settings.backgroundRGBA = [
+            defaults.set([
                 Double(color.redComponent),
                 Double(color.greenComponent),
                 Double(color.blueComponent),
                 Double(color.alphaComponent),
-            ]
+            ], forKey: Key.backgroundColor)
         }
     }
 
     var multiDisplayMode: IdlesseMultiDisplayMode {
-        get { settings.multiDisplayMode }
-        set { settings.multiDisplayMode = newValue }
+        get {
+            guard let raw = defaults.string(forKey: Key.multiDisplayMode),
+                  let mode = IdlesseMultiDisplayMode(rawValue: raw) else {
+                return .same
+            }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.multiDisplayMode) }
     }
 
     var playbackOrder: IdlessePlaybackOrder {
-        get { settings.playbackOrder }
-        set { settings.playbackOrder = newValue }
+        get {
+            guard let raw = defaults.string(forKey: Key.playbackOrder),
+                  let order = IdlessePlaybackOrder(rawValue: raw) else {
+                return .random
+            }
+            return order
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.playbackOrder) }
     }
 
     var includeSubfolders: Bool {
-        get { settings.includeSubfolders }
-        set { settings.includeSubfolders = newValue }
+        get { defaults.bool(forKey: Key.includeSubfolders) }
+        set { defaults.set(newValue, forKey: Key.includeSubfolders) }
     }
 
-    /// Re-read the shared file. The companion app and the sandboxed saver point at
-    /// the same underlying file through two different paths.
-    @discardableResult
-    func reloadFromDisk() -> Bool {
-        guard let stored = IdlesseSettingsFile.read() else { return false }
-        let changed = stored != settings
-        settings = stored
-        return changed
-    }
-
-    /// Save a document-scoped security bookmark. Its owner document is the shared
-    /// Idlesse settings file, which both Idlesse.app and legacyScreenSaver can read.
-    /// That makes the folder grant transferable to the sandboxed saver instead of
-    /// tying it to the companion app's signing identity.
     func saveFolder(_ url: URL) throws {
-        // A document-scoped bookmark needs an existing owner document.
-        try IdlesseSettingsFile.write(settings)
-
         let bookmark = try url.bookmarkData(
             options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
             includingResourceValuesForKeys: nil,
-            relativeTo: IdlesseSettingsFile.runtimeURL
+            relativeTo: nil
         )
 
-        settings.folderBookmark = bookmark
-        settings.folderDisplayPath = url.path
+        defaults.set(bookmark, forKey: Key.folderBookmark)
+        defaults.set(url.path, forKey: Key.folderDisplayPath)
     }
 
     func resolveFolder() throws -> URL? {
-        guard let bookmark = settings.folderBookmark else {
+        guard let bookmark = defaults.data(forKey: Key.folderBookmark) else {
             return nil
         }
 
         var isStale = false
-
-        // Current format: document-scoped bookmark owned by settings.json.
-        if let url = try? URL(
-            resolvingBookmarkData: bookmark,
-            options: [.withSecurityScope, .withoutUI],
-            relativeTo: IdlesseSettingsFile.runtimeURL,
-            bookmarkDataIsStale: &isStale
-        ) {
-            if isStale, !IdlesseSettingsFile.isSaverProcess {
-                try? saveFolder(url)
-                try? save()
-            }
-            return url
-        }
-
-        // Compatibility with bookmarks written by early prototypes. These were
-        // app-scoped and may still resolve inside Idlesse.app, allowing the user to
-        // keep previewing until they reselect the folder and create a transferable one.
-        isStale = false
-        let legacyURL = try URL(
+        let url = try URL(
             resolvingBookmarkData: bookmark,
             options: [.withSecurityScope, .withoutUI],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
 
-        if !IdlesseSettingsFile.isSaverProcess {
-            try? saveFolder(legacyURL)
-            try? save()
+        if isStale {
+            try? saveFolder(url)
+            save()
         }
 
-        return legacyURL
+        return url
     }
 
-    func save() throws {
-        try IdlesseSettingsFile.write(settings)
+    func reloadFromDisk() {
+        defaults.synchronize()
     }
 
-    private static func readLegacySettings() -> (settings: IdlesseStoredSettings, shouldMigrate: Bool) {
-        var result = IdlesseStoredSettings()
-        guard let defaults = ScreenSaverDefaults(forModuleWithName: moduleIdentifier) else {
-            return (result, false)
-        }
-
-        let keys = [
-            LegacyKey.folderBookmark,
-            LegacyKey.folderDisplayPath,
-            LegacyKey.displayDuration,
-            LegacyKey.transitionDuration,
-            LegacyKey.scalingMode,
-            LegacyKey.backgroundColor,
-            LegacyKey.multiDisplayMode,
-            LegacyKey.playbackOrder,
-            LegacyKey.shuffle,
-            LegacyKey.includeSubfolders,
-        ]
-        let shouldMigrate = keys.contains { defaults.object(forKey: $0) != nil }
-
-        result.folderBookmark = defaults.data(forKey: LegacyKey.folderBookmark)
-        result.folderDisplayPath = defaults.string(forKey: LegacyKey.folderDisplayPath)
-
-        if let value = defaults.object(forKey: LegacyKey.displayDuration) as? NSNumber {
-            result.displayDuration = max(1, value.doubleValue)
-        }
-        if let value = defaults.object(forKey: LegacyKey.transitionDuration) as? NSNumber {
-            result.transitionDuration = min(30, max(0, value.doubleValue))
-        }
-        if let raw = defaults.string(forKey: LegacyKey.scalingMode),
-           let value = IdlesseScalingMode(rawValue: raw) {
-            result.scalingMode = value
-        }
-        if let values = defaults.array(forKey: LegacyKey.backgroundColor)?
-            .compactMap({ ($0 as? NSNumber)?.doubleValue }), values.count >= 4 {
-            result.backgroundRGBA = Array(values.prefix(4))
-        }
-        if let raw = defaults.string(forKey: LegacyKey.multiDisplayMode),
-           let value = IdlesseMultiDisplayMode(rawValue: raw) {
-            result.multiDisplayMode = value
-        }
-
-        if let raw = defaults.string(forKey: LegacyKey.playbackOrder),
-           let value = IdlessePlaybackOrder(rawValue: raw) {
-            result.playbackOrder = value
-        } else if let legacyShuffle = defaults.object(forKey: LegacyKey.shuffle) as? NSNumber {
-            result.playbackOrder = legacyShuffle.boolValue ? .random : .nameAscending
-        }
-
-        if let value = defaults.object(forKey: LegacyKey.includeSubfolders) as? NSNumber {
-            result.includeSubfolders = value.boolValue
-        }
-
-        return (result, shouldMigrate)
+    /// Hand the current ScreenSaverDefaults buffer to cfprefsd, then wake any
+    /// other running legacyScreenSaver process so it can re-read the same domain.
+    func save() {
+        defaults.synchronize()
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.settingsChangedNotification,
+            object: "settings-changed",
+            userInfo: nil,
+            deliverImmediately: true
+        )
     }
 }
