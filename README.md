@@ -167,3 +167,7 @@ animated Metal gradient. Open packages hot-reload on save, preserving the last
 working scene on invalid edits. See [the creative runtime](docs/creative-runtime.md)
 and the self-contained `Examples/Gradient.idlesse` example. The shared clock drives
 procedural time; independent video players are not yet synchronized to it.
+
+If the system Options button stops responding, check `./build.sh installed-status`.
+Building or pushing does not update the installed saver. Close System Settings
+before installing and reopen it afterward. See [the verified recovery](docs/options-recovery-2026-09-08.md).
