@@ -18,7 +18,7 @@ jobs:
           xcodebuild -version
           swiftc --version
 
-      - name: Build development preview and universal saver
+      - name: Build development preview and arm64 saver
         run: ./build.sh
 
       - name: Smoke-test settings UI

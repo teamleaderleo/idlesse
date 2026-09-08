@@ -21,14 +21,15 @@ Early prototype. The shipping artifact is **Idlesse.saver**, a classic ScreenSav
 
 Idlesse stores installed-saver preferences with Apple's `ScreenSaverDefaults`. The selected folder is represented by a read-only security-scoped bookmark created from inside the screen-saver host, so the sandboxed `legacyScreenSaver` process can reopen it later.
 
-GitHub Actions compiles the development preview and the universal saver on a macOS runner, smoke-tests the Settings UI at runtime, and verifies both bundles.
+GitHub Actions compiles the development preview and the arm64 saver on a macOS runner, smoke-tests the Settings UI at runtime, and verifies both bundles.
 
 ## Requirements
 
 - macOS 14 or newer
 - Xcode command-line tools / Xcode
+- Apple Silicon for the current development build
 
-The build script produces a universal `arm64` + `x86_64` saver by default.
+The build script produces an `arm64` saver by default. A universal build can be requested later with `ARCHS="arm64 x86_64" ./build.sh` when Intel support is actually needed.
 
 ## Build
 
@@ -73,11 +74,13 @@ Go to:
 
 Scroll to **Other** and select **Idlesse**.
 
-Tahoe currently renders an **Options…** button for legacy third-party savers but can fail to call their `configureSheet` implementation. Idlesse keeps the standard configure-sheet API for older/fixed macOS versions. On Tahoe, when System Settings queries Idlesse for that Options capability, the selected-saver preview schedules the same **Idlesse Settings** window directly from inside `legacyScreenSaver`.
+Tahoe currently renders an **Options…** button for legacy third-party savers but can fail to call their `configureSheet` implementation. Idlesse keeps the standard configure-sheet API for older/fixed macOS versions.
 
-That Tahoe fallback is deliberately constrained to the small System Settings preview while System Settings is frontmost, so it does not appear during a real full-screen activation.
+For current Tahoe development, the reliable hook is the selected saver's running preview: while System Settings is frontmost, Idlesse schedules the same **Idlesse Settings** window from `startAnimation()` inside `legacyScreenSaver`. The window is placed one level above the screen-saver host so it is not hidden behind the preview. A real full-screen saver activation does not trigger this fallback because System Settings is no longer frontmost.
 
 Choose the image folder in that Idlesse Settings window and press **Save**. Because the picker and bookmark creation happen inside `legacyScreenSaver`, the folder permission belongs to the process that actually needs to display the images.
+
+The Tahoe **Options…** button itself may remain inert until Apple fixes the host regression; selecting Idlesse is the current trigger for the in-host Settings window.
 
 ## Playback behavior
 
@@ -99,4 +102,4 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next work: verify Tahoe's in-host Settings fallback and folder bookmark end to end, then continue Photos-source work and distribution hardening.
+Next work: verify Tahoe's startAnimation Settings fallback and folder bookmark end to end, then continue Photos-source work and distribution hardening.
