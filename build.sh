@@ -116,6 +116,10 @@ case "${1:-all}" in
     ;;
   run)
     build_preview
+    # `open` will otherwise reactivate an already-running preview even though the
+    # bundle on disk was rebuilt, which makes source changes look like they did nothing.
+    pkill -x IdlessePreview 2>/dev/null || true
+    sleep 0.2
     open "$PREVIEW_APP"
     ;;
   install)
