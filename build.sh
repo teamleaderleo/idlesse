@@ -157,6 +157,25 @@ case "${1:-all}" in
     log "If Tahoe still misbehaves after one click, run: ./build.sh diagnose"
     open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
     ;;
+  installed-status)
+    installed="$HOME/Library/Screen Savers/Idlesse.saver"
+    if [[ ! -f "$installed/Contents/MacOS/Idlesse" ]]; then
+      log "Idlesse is not installed. Run ./build.sh install."
+      exit 1
+    fi
+    codesign --verify --strict "$installed"
+    if [[ ! -f "$SAVER/Contents/MacOS/Idlesse" ]]; then
+      log "Installed bundle is signed; no local build exists to compare."
+      exit 0
+    fi
+    if cmp -s "$SAVER/Contents/MacOS/Idlesse" "$installed/Contents/MacOS/Idlesse"; then
+      log "Installed saver matches the local build. A running host may still need restarting."
+    else
+      log "Installed saver differs from the local build. Building or pushing does not install it."
+      log "Run ./build.sh install with System Settings closed, then reopen Settings."
+      exit 1
+    fi
+    ;;
   diagnose)
     if [[ -f "$TAHOE_DIAG" ]]; then
       tail -n 200 "$TAHOE_DIAG"
