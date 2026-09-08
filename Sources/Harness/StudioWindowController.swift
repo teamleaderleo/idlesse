@@ -15,6 +15,15 @@ extension StudioWindowController {
         editor.document.undoManager.redo()
         precondition(editor.scene.nodes.count == 2 && editor.draft && editor.nodePicker.indexOfSelectedItem == 1)
         let running = editor.renderer
+        var moved = editor.scene.nodes
+        moved[1].transform = .init(x: 0.2, y: 0, scale: 0.6, rotation: 15)
+        precondition(editor.applyEdit(moved, selected: 1, name: "Move Layer"))
+        precondition(editor.renderer === running)
+        editor.document.undoManager.undo()
+        precondition(editor.renderer === running)
+        editor.document.undoManager.redo()
+        precondition(editor.renderer === running)
+        editor.document.undoManager.undo()
         editor.savedScene = SceneDescriptor(title: "Missing source", nodes: [
             SceneNode(content: .image(URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent(UUID().uuidString + ".png")))
@@ -106,11 +115,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             let selection = self.nodePicker.indexOfSelectedItem
             let renderer = self.renderer
             self.scene = target.scene
-            self.rebuild()
+            let updated = self.renderer?.updateScene(target.scene) ?? false
+            if !updated { self.rebuild() }
             self.scene = previous
             self.updateInspector()
             self.nodePicker.selectItem(at: selection)
-            return self.renderer !== renderer
+            return updated || self.renderer !== renderer
         }
         document.didRestore = { [weak self] target in
             guard let self else { return }
@@ -202,6 +212,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             inspector.addArrangedSubview(button)
         }
         dragOverlay.onSelect = { [weak self] index in self?.nodePicker.selectItem(at: index); self?.selectNode() }
+        dragOverlay.onPreviewTransform = { [weak self] transform in
+            guard let self, !self.saving else { return }
+            var nodes = self.scene.nodes
+            let index = self.nodePicker.indexOfSelectedItem
+            guard nodes.indices.contains(index) else { return }
+            nodes[index].transform = transform
+            _ = self.renderer?.updateScene(SceneDescriptor(title: self.scene.title, nodes: nodes))
+        }
         dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
         dragOverlay.onNudge = { [weak self] x, y in self?.editor.nudge(x: x, y: y) }
         dragOverlay.onDelete = { [weak self] in self?.editor.remove() }
@@ -386,8 +404,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
         scene = SceneDescriptor(title: scene.title, nodes: nodes)
-        rebuild()
-        guard renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
+        let updated = renderer?.updateScene(scene) ?? false
+        if !updated { rebuild() }
+        guard updated || renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
         document.record(snapshot, name: name)
         if savedScene == nil { savedScene = previous }
         cancelLoading()

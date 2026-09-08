@@ -7,7 +7,7 @@ import CoreVideo
 /// Keep the layer renderer as the default until color and power parity are measured.
 final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private final class Input {
-        let node: SceneNode
+        var node: SceneNode
         var texture: MTLTexture?
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
@@ -190,6 +190,15 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             withExtendedLifetime(wrappers) {}
             withExtendedLifetime(buffers) {}
         }
+        return true
+    }
+    func updateScene(_ scene: SceneDescriptor) -> Bool {
+        guard diagnostics.state != .disposed,
+              let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.nodes) else { return false }
+        inputs = order.map { inputs[$0] }
+        for (input, node) in zip(inputs, scene.nodes) { input.node = node }
+        needsFrame = true
+        metal.draw()
         return true
     }
     func draw(in view: MTKView) {

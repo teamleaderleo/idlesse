@@ -16,6 +16,7 @@ struct SceneDescriptor: Sendable {
 }
 
 struct SceneNode: Sendable {
+    var id = UUID() // Document-local identity, preserved by edits and undo.
     enum Content: Sendable { case image(URL), video(URL), gradient }
     struct Transform: Decodable, Sendable {
         let x: Double?
@@ -255,4 +256,17 @@ enum ScenePackageWriter {
             try files.moveItem(at: staging, to: destination)
         }
     }
+}
+
+/// Returns old resource indices in the new drawing order, only for metadata edits.
+func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
+    guard old.count == new.count, Set(old.map { $0.id }).count == old.count,
+          Set(new.map { $0.id }).count == new.count else { return nil }
+    var order: [Int] = []
+    for node in new {
+        guard let index = old.firstIndex(where: { $0.id == node.id }),
+              old[index].kind == node.kind, old[index].assetURL == node.assetURL else { return nil }
+        order.append(index)
+    }
+    return order
 }
