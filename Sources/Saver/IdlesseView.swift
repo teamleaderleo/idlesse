@@ -63,20 +63,15 @@ final class IdlesseView: ScreenSaverView {
         Self.configureController.reload()
         let settingsWindow = Self.configureController.window
 
-        // On the current Tahoe build, System Settings does call configureSheet and
-        // attaches the returned window. Keep presentation entirely native. A delayed
-        // diagnostic check records what the host did without changing window state.
-        if #available(macOS 26.0, *) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak settingsWindow] in
-                guard let self, let settingsWindow else { return }
-                if settingsWindow.sheetParent != nil {
-                    self.diagnostic("configureSheet attached by host")
-                } else if settingsWindow.isVisible {
-                    self.diagnostic("configureSheet visible without sheetParent")
-                } else {
-                    self.diagnostic("configureSheet returned but still hidden")
-                }
-            }
+        if #available(macOS 26.0, *),
+           ProcessInfo.processInfo.processName.lowercased().contains("legacyscreensaver") {
+            // Tahoe calls this getter when the user clicks Options, but the host can
+            // attach the returned window to a tiny hidden helper window instead of
+            // the visible Wallpaper UI. Treat this getter as the user's click signal,
+            // present our one real settings window ourselves, and return nil so the
+            // host has nothing else to attach invisibly.
+            presentTahoeSettings(settingsWindow)
+            return nil
         }
 
         return settingsWindow
@@ -137,6 +132,38 @@ final class IdlesseView: ScreenSaverView {
             if self.running {
                 self.restartSlideshow()
             }
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func presentTahoeSettings(_ settingsWindow: NSWindow) {
+        diagnostic("Options click: scheduling visible Settings")
+
+        DispatchQueue.main.async { [weak self, weak settingsWindow] in
+            guard let self, let settingsWindow else { return }
+
+            // An older attempt may have left this window attached as a sheet to one
+            // of Tahoe's hidden helper windows. Detach it before making it standalone.
+            if let parent = settingsWindow.sheetParent {
+                parent.endSheet(settingsWindow)
+            }
+
+            Self.configureController.reload()
+            settingsWindow.level = NSWindow.Level(
+                rawValue: NSWindow.Level.screenSaver.rawValue + 100
+            )
+            settingsWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            settingsWindow.hidesOnDeactivate = false
+            settingsWindow.center()
+
+            // This process is an app extension host rather than System Settings
+            // itself, so use both activation and unconditional ordering. The window
+            // exists only because the user explicitly clicked Options.
+            NSApp.activate(ignoringOtherApps: true)
+            settingsWindow.makeKeyAndOrderFront(nil)
+            settingsWindow.orderFrontRegardless()
+
+            self.diagnostic("Options click: Settings ordered front")
         }
     }
 
