@@ -322,6 +322,23 @@ enum WallpaperSmoke {
         let changedMixedFrame = try metalScene.renderProbe()
         precondition(changedMixedFrame != mixedFrame)
         metalScene.releaseResources()
+        var idleInstant = 0.0
+        let idleClock = SceneClock(now: { idleInstant })
+        try idleClock.configure(timeline: .init(duration: 1, mode: .once))
+        idleClock.setPaused(false)
+        let idleScene = SceneDescriptor(title: "Once", nodes: [SceneNode(content: .gradient)], timeline: .init(duration: 1, mode: .once))
+        let idleRenderer = try MetalSceneRenderer(playable: idleScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: idleClock) { errors.append($0) }
+        idleRenderer.setPaused(false)
+        let idleView = idleRenderer.view as! MTKView
+        precondition(!idleView.isPaused)
+        idleInstant = 2
+        idleRenderer.refreshSceneTime()
+        precondition(idleView.isPaused, "Completed Once scene must stop timed draws")
+        try idleClock.seek(to: 0)
+        idleRenderer.refreshSceneTime()
+        precondition(!idleView.isPaused, "Seeking back must restart timed draws")
+        idleRenderer.releaseResources()
         let standardTransform = try LayeredSceneRenderer(playable: SceneDescriptor(title: "Centered", nodes: [
             SceneNode(content: .gradient, transform: .init(x: 0, y: 0, scale: 0.7, rotation: 0))]),
             bounds: NSRect(x: 0, y: 0, width: 100, height: 80), scale: 1, clock: sceneClock) { errors.append($0) }

@@ -6,3 +6,5 @@ xcrun swiftc -O Sources/Shared/Preferences.swift Sources/Shared/DisplayImageDeco
 build/tests/decoder
 xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Runtime/SceneClock.swift Tests/SceneTests.swift -o build/tests/scenes
 build/tests/scenes
+xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Harness/SceneDocument.swift Tests/RecoveryTests.swift -framework AppKit -framework AVFoundation -o build/tests/recovery
+build/tests/recovery

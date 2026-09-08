@@ -30,7 +30,7 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
-struct SceneDescriptor: Sendable {
+struct SceneDescriptor: Codable, Sendable {
     enum Kind: String, Codable, Sendable { case image, video, gradient, group }
     let title: String
     let nodes: [SceneNode]
@@ -223,10 +223,10 @@ struct SceneSignals: Sendable {
     var pointerY: Double = 0
 }
 
-struct SceneNode: Sendable {
+struct SceneNode: Codable, Sendable {
     var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
-    indirect enum Content: Sendable { case image(URL), video(URL), gradient, group([SceneNode]) }
-    struct Transform: Decodable, Sendable {
+    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, group([SceneNode]) }
+    struct Transform: Codable, Sendable {
         let x: Double?
         let y: Double?
         let scale: Double?

@@ -206,7 +206,7 @@ Studio and desktop apply authored playback on selection. A changed authored time
 
 ### Curve editing
 
-The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. Clipboard operations and timeline zoom are still pending. Smoothing and experimental video transport are described below.
+The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. With the curve focused, Command-C copies the whole track and Command-V replaces the destination track in one Undo step. Return opens precise time/value editing; Up/Down nudge value by 0.01 (Shift: 1). Timeline zoom and multi-key selection remain pending. Smoothing and experimental video transport are described below.
 
 
 ### Signal smoothing (V12)
@@ -223,3 +223,22 @@ Video transport uses separately managed items because AVPlayerLooper replicas mu
 Playback… → **Videos follow scene time** opts all video nodes into the scene playhead and saves that choice. This selects separately managed video items rather than AVPlayerLooper replicas. Once and Loop support preview seeking, authored speed, pause/resume, and periodic drift correction; Ping-pong is rejected with video following enabled. Shorter videos repeat within the scene duration.
 
 Only one seek per video can be in flight, newer playhead positions supersede older ones, and routine corrections are limited to ten per second with a 120 ms running drift tolerance. This is approximate synchronization, not frame locking or seamless-loop parity with the independent video path. Keep following disabled for ordinary video wallpapers when synchronization is unnecessary. Tests verify changing decoded pixels across paused seeks, latest-seek convergence, source-duration wrapping, live edits, and teardown.
+
+### Recovery drafts
+
+Studio debounces committed edits by half a second and atomically writes metadata under
+Application Support/Idlesse/Studio Recovery. Drafts reference existing media paths;
+they do not copy or decode images/videos, and snapshots are capped at 1 MiB.
+Opening Studio offers Recover, Keep for Later, or Discard Draft. Recovered work opens
+unsaved and uses Save As. Saving or explicit discard removes that document's snapshot.
+Deferred snapshots are independent of subsequent documents. Missing media or invalid
+metadata preserves the snapshot and reports the problem; restore access/the original
+file location and reopen Studio to retry. Media relocation and sandbox bookmark renewal
+are not provided yet. The last half-second of edits may not survive process death.
+
+Bind loads the selected property's existing driver. Changing strength or smoothing
+preserves its keyframe source and ordered modifiers by default. The modifier menu can
+explicitly clear or replace the stack with a control multiplier.
+
+Completed Once scenes stop timed Metal drawing when there is no independent video,
+enabled pointer driver, or smoothing requiring updates. Scrubbing restarts scheduling.
