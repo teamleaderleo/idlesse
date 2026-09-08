@@ -13,7 +13,9 @@ bounded to two in flight and never wait for GPU completion in the display loop.
 
 Video uses AVPlayerItemVideoOutput BGRA buffers and CVMetalTextureCache. The GPU
 completion handler retains both the Core Video texture wrappers and pixel buffers.
-There is no per-frame CPU readback or image upload. BGRA conversion still has a cost:
+Each queued loop replica owns its video output; the compositor samples the current
+item and retains the last texture until its next frame arrives. There is no
+per-frame CPU readback or image upload. BGRA conversion still has a cost:
 this is not a claim of end-to-end zero-copy decoding. Pause stops players and drawing;
 disposal releases players, textures, cache and drawables.
 
@@ -22,7 +24,7 @@ disposal releases players, textures, cache and drawables.
 `./build.sh app`, `./test.sh`, and `./test-wallpaper.sh` pass. The wallpaper suite
 uses actual GPU readback to check image translation/scale/opacity against expected
 pixel values, mixed image/gradient output, time-varying gradients, and nonblack
-video decoding across a loop. Existing default-host lifecycle and hot-reload checks
+changing video pixels across three queued loops and resume after pause. Existing default-host lifecycle and hot-reload checks
 still run. Probe readback is confined to tests.
 
 ## Promotion gates
@@ -32,8 +34,10 @@ still run. Probe readback is confined to tests.
   sRGB; this is not an HDR/color-management parity claim.
 - Comparable release-build CPU, process footprint, GPU and energy measurements for
   static, 4K video and mixed scenes on the same display. No savings measured yet.
-- Seamless video looping. The experimental AVPlayer currently seeks at end of file;
-  it can visibly pause at the boundary.
+- Real-media loop-boundary timing and memory measurements. Video now uses
+  AVQueuePlayer + AVPlayerLooper with an output on each replica, removing the
+  explicit end-of-file seek. Synthetic tests verify continued decoding across
+  replicas; they do not establish gap-free presentation for every source.
 - Clock authority. Gradients use SceneClock, but videos still use AVPlayer time;
   neither multi-video nor multi-display frame synchronization is implemented.
 - Host lifecycle integration tests with the experimental switch enabled. Existing
@@ -47,3 +51,5 @@ Keep node limits until resource budgets cover the richer composition graph.
 
 API references: [AVPlayerItemVideoOutput](https://developer.apple.com/documentation/avfoundation/avplayeritemvideooutput)
 and [Core Video Metal texture mapping and lifetime](https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:)).
+
+Queued looping follows Apple’s [replica output configuration guidance](https://developer.apple.com/documentation/avfoundation/avplayerlooper/loopingplayeritems).
