@@ -23,9 +23,24 @@ preserve playback for transforms, opacity, names and ordering, including undo/re
 above it in drawing order. A group can be named, moved, scaled, rotated, faded,
 hidden, locked, duplicated and saved. Group property edits preserve child playback;
 creating a group currently rebuilds playback. Undo restores the separate layers.
-The list currently treats a group as one row; expanding and editing individual
-children and explicit ungrouping are not yet supported. There are no timeline,
-mask or effect controls.
+Disclosure arrows expand groups. Child layers can be named, transformed numerically,
+faded, hidden, locked, duplicated, removed, and reordered among siblings without
+restarting their media. Adding a layer while a group is selected inserts it into
+that group; otherwise it inserts beside the selected layer. Undo restores selection
+and expands ancestors when needed. Canvas handles currently edit top-level layers;
+use the inspector for children.
+
+**Ungroup** restores children when the group's transform, opacity and appearance
+are at their defaults. It carries visibility and locking to the children. Styled
+or transformed groups must be reset first: silently distributing group opacity or
+removing a clipping canvas could change the image. There is no cross-group drag
+reparenting yet.
+
+**Appearance…** adds an ellipse mask, exposure (−2…2 stops), and saturation (0…2).
+These edits are undoable and saved in v4. A styled scene automatically uses Metal
+in Studio and on the desktop; first switching from Standard restarts playback,
+while subsequent appearance edits preserve the renderer. Plain scenes retain the
+Standard fallback. There is no timeline or arbitrary effect graph yet.
 
 ## Documents and saving
 

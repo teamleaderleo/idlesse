@@ -8,6 +8,7 @@ struct SceneDescriptor: Sendable {
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
+    var requiresMetal: Bool { allNodes.contains { $0.style != .plain } }
     var animated: Bool { nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
@@ -26,6 +27,24 @@ struct SceneNode: Sendable {
         let rotation: Double?
         static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
     }
+    struct Style: Codable, Sendable, Equatable {
+        enum Mask: String, Codable, Sendable { case ellipse }
+        var mask: Mask? = nil
+        var exposure: Double = 0
+        var saturation: Double = 1
+        static let plain = Style()
+        init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1) {
+            self.mask = mask; self.exposure = exposure; self.saturation = saturation
+        }
+        enum CodingKeys: String, CodingKey { case mask, exposure, saturation }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            mask = try values.decodeIfPresent(Mask.self, forKey: .mask)
+            exposure = try values.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+            saturation = try values.decodeIfPresent(Double.self, forKey: .saturation) ?? 1
+        }
+    }
+    var style: Style = .plain
     var name: String? = nil
     var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : "Gradient") }
     var content: Content
@@ -71,6 +90,7 @@ struct LocalSceneSource: SceneSource {
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
+            let style: SceneNode.Style?
             let children: [Node]?
             let name: String?
             let type: SceneDescriptor.Kind
@@ -128,13 +148,13 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...3).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...4).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
               (1...SceneBudget.maxNodes).contains(descriptions.count) else {
-            throw SceneError.invalid("Use 1–16 layers in v1, or nodes in v2/v3.")
+            throw SceneError.invalid("Use 1–16 layers in v1, or nodes in v2 and later.")
         }
         func decode(_ node: Scene.Node, depth: Int) throws -> SceneNode {
             guard depth <= SceneBudget.maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
@@ -148,8 +168,8 @@ struct LocalSceneSource: SceneSource {
             }
             let content: SceneNode.Content
             if node.type == .group {
-                guard manifest.version == 3, node.asset == nil, let children = node.children, !children.isEmpty else {
-                    throw SceneError.invalid("Groups require v3, nonempty children, and no asset.")
+                guard manifest.version >= 3, node.asset == nil, let children = node.children, !children.isEmpty else {
+                    throw SceneError.invalid("Groups require v3 or later, nonempty children, and no asset.")
                 }
                 content = .group(try children.map { try decode($0, depth: depth + 1) })
             } else if node.type == .gradient {
@@ -164,7 +184,8 @@ struct LocalSceneSource: SceneSource {
                 }
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
-            return SceneNode(name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
+            return SceneNode(style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
@@ -228,6 +249,9 @@ enum ScenePackageWriter {
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
             if let name = node.name { json["name"] = name }
+            if node.style != .plain {
+                json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
+            }
             if let source = node.assetURL {
                 let root = destination.resolvingSymlinksInPath().path + "/"
                 let path = source.resolvingSymlinksInPath().path
@@ -245,7 +269,7 @@ enum ScenePackageWriter {
             return json
         }
         let nodes = try scene.nodes.map(encode)
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.requiresMetal ? 4 : scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
                              ("scene.json", ["nodes": nodes])] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -312,6 +336,10 @@ enum SceneBudget {
             guard depth <= maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
             var result: [SceneNode] = []
             for node in nodes {
+                guard node.style.exposure.isFinite, (-2...2).contains(node.style.exposure),
+                      node.style.saturation.isFinite, (0...2).contains(node.style.saturation) else {
+                    throw SceneError.invalid("Use exposure −2…2 and saturation 0…2.")
+                }
                 result.append(node)
                 if node.kind == .group {
                     guard !node.children.isEmpty else { throw SceneError.invalid("Groups need at least one child.") }
@@ -337,5 +365,22 @@ enum SceneBudget {
     }
     static func imagePixels(_ nodes: [SceneNode]) -> Int {
         min(16_000_000, decodedImagePixels / max(1, nodes.flatMap { $0.descendants }.filter { $0.kind == .image }.count))
+    }
+}
+
+/// Tree edits retain node identity so renderers can keep media resources alive.
+enum SceneTree {
+    static func siblings(of id: UUID, in nodes: [SceneNode]) -> [SceneNode]? {
+        if nodes.contains(where: { $0.id == id }) { return nodes }
+        for node in nodes { if let found = siblings(of: id, in: node.children) { return found } }
+        return nil
+    }
+    static func edit(_ id: UUID, in nodes: inout [SceneNode], _ body: (inout [SceneNode], Int) -> Void) -> Bool {
+        if let index = nodes.firstIndex(where: { $0.id == id }) { body(&nodes, index); return true }
+        for index in nodes.indices where nodes[index].kind == .group {
+            var children = nodes[index].children
+            if edit(id, in: &children, body) { nodes[index].content = .group(children); return true }
+        }
+        return false
     }
 }

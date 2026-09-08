@@ -39,6 +39,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var transform: SIMD4<Float> // normalized x/y, scale, rotation radians
         var media: SIMD4<Float> // crop x/y, opacity, gradient flag
         var viewport: SIMD4<Float> // width/height aspect, time, reserved
+        var style: SIMD4<Float> // ellipse mask, exposure, saturation, reserved
     }
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
@@ -211,7 +212,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 let t = node.transform
                 var u = Uniforms(transform: SIMD4(Float(t.x ?? 0), Float(t.y ?? 0), Float(t.scale ?? 1), Float((t.rotation ?? 0) * .pi / 180)),
                     media: SIMD4(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
-                    viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0))
+                    viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0),
+                    style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), 0))
                 encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
@@ -351,7 +353,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private static let shader = """
     #include <metal_stdlib>
     using namespace metal;
-    struct U { float4 transform; float4 media; float4 viewport; };
+    struct U { float4 transform; float4 media; float4 viewport; float4 style; };
     struct V { float4 position [[position]]; float2 uv; };
     vertex V sceneQuad(uint id [[vertex_id]], constant U &u [[buffer(0)]]) {
         float2 p = float2(id & 1, id >> 1) * 2.0 - 1.0;
@@ -361,16 +363,29 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         q += u.transform.xy * 2.0;
         return {float4(q, 0, 1), float2((p.x+1)*0.5, (1-p.y)*0.5)};
     }
+    float4 styled(float4 pixel, float2 uv, constant U &u) {
+        if (u.style.x == 0.0 && u.style.y == 0.0 && u.style.z == 1.0) return pixel * u.media.z;
+        float3 color = pixel.rgb / max(pixel.a, 0.00001);
+        float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+        color = clamp(mix(float3(luma), color, u.style.z) * exp2(u.style.y), 0.0, 1.0);
+        float coverage = 1.0;
+        if (u.style.x > 0.5) {
+            float distance = length(uv * 2.0 - 1.0);
+            float edge = max(fwidth(distance), 0.0001);
+            coverage = 1.0 - smoothstep(1.0 - edge, 1.0, distance);
+        }
+        return float4(color * pixel.a, pixel.a) * (coverage * u.media.z);
+    }
     fragment float4 shade(V v [[stage_in]], constant U &u [[buffer(0)]], texture2d<float> image [[texture(0)]]) {
         if (u.media.w > 0.5) {
             float2 uv = float2(v.uv.x, 1.0-v.uv.y);
             float t = u.viewport.y;
             float wave = 0.5 + 0.5 * sin(uv.x*5.0 + sin(uv.y*3.0+t*0.2)+t*0.15);
             float3 high = mix(float3(0.1,0.6,0.5), float3(0.5,0.15,0.65), wave);
-            return float4(mix(float3(0.025,0.035,0.12),high,smoothstep(0.0,1.2,wave*(1.0-uv.y*0.5))),1)*u.media.z;
+            return styled(float4(mix(float3(0.025,0.035,0.12),high,smoothstep(0.0,1.2,wave*(1.0-uv.y*0.5))),1), v.uv, u);
         }
         constexpr sampler sample(filter::linear, address::clamp_to_edge);
-        return image.sample(sample, (v.uv-0.5)*u.media.xy+0.5)*u.media.z;
+        return styled(image.sample(sample, (v.uv-0.5)*u.media.xy+0.5), v.uv, u);
     }
     """
 }

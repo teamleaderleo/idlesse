@@ -183,6 +183,22 @@ import Foundation
         precondition(SceneBudget.groupTargetSize(width: .infinity, height: 1, count: 1) == nil)
         try Data(#"{"version":2,"title":"Old format","capabilities":[]}"#.utf8).write(to: groupedPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(groupedPackage); fatalError("Accepted groups in v2") } catch is SceneError {}
+        var styledNode = SceneNode(style: .init(mask: .ellipse, exposure: -1, saturation: 0), content: .gradient)
+        let styledScene = SceneDescriptor(title: "Styled", nodes: [styledNode])
+        precondition(styledScene.requiresMetal)
+        let styledPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: styledPackage) }
+        try ScenePackageWriter.write(styledScene, to: styledPackage)
+        let styledLoaded = try await source.resolve(styledPackage)
+        precondition(styledLoaded.nodes[0].style == styledNode.style)
+        try Data(#"{"version":3,"title":"Old","capabilities":[]}"#.utf8).write(to: styledPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(styledPackage); fatalError("Accepted style in v3") } catch is SceneError {}
+        styledNode.style.exposure = .infinity
+        do { try SceneBudget.validate([styledNode]); fatalError("Accepted infinite exposure") } catch is SceneError {}
+        var tree = [group]
+        precondition(SceneTree.edit(firstNode.id, in: &tree) { nodes, index in nodes[index].name = "Edited child" })
+        precondition(tree[0].id == group.id && tree[0].children[0].name == "Edited child")
+        precondition(SceneTree.siblings(of: firstNode.id, in: tree)?.count == 2)
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
     }
 }

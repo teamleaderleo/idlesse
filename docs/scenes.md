@@ -17,11 +17,12 @@ Up to 16 ordered image/video layers are supported, drawn back to front. Each
 layer accepts optional `opacity` from 0 to 1 (default 1). Transparent image
 foregrounds preserve the content beneath them. Layers currently fill the display;
 For transforms and the new gradient node, see [scene format v2](creative-runtime.md).
-Masks and blend modes beyond normal alpha composition are not implemented. Image assets use JPG/JPEG, PNG or
+V4 adds an ellipse mask and color adjustments; other mask types and blend modes
+beyond normal alpha composition are not implemented. Image assets use JPG/JPEG, PNG or
 HEIC; video assets use MP4/MOV. Paths are relative to the package and must resolve
 inside it. Each JSON document is limited to 64 KiB. Unknown versions and requested
 capabilities fail explicitly. Preview art can be included but is not consumed yet.
-No network access, scripts, signals or effects are implemented.
+No network access, scripts or signal bindings are implemented.
 
 The desktop path is now LocalSceneSource → SceneDescriptor → SceneRenderer →
 WallpaperSurface. Resolution runs off the main thread, returns metadata only,
@@ -101,3 +102,33 @@ security-scoped access and save cleanup include descendants. Existing v1/v2 pack
 continue to load. Older builds reject v3 explicitly.
 
 `Examples/GroupedAurora.idlesse` demonstrates two animated children with no media download.
+
+
+## Appearance (version 4)
+
+V4 adds optional `style` to any node, including a group:
+
+```json
+{"type":"gradient","style":{"mask":"ellipse","exposure":-0.5,"saturation":0.4}}
+```
+
+Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
+to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
+0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
+saving writes v4 only when a non-neutral style exists.
+
+The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
+fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR
+texture values, then scales by `2^exposure` and clamps to SDR. This is an artistic
+SDR adjustment, not an HDR or color-managed photographic exposure pipeline.
+Group effects operate on the composed group, before its opacity and transform.
+Masks/color require no additional intermediate textures beyond existing group targets.
+
+Styled scenes require Metal and select it automatically in preview and wallpaper.
+Direct Standard renderer preparation rejects them rather than ignoring the effects.
+Core Image view filters were not added: Apple's [filter rendering documentation](https://developer.apple.com/documentation/appkit/nsview/layerusescoreimagefilters)
+explains that they move the layer hierarchy into in-process rendering. The current
+effects stay in the existing Metal pass instead.
+
+`Examples/StyledAurora.idlesse` demonstrates masked, desaturated group composition.
+Arbitrary asset masks, blur, bloom and displacement remain future work.

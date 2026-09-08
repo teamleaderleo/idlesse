@@ -58,6 +58,29 @@ extension StudioWindowController {
         precondition(editor.scene.nodes.count == 2)
         editor.document.undoManager.redo()
         precondition(editor.scene.nodes.count == 1 && editor.scene.nodes[0].children.count == 2)
+        editor.nodePicker.selectItem(at: 1)
+        editor.selectNode()
+        let childID = editor.editor.selectedNode!.id
+        let nestedRenderer = editor.renderer
+        editor.editor.rename("Inner light")
+        precondition(editor.scene.nodes[0].children[0].name == "Inner light" && editor.renderer === nestedRenderer)
+        editor.document.undoManager.undo()
+        precondition(editor.editor.selectedNode?.id == childID)
+        editor.editor.reorder(1, 2)
+        precondition(editor.scene.nodes[0].children[1].id == childID && editor.renderer === nestedRenderer)
+        editor.nodePicker.selectItem(at: 0); editor.selectNode()
+        editor.editor.ungroup()
+        precondition(editor.scene.nodes.count == 2 && editor.scene.nodes[1].id == childID)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.nodes[0].kind == .group)
+        editor.nodePicker.selectItem(at: 1); editor.selectNode()
+        var styledChild = editor.editor.selectedNode!
+        styledChild.style = .init(mask: .ellipse, exposure: -0.5, saturation: 0)
+        editor.editor.replaceSelected(styledChild, name: "Change Appearance")
+        precondition(editor.renderer is MetalSceneRenderer && editor.engine.indexOfSelectedItem == 1)
+        let styledRenderer = editor.renderer
+        editor.document.undoManager.undo()
+        precondition(editor.editor.selectedNode?.style == .plain && editor.renderer === styledRenderer)
         editor.renderer?.releaseResources()
     }
 }
@@ -77,6 +100,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private weak var editingClient: NSTextField?
     private lazy var editor = SceneEditorController(document: document)
     private let nameField = NSTextField(string: "")
+    private let ungroupButton = NSButton(title: "Ungroup", target: nil, action: nil)
     private let groupButton = NSButton(title: "Group with Next Layer", target: nil, action: nil)
     private let duplicateButton = NSButton(title: "Duplicate Layer", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
@@ -130,6 +154,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         fieldEditor.isFieldEditor = true
         fieldEditor.allowsUndo = true
+        editor.onError = { [weak self] message in self?.detailLabel.stringValue = message }
         editor.commit = { [weak self] nodes, selected, name in self?.applyEdit(nodes, selected: selected, name: name) ?? false }
         document.currentSelection = { [weak self] in self?.nodePicker.indexOfSelectedItem ?? 0 }
         document.prepareRestore = { [weak self] target in
@@ -218,10 +243,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         inspector.addArrangedSubview(NSTextField(labelWithString: "LAYERS"))
         nodePicker.onReorder = { [weak self] source, destination in
             guard let self, !self.saving else { return }
-            var nodes = self.scene.nodes
-            let node = nodes.remove(at: source)
-            nodes.insert(node, at: destination)
-            self.applyEdit(nodes, selected: destination, name: "Reorder Layer")
+            self.editor.reorder(source, destination)
         }
         nodePicker.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(nodePicker)
@@ -236,12 +258,15 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             button.action = action
             inspector.addArrangedSubview(button)
         }
-        dragOverlay.onSelect = { [weak self] index in self?.nodePicker.selectItem(at: index); self?.selectNode() }
+        dragOverlay.onSelect = { [weak self] index in
+            guard let self, self.scene.nodes.indices.contains(index),
+                  let selection = self.scene.allNodes.firstIndex(where: { $0.id == self.scene.nodes[index].id }) else { return }
+            self.nodePicker.selectItem(at: selection); self.selectNode()
+        }
         dragOverlay.onPreviewTransform = { [weak self] transform in
             guard let self, !self.saving else { return }
             var nodes = self.scene.nodes
-            let index = self.nodePicker.indexOfSelectedItem
-            guard nodes.indices.contains(index) else { return }
+            guard let id = self.editor.selectedNode?.id, let index = nodes.firstIndex(where: { $0.id == id }) else { return }
             nodes[index].transform = transform
             _ = self.renderer?.updateScene(SceneDescriptor(title: self.scene.title, nodes: nodes))
         }
@@ -261,6 +286,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         groupButton.action = #selector(groupNodes)
         groupButton.toolTip = "Combine this layer and the next layer in drawing order. Undo restores the individual layers."
         inspector.addArrangedSubview(groupButton)
+        ungroupButton.target = self; ungroupButton.action = #selector(ungroupNodes)
+        ungroupButton.toolTip = "Restore the child layers. Reset group transform, opacity and appearance first."
+        inspector.addArrangedSubview(ungroupButton)
         for (index, label) in ["X", "Y", "Scale", "Rotation °", "Opacity"].enumerated() {
             let field = NSTextField(string: "")
             field.tag = index
@@ -274,6 +302,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             row.widthAnchor.constraint(equalToConstant: 160).isActive = true
             inspector.addArrangedSubview(row)
         }
+        inspector.addArrangedSubview(NSButton(title: "Appearance…", target: self, action: #selector(editAppearance)))
         saveCopyButton.target = self
         saveCopyButton.action = #selector(saveCopy)
         saveButton.target = self
@@ -281,7 +310,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         inspector.addArrangedSubview(saveButton)
         inspector.addArrangedSubview(saveCopyButton)
         inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
-        let hint = NSTextField(wrappingLabelWithString: "Drag to move. Corners resize; circle rotates. Shift snaps rotation or nudges 10×. Option-click selects behind. 16 layers · up to 2 videos and 4 gradients.")
+        let hint = NSTextField(wrappingLabelWithString: "Expand groups to edit children. Drag rows to reorder siblings.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
@@ -367,6 +396,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         if restoreFocus { window.makeFirstResponder(dragOverlay) }
         cancelMeasurement()
         renderer = next
+        engine.selectItem(at: next is MetalSceneRenderer ? 1 : 0)
         presentationSample = PresentationRateSample()
         updateFrameRate()
         titleLabel.stringValue = scene.title
@@ -378,39 +408,45 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let selected = max(0, nodePicker.indexOfSelectedItem)
         nodePicker.removeAllItems()
         nodePicker.setNodes(scene.nodes)
-        nodePicker.selectItem(at: min(selected, scene.nodes.count - 1))
+        nodePicker.selectItem(at: min(selected, scene.allNodes.count - 1))
         selectNode()
         applyButton.isEnabled = selectedURL != nil && !draft && !saving
         saveCopyButton.isEnabled = !saving
         saveButton.isEnabled = !saving
         nameField.isEditable = !saving
-        duplicateButton.isEnabled = !saving && scene.nodes.count < SceneBudget.maxNodes
-        addMediaButton.isEnabled = !saving && scene.nodes.count < SceneBudget.maxNodes
+        duplicateButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
+        addMediaButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addGradientButton.isEnabled = addMediaButton.isEnabled
-        removeNodeButton.isEnabled = !saving && scene.nodes.count > 1
-        reorderButton.isEnabled = !saving && scene.nodes.count > 1
-        dragOverlay.isEnabled = !saving
+        removeNodeButton.isEnabled = !saving && editor.siblings.count > 1
+        reorderButton.isEnabled = !saving && editor.siblings.count > 1
+        dragOverlay.isEnabled = !saving && scene.nodes.contains { $0.id == editor.selectedNode?.id }
         undoButton.isEnabled = !saving && !undoEdits.isEmpty
         redoButton.isEnabled = !saving && !redoEdits.isEmpty
         window.isDocumentEdited = draft
         window.title = "Idlesse Studio — " + (selectedURL?.pathExtension.lowercased() == "idlesse" ? scene.title : "Untitled (\(scene.title))")
     }
     @objc private func selectNode() {
-        guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
-        let node = scene.nodes[nodePicker.indexOfSelectedItem]
-        groupButton.isEnabled = !saving && nodePicker.indexOfSelectedItem + 1 < scene.nodes.count && scene.allNodes.count < SceneBudget.maxNodes
         editor.selection = nodePicker.indexOfSelectedItem
+        guard let node = editor.selectedNode else { return }
+        let siblings = editor.siblings
+        let offset = siblings.firstIndex { $0.id == node.id } ?? 0
+        groupButton.isEnabled = !saving && offset + 1 < siblings.count && scene.allNodes.count < SceneBudget.maxNodes
+        ungroupButton.isEnabled = !saving && node.kind == .group
+        removeNodeButton.isEnabled = !saving && siblings.count > 1
+        reorderButton.isEnabled = !saving && siblings.count > 1
         nameField.stringValue = node.displayName
         dragOverlay.nodes = scene.nodes
-        dragOverlay.selected = editor.selection
+        let rootIndex = scene.nodes.firstIndex { $0.id == node.id }
+        dragOverlay.isEnabled = !saving && rootIndex != nil
+        dragOverlay.selected = rootIndex ?? -1
         dragOverlay.transform = node.transform
-        reorderButton.title = nodePicker.indexOfSelectedItem == 0 ? "Bring Forward" : "Send Backward"
+        reorderButton.title = offset == 0 ? "Bring Forward" : "Send Backward"
         let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
                       node.transform.rotation ?? 0, node.opacity]
         for (field, value) in zip(transformFields, values) { field.stringValue = String(format: "%.3f", value) }
     }
     @objc private func editTransform() {
-        guard !saving, scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
+        guard !saving, let current = editor.selectedNode else { return }
         let values = transformFields.compactMap { Double($0.stringValue) }
         let ranges = [-2.0...2.0, -2.0...2.0, 0.05...4.0, -360.0...360.0, 0.0...1.0]
         guard values.count == 5, zip(values, ranges).allSatisfy({ $0.isFinite && $1.contains($0) }) else {
@@ -418,15 +454,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             selectNode()
             return
         }
-        let current = scene.nodes[nodePicker.indexOfSelectedItem]
         let existing = [current.transform.x ?? 0, current.transform.y ?? 0, current.transform.scale ?? 1,
                         current.transform.rotation ?? 0, current.opacity]
         // Display rounds to three decimals; unchanged fields must not create edits.
         guard zip(values, existing).contains(where: { abs($0 - $1) > 0.0005 }) else { return }
-        var nodes = scene.nodes
-        nodes[nodePicker.indexOfSelectedItem].transform = .init(x: values[0], y: values[1], scale: values[2], rotation: values[3])
-        nodes[nodePicker.indexOfSelectedItem].opacity = values[4]
-        _ = applyEdit(nodes, selected: nodePicker.indexOfSelectedItem)
+        var node = current
+        node.transform = .init(x: values[0], y: values[1], scale: values[2], rotation: values[3])
+        node.opacity = values[4]
+        editor.replaceSelected(node, name: "Change Layer")
     }
     @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int, name: String = "Change Layer") -> Bool {
         guard !saving, (1...SceneBudget.maxNodes).contains(nodes.count) else { return false }
@@ -465,23 +500,50 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     private func clearEditHistory() { document.clearHistory(); fieldEditor.undoManager?.removeAllActions() }
     @objc private func renameNode() { editor.rename(nameField.stringValue) }
+    @objc private func editAppearance() {
+        guard !saving, var node = editor.selectedNode else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Appearance — " + node.displayName
+        dialog.informativeText = "Mask and color effects use Metal. Exposure: −2…2 stops. Saturation: 0…2 (1 is original)."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let mask = NSPopUpButton(frame: .zero, pullsDown: false)
+        mask.addItems(withTitles: ["No Mask", "Ellipse Mask"])
+        mask.selectItem(at: node.style.mask == .ellipse ? 1 : 0)
+        let exposure = NSTextField(string: String(node.style.exposure))
+        exposure.setAccessibilityLabel("Exposure")
+        let saturation = NSTextField(string: String(node.style.saturation))
+        saturation.setAccessibilityLabel("Saturation")
+        let fields = NSStackView(views: [mask, NSTextField(labelWithString: "Exposure"), exposure,
+                                        NSTextField(labelWithString: "Saturation"), saturation])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 150)
+        exposure.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        saturation.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        dialog.accessoryView = fields
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard self.editor.selectedNode?.id == node.id else {
+                self.detailLabel.stringValue = "The scene changed while Appearance was open. Reopen Appearance and try again."; return
+            }
+            guard let ev = Double(exposure.stringValue), let sat = Double(saturation.stringValue),
+                  ev.isFinite, (-2...2).contains(ev), sat.isFinite, (0...2).contains(sat) else {
+                self.detailLabel.stringValue = "Use exposure −2…2 and saturation 0…2."; return
+            }
+            node.style = .init(mask: mask.indexOfSelectedItem == 1 ? .ellipse : nil, exposure: ev, saturation: sat)
+            self.editor.replaceSelected(node, name: "Change Appearance")
+        }
+    }
+    @objc private func ungroupNodes() { editor.ungroup() }
     @objc private func groupNodes() { editor.groupWithNext() }
     @objc private func duplicateNode() { editor.duplicate() }
     @objc private func addGradient() {
-        guard scene.nodes.count < SceneBudget.maxNodes else { return }
-        _ = applyEdit(scene.nodes + [SceneNode(name: "Gradient \(scene.nodes.count + 1)", content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))], selected: scene.nodes.count, name: "Add Gradient")
+        guard scene.allNodes.count < SceneBudget.maxNodes else { return }
+        _ = editor.add(SceneNode(name: "Gradient \(scene.allNodes.count + 1)", content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0)))
     }
     @objc private func removeNode() { editor.remove() }
-    @objc private func reorderNode() {
-        let index = nodePicker.indexOfSelectedItem
-        guard scene.nodes.count > 1, scene.nodes.indices.contains(index) else { return }
-        let destination = index == 0 ? 1 : index - 1
-        var nodes = scene.nodes
-        nodes.swapAt(index, destination)
-        _ = applyEdit(nodes, selected: destination, name: "Reorder Layer")
-    }
+    @objc private func reorderNode() { editor.reorderAdjacent() }
     @objc private func addMedia() {
-        guard !saving, scene.nodes.count < SceneBudget.maxNodes else { return }
+        guard !saving, scene.allNodes.count < SceneBudget.maxNodes else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie]
         panel.prompt = "Add Layer"
@@ -503,7 +565,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     self.saving = false
                     var node = loaded.nodes[0]
                     node.transform = .init(x: 0, y: 0, scale: 0.6, rotation: 0)
-                    if self.applyEdit(self.scene.nodes + [node], selected: self.scene.nodes.count) {
+                    if self.editor.add(node) {
                         if accessed && !self.importedScopes.contains(url) {
                             self.importedScopes.append(url)
                             adopted = true
@@ -703,6 +765,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
             UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
         panel.treatsFilePackagesAsDirectories = false
+        panel.canChooseDirectories = true
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.load(url)
