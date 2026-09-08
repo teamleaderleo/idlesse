@@ -8,7 +8,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
     private var pendingSceneURL: URL?
-    private lazy var scenePreview = ScenePreviewController { [weak self] url in self?.wallpaper.select(url) }
+    private lazy var scenePreview = StudioWindowController { [weak self] url in self?.wallpaper.select(url) }
     @objc private func showScenePreview() {
         saverView?.stopAnimation()
         window?.orderOut(nil)
@@ -64,7 +64,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
         let wallpaperButton = NSButton(title: "Wallpaper…", target: wallpaper, action: #selector(WallpaperController.chooseWallpaper))
         wallpaperButton.bezelStyle = .rounded
-        let sceneButton = NSButton(title: "Scene Preview…", target: self, action: #selector(showScenePreview))
+        let sceneButton = NSButton(title: "Studio…", target: self, action: #selector(showScenePreview))
         sceneButton.bezelStyle = .rounded
         let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton])
         controls.spacing = 10
@@ -151,9 +151,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @objc private func saveStudio() { scenePreview.saveDocument() }
+    @objc private func saveStudioAs() { scenePreview.saveAsDocument() }
+    @objc private func duplicateStudioLayer() { scenePreview.duplicateLayer() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(togglePause) || menuItem.action == #selector(nextImage) {
             return window.isKeyWindow && !window.isMiniaturized
+        }
+        if [#selector(saveStudio), #selector(saveStudioAs), #selector(duplicateStudioLayer)].contains(menuItem.action) {
+            return scenePreview.acceptsDocumentCommands
         }
         return true
     }
@@ -170,19 +176,35 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         settings.target = self
         appMenu.addItem(settings)
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit Idlesse Preview", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "Quit Idlesse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+        for (title, action, key) in [("Save", #selector(saveStudio), "s"), ("Save As…", #selector(saveStudioAs), "S")] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key.lowercased())
+            item.keyEquivalentModifierMask = key == key.uppercased() ? [.command, .shift] : [.command]
+            item.target = self
+            fileMenu.addItem(item)
+        }
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
         editItem.submenu = edit
         mainMenu.addItem(editItem)
         for (title, selector, key) in [
+            ("Undo", "undo:", "z"), ("Redo", "redo:", "Z"),
             ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
             ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")
         ] {
-            edit.addItem(NSMenuItem(title: title, action: NSSelectorFromString(selector), keyEquivalent: key))
+            let item = NSMenuItem(title: title, action: NSSelectorFromString(selector), keyEquivalent: key.lowercased())
+            item.keyEquivalentModifierMask = key == key.uppercased() ? [.command, .shift] : [.command]
+            edit.addItem(item)
         }
 
+        let duplicate = NSMenuItem(title: "Duplicate Layer", action: #selector(duplicateStudioLayer), keyEquivalent: "d")
+        duplicate.target = self
+        edit.addItem(duplicate)
         let playbackItem = NSMenuItem()
         let playback = NSMenu(title: "Playback")
         playbackItem.submenu = playback
@@ -212,7 +234,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let show = NSMenuItem(title: "Show Preview", action: #selector(showPreview), keyEquivalent: "")
         show.target = self
         wallpaperMenu.addItem(show)
-        let scenePreviewItem = NSMenuItem(title: "Scene Preview…", action: #selector(showScenePreview), keyEquivalent: "o")
+        let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
         NSApp.mainMenu = mainMenu

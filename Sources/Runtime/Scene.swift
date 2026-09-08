@@ -24,6 +24,8 @@ struct SceneNode: Sendable {
         let rotation: Double?
         static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
     }
+    var name: String? = nil
+    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? "Gradient" }
     let content: Content
     var opacity: Double = 1
     var transform: Transform = .identity
@@ -56,6 +58,7 @@ struct LocalSceneSource: SceneSource {
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
+            let name: String?
             let type: SceneDescriptor.Kind
             let asset: String?
             let opacity: Double?
@@ -139,7 +142,7 @@ struct LocalSceneSource: SceneSource {
                 }
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
-            return SceneNode(content: content, opacity: opacity, transform: transform)
+            return SceneNode(name: node.name.map { String($0.prefix(120)) }, content: content, opacity: opacity, transform: transform)
         }
         return SceneDescriptor(title: manifest.title, nodes: nodes)
     }
@@ -147,24 +150,69 @@ struct LocalSceneSource: SceneSource {
 
 /// Writes a self-contained copy, leaving the source package and its assets untouched.
 enum ScenePackageWriter {
-    static func write(_ scene: SceneDescriptor, to destination: URL) throws {
+    struct Revision: Equatable, Sendable {
+        let manifest: Data
+        let scene: Data
+        let files: [String]
+    }
+    static func revision(of package: URL) throws -> Revision {
+        let files = FileManager.default
+        guard let entries = files.enumerator(at: package, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isSymbolicLinkKey]) else {
+            throw SceneError.invalid("The scene package is no longer available.")
+        }
+        var records: [String] = []
+        for case let url as URL in entries {
+            guard records.count < 10_000 else { throw SceneError.invalid("This package contains too many files to edit safely.") }
+            let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isSymbolicLinkKey])
+            records.append("\(url.path.replacingOccurrences(of: package.path, with: ""))|\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(values.fileSize ?? 0)|\(values.isSymbolicLink ?? false)")
+        }
+        func json(_ name: String) throws -> Data {
+            let handle = try FileHandle(forReadingFrom: package.appendingPathComponent(name))
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: 65_537) ?? Data()
+            guard data.count <= 65_536 else { throw SceneError.invalid("Scene JSON exceeds 64 KB.") }
+            return data
+        }
+        return try Revision(manifest: json("manifest.json"), scene: json("scene.json"), files: records.sorted())
+    }
+    static func write(_ scene: SceneDescriptor, to destination: URL, replacing expected: Revision? = nil) throws {
         let files = FileManager.default
         guard destination.isFileURL, destination.pathExtension.lowercased() == "idlesse",
-              !files.fileExists(atPath: destination.path) else {
+              expected != nil || !files.fileExists(atPath: destination.path) else {
             throw SceneError.invalid("Choose a new .idlesse package name; existing files are never replaced.")
         }
         let staging = destination.deletingLastPathComponent().appendingPathComponent(".idlesse-\(UUID().uuidString).idlesse")
-        try files.createDirectory(at: staging.appendingPathComponent("assets"), withIntermediateDirectories: true)
         defer { try? files.removeItem(at: staging) }
+        if let expected {
+            guard try destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
+                  try revision(of: destination) == expected else {
+                throw SceneError.invalid("The package changed outside Studio. Reopen it or use Save As to keep both versions.")
+            }
+            try files.copyItem(at: destination, to: staging)
+        }
+        let assetsDirectory = staging.appendingPathComponent("assets")
+        if files.fileExists(atPath: assetsDirectory.path),
+           try assetsDirectory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+            throw SceneError.invalid("The package assets folder must be a real directory.")
+        }
+        try files.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
         var nodes: [[String: Any]] = []
         for (index, node) in scene.nodes.enumerated() {
             try Task.checkCancellation()
             var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity,
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
+            if let name = node.name { json["name"] = name }
             if let source = node.assetURL {
-                let relative = "assets/\(index).\(source.pathExtension.lowercased())"
-                try files.copyItem(at: source, to: staging.appendingPathComponent(relative))
+                let root = destination.resolvingSymlinksInPath().path + "/"
+                let path = source.resolvingSymlinksInPath().path
+                let relative: String
+                if expected != nil, path.hasPrefix(root) {
+                    relative = String(path.dropFirst(root.count))
+                } else {
+                    relative = "assets/\(UUID().uuidString)-\(index).\(source.pathExtension.lowercased())"
+                    try files.copyItem(at: source, to: staging.appendingPathComponent(relative))
+                }
                 json["asset"] = relative
             }
             nodes.append(json)
@@ -176,6 +224,35 @@ enum ScenePackageWriter {
         }
         try Task.checkCancellation()
         _ = try LocalSceneSource.read(staging)
-        try files.moveItem(at: staging, to: destination)
+        if let expected {
+            guard try revision(of: destination) == expected else {
+                throw SceneError.invalid("The package changed while saving. Your draft is intact; use Save As or reopen it.")
+            }
+            // Remove only media referenced by the previous supported scene and deleted
+            // by this edit. Preserve ancillary files, previews, and unrelated assets.
+            let previous = try LocalSceneSource.read(destination)
+            let root = destination.resolvingSymlinksInPath().path + "/"
+            let retained = Set(nodes.compactMap { $0["asset"] as? String })
+            for asset in previous.nodes.compactMap({ $0.assetURL }) {
+                let path = asset.resolvingSymlinksInPath().path
+                if path.hasPrefix(root) {
+                    let relative = String(path.dropFirst(root.count))
+                    if !retained.contains(relative) { try? files.removeItem(at: staging.appendingPathComponent(relative)) }
+                }
+            }
+            _ = try LocalSceneSource.read(staging)
+            let backup = ".idlesse-recovery-\(UUID().uuidString).idlesse"
+            do {
+                _ = try files.replaceItemAt(destination, withItemAt: staging, backupItemName: backup)
+            } catch {
+                let recovery = destination.deletingLastPathComponent().appendingPathComponent(backup)
+                if files.fileExists(atPath: recovery.path) {
+                    throw SceneError.invalid("Save failed. A recovery copy is at \(recovery.path). \(error.localizedDescription)")
+                }
+                throw error
+            }
+        } else {
+            try files.moveItem(at: staging, to: destination)
+        }
     }
 }

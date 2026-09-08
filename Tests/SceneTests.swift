@@ -74,6 +74,48 @@ import Foundation
         precondition(mediaRoundTrip.nodes[1].opacity == 0.4 && mediaRoundTrip.nodes[1].transform.x == 0.2)
         let copiedBytes = try Data(contentsOf: mediaRoundTrip.nodes[1].assetURL!)
         precondition(copiedBytes == Data())
+        // Save-in-place validates before replacement and detects outside edits.
+        let revision = try ScenePackageWriter.revision(of: mediaExport)
+        var renamed = mediaRoundTrip.nodes[1]
+        renamed.name = "Foreground"
+        let edited = SceneDescriptor(title: "Edited", nodes: [mediaRoundTrip.nodes[0], renamed])
+        try ScenePackageWriter.write(edited, to: mediaExport, replacing: revision)
+        let saved = try await source.resolve(mediaExport)
+        precondition(saved.title == "Edited" && saved.nodes[1].name == "Foreground")
+        precondition(saved.nodes[1].assetURL == mediaRoundTrip.nodes[1].assetURL)
+        let savedRevision = try ScenePackageWriter.revision(of: mediaExport)
+        do {
+            try ScenePackageWriter.write(SceneDescriptor(title: "Invalid", nodes: []), to: mediaExport, replacing: savedRevision)
+            fatalError("Invalid replacement succeeded")
+        } catch is SceneError {}
+        let afterInvalid = try ScenePackageWriter.revision(of: mediaExport)
+        precondition(afterInvalid == savedRevision)
+        let metadata = mediaExport.appendingPathComponent("scene.json")
+        var changed = try Data(contentsOf: metadata)
+        changed.append(10)
+        try changed.write(to: metadata)
+        do {
+            try ScenePackageWriter.write(edited, to: mediaExport, replacing: savedRevision)
+            fatalError("Overwrote an outside edit")
+        } catch is SceneError {}
+        let afterConflict = try Data(contentsOf: metadata)
+        precondition(afterConflict == changed)
+        let currentRevision = try ScenePackageWriter.revision(of: mediaExport)
+        try ScenePackageWriter.write(gradient, to: mediaExport, replacing: currentRevision)
+        precondition(!FileManager.default.fileExists(atPath: renamed.assetURL!.path))
+        let linked = root.deletingLastPathComponent().appendingPathComponent("linked-\(UUID().uuidString).idlesse")
+        defer { try? FileManager.default.removeItem(at: linked) }
+        try ScenePackageWriter.write(gradient, to: linked)
+        let linkedAssets = linked.appendingPathComponent("assets")
+        try FileManager.default.removeItem(at: linkedAssets)
+        try FileManager.default.createSymbolicLink(at: linkedAssets, withDestinationURL: root)
+        let linkedRevision = try ScenePackageWriter.revision(of: linked)
+        do {
+            try ScenePackageWriter.write(composition, to: linked, replacing: linkedRevision)
+            fatalError("Saved through a symlinked assets folder")
+        } catch is SceneError {}
+        let afterLinked = try ScenePackageWriter.revision(of: linked)
+        precondition(afterLinked == linkedRevision)
         let invalidExport = root.deletingLastPathComponent().appendingPathComponent("invalid-\(UUID().uuidString).idlesse")
         do {
             try ScenePackageWriter.write(SceneDescriptor(title: "Empty", nodes: []), to: invalidExport)

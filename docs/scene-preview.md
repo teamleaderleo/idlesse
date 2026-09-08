@@ -1,58 +1,75 @@
-# Scene Preview
+# Idlesse Studio
 
-Open **Scene Preview…** from the preview controls or Wallpaper menu (⌘O).
-The separate workbench opens an image, video, or `.idlesse` package without changing
-the desktop. A built-in Aurora scene makes it usable with no downloads.
+Open **Studio…** from the preview controls or Wallpaper menu (⌘O). Studio opens
+images, videos, and `.idlesse` packages without changing the desktop. Aurora is a
+built-in starter scene. Standard remains the default; Metal is an experimental
+comparison renderer, independent of editing.
 
-- Pause/resume and compare Standard with Metal · Experimental.
-- Opened packages hot-reload through SceneWatcher. Invalid metadata or an unplayable
-  video keeps the previous preview; asynchronous renderer errors appear in the subtitle.
-- Use on Desktop closes the preview and hands the source to the wallpaper host.
-  The comparison control affects only the preview; the desktop retains its own renderer selection.
-- Closing releases the renderer. Hidden/minimized previews, system sleep, and Low
-  Power Mode pause playback. Opening Scene Preview stops the saver preview behind it.
-- Resize completion rebuilds at the new image decode budget. Video playback restarts
-  on resize or renderer switching; this is not a synchronized frame comparison.
+## Editing
 
-Verified with native UI: open/close/reopen, standard and Metal Aurora rendering,
-Jane Trust video, Evelyn Illustration 4K video in Metal, and the pause control.
-Build, decoder/scene tests and wallpaper/GPU smoke tests pass. Energy and native-size
-color parity remain separate compositor promotion gates.
+The left list shows frontmost layers first. Select there or click a layer’s rectangle
+on the canvas. Option-click cycles through overlapping layers; selection uses layer
+bounds, not per-pixel alpha. Drag rows to reorder them. Two layers remain the limit.
 
-## First editing controls
+Drag a layer to move it, its corner squares to scale it uniformly, or the circle
+above it to rotate. Shift snaps rotation to 15°. With the canvas focused, arrow keys
+nudge by one canvas point; Shift nudges by ten. Delete removes the selected layer
+unless it is the last. Duplicate Layer (⌘D) is available below the two-layer limit.
+Names, X/Y, scale, rotation and opacity are editable in the inspector; Return commits.
 
-Select a layer in the right inspector and edit X/Y, scale, rotation, or opacity.
-Press Return to apply. Reset Changes restores the scene loaded before the first edit.
-Add an image/video or a gradient with the layer controls (two layers maximum).
-New layers start centered at 60% scale. Bring Forward / Send Backward changes drawing
-order while keeping the same layer selected. Remove keeps at least one layer.
-Drag anywhere in the canvas to move the selected layer’s outline; release commits
-its position. The outline previews the move without rebuilding players on each mouse
-event. Edits rebuild the renderer, so videos restart once when the edit is applied.
-Scale and rotation remain numeric controls; there are no resize/rotate handles yet.
-Unsaved drafts suspend package watching and disable Use on Desktop. Opening another
-scene, closing the window, or quitting the app asks before discarding edits.
-Keep Editing cancels Quit and preserves the draft. Quit also waits for an active
-import or save to finish; retry it afterward.
-Reset Changes keeps the current preview, selection, and undo history if the original
-media cannot be loaded. Restore the source file and retry, or save the current draft.
+Use +/− or a trackpad pinch to zoom; scroll to pan. Fit restores the whole canvas.
+Canvas manipulation previews an outline and commits once on release. Committed edits
+rebuild playback, so videos restart. There are no timeline, group, mask or effect controls.
 
-Save a Copy exports a new v2 package with its media, validates it, and opens that copy.
-Existing destinations are never replaced. Source files stay untouched. Media copies
-can consume additional disk space; this is not a cloud/offloading workflow. Export
-runs away from the main thread and removes staging files on failure. Imported media access is retained for the draft and released when it is no longer
-needed. Export preserves layer order and transforms.
+## Documents and saving
 
-## Undo and redo
+Raw media and Aurora start as untitled scenes. Save (⌘S) creates a new `.idlesse`
+package. An opened package saves back to its source; Save As (⇧⌘S) creates a separate
+package. Save As refuses existing destinations. New packages copy their media and
+can consume additional disk space; this is not a cloud-offloading feature.
 
-The inspector’s Undo and Redo buttons cover committed transform edits, dragging,
-adding/removing layers, and reordering. History retains at most 32 metadata snapshots,
-not decoded images or players. Selection and the unsaved marker are restored too.
-New edits clear the redo branch. Reset Changes and opening a new scene clear history.
-Package watching stays suspended while history exists so an external reload cannot
-silently replace it. Imported file access stays alive while a history entry needs it.
-Undo/redo rebuilds playback, so videos restart. Text-field undo is separate; these
-scene actions currently use the inspector buttons.
+Saving stages and validates the package before replacement. Save-in-place preserves
+ancillary files, reuses referenced packaged media and removes media references deleted
+by the edit. It compares JSON and file metadata against the opened revision and
+rejects detected outside edits. Conflict errors leave the draft intact; use Save As
+or reopen. This is optimistic conflict detection, not a lock against arbitrary external
+writers. A failed filesystem replacement reports a recovery-copy path when one exists.
+
+Unsaved changes prompt before opening another scene, closing or quitting. Keep Editing
+cancels the action. Active import/save operations block it until finished. Reset
+Changes retains the current draft, selection, renderer and history if the original
+media cannot load. Restore that source and retry, or save the current scene.
+
+## Undo
+
+Native Undo/Redo (⌘Z / ⇧⌘Z) and inspector buttons cover layer commands with named
+actions. History is limited to 32 metadata snapshots; it retains no decoded images
+or players. Failed renderer preparation cancels Undo before consuming the action.
+Text fields have separate native text history. A new scene edit clears redo.
+Saving, resetting and opening clear scene history. Asset access lasts while the
+current document or an undo target needs it.
+
+## Runtime and structure
+
+`SceneDocument` owns scene/source state, asset access and native undo registration.
+`SceneEditorController` owns selection and editing commands. `ScenePreviewHost` owns
+the renderer, clock and measurements. The window connects them to AppKit controls;
+canvas gestures and the native layer list have separate views.
+
+Opened packages hot-reload when clean and without undo history. Invalid edits keep
+the working preview. Use on Desktop hands the saved source to the wallpaper host.
+Hidden/minimized windows, sleep and Low Power Mode pause playback; closing releases
+it. Opening Studio stops the screensaver preview behind it. Resizing resets canvas
+zoom and rebuilds playback. Renderer switching restarts video too.
+
+## Verification
+
+Native UI checks cover scene and text undo, redo, layer selection and dragging,
+resizing, rotation, nudging, duplication, zoom/pan, Save As and in-place Command-S.
+Automated checks cover 32-step history, failed undo/reset recovery, package round trips,
+invalid replacement, outside-edit conflicts, media reuse/removal and symlink rejection.
+Decoder, scene and wallpaper lifecycle/GPU smoke suites pass. No new performance or
+energy improvement is claimed by the Studio work.
 
 ## Frame rate
 
