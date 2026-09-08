@@ -21,7 +21,7 @@ final class ConfigureSheetController: NSObject {
         self.onSave = onSave
         self.window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 370),
-            styleMask: [.titled],
+            styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
