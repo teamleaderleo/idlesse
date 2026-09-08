@@ -103,6 +103,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         else { wallpaper.select(url) }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        scenePreview.mayQuit() ? .terminateNow : .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         wallpaper.onStop = nil
         wallpaper.stop()
