@@ -74,15 +74,13 @@ Go to:
 
 Scroll to **Other** and select **Idlesse**.
 
-Tahoe renders the standard **Options…** button for Idlesse and calls Idlesse's `configureSheet` getter when the button is clicked. Diagnostics on the current Tahoe build show that the host can attach the returned sheet to a tiny hidden helper window instead of the visible Wallpaper UI, which makes a technically attached sheet look like an inert Options button.
+Idlesse now follows the public `ScreenSaverView` configuration contract directly. It returns one persistent configuration window from `configureSheet`, lets System Settings run that window as the native sheet, and ends the document-modal session through `NSApplication.endSheet` when Save or Cancel is clicked. Selecting Idlesse itself never opens settings.
 
-Idlesse therefore uses the Options click as the trigger but keeps presentation under its own control on Tahoe: it returns no sheet for Tahoe to hide, then orders one process-wide **Idlesse Settings** window to the front. Selecting Idlesse by itself never opens settings, and repeated Options clicks reuse the same window instead of creating duplicates.
-
-On older macOS versions, Idlesse still returns the normal `configureSheet` window and uses the standard ScreenSaver API path.
+This is intentionally the most native third-party path available through the public ScreenSaver framework. Tahoe has known regressions around legacy third-party screen savers, so diagnostics remain enabled while this path is tested on real macOS 26 systems.
 
 Choose the image folder in **Idlesse Settings** and press **Save**. Because the picker and bookmark creation happen inside `legacyScreenSaver`, the folder permission belongs to the process that actually displays the images.
 
-The **Options…** button can appear a short moment after selecting Idlesse. Tahoe loads third-party `.saver` bundles through `legacyScreenSaver` and queries `hasConfigureSheet` at runtime, unlike Apple's built-in Photos saver UI which is already part of System Settings.
+The **Options…** button can appear a short moment after selecting Idlesse. Tahoe loads third-party `.saver` bundles through `legacyScreenSaver` and queries `hasConfigureSheet` at runtime, unlike Apple's built-in Photos UI which is already part of System Settings.
 
 For Tahoe diagnostics after one Options click:
 
@@ -90,7 +88,7 @@ For Tahoe diagnostics after one Options click:
 ./build.sh diagnose
 ```
 
-The diagnostic log records `hasConfigureSheet`, `configureSheet`, preview lifecycle calls, process/window state, and the manual Tahoe presentation path.
+The diagnostic log records `hasConfigureSheet`, `configureSheet`, preview lifecycle calls, process/window state, and whether System Settings attached the returned configuration window.
 
 ## Playback behavior
 
@@ -112,4 +110,4 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next work: verify the Tahoe Options-triggered standalone settings presentation, then continue Photos-source work and distribution hardening.
+Next work: verify repeated native Options → Cancel/Save → Options cycles on Tahoe, then continue Photos-source work and distribution hardening.
