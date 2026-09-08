@@ -10,10 +10,11 @@ struct SceneDescriptor: Sendable {
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
-    var usesSignals: Bool { bindings.contains { $0.signal != nil } }
+    var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
+    var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
-    var usesTime: Bool { bindings.contains { $0.signal == .time || $0.signal == .sine } }
+    var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
     var requiresMetal: Bool { usesDrivers || usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool { usesSignals || nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
@@ -47,7 +48,10 @@ struct SceneDescriptor: Sendable {
                 throw SceneError.invalid("Bindings need an existing parameter and a unique property target.")
             }
             let source: Double
-            if let signal = binding.signal {
+            if let track = binding.keyframes {
+                guard binding.signal == nil, binding.parameter.isEmpty else { throw SceneError.invalid("A keyframe track cannot also have a signal or parameter source.") }
+                source = try track.sample(at: signals.time, validating: validating)
+            } else if let signal = binding.signal {
                 guard binding.parameter.isEmpty, binding.period.isFinite, (0.1...86400).contains(binding.period) else {
                     throw SceneError.invalid("Signal bindings need a period of 0.1–86400 seconds and no parameter source.")
                 }
@@ -98,6 +102,38 @@ struct SceneParameter: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey { case name, value = "default", min, max }
 }
 
+struct SceneKeyframeTrack: Codable, Sendable {
+    enum Interpolation: String, Codable, Sendable { case hold, linear, easeInOut }
+    struct Key: Codable, Sendable { var time: Double; var value: Double }
+    var interpolation: Interpolation = .linear
+    var keys: [Key]
+    func sample(at time: Double, validating: Bool = true) throws -> Double {
+        guard !keys.isEmpty, keys.count <= 128, time.isFinite else { throw SceneError.invalid("A track needs 1–128 keys and a finite sample time.") }
+        if validating {
+            var previous = -1.0
+            for key in keys {
+                guard key.time.isFinite, (0...86400).contains(key.time), key.time > previous,
+                      key.value.isFinite, abs(key.value) <= 1_000_000 else {
+                    throw SceneError.invalid("Key times must increase within 0–86400 seconds; values must be finite and within ±1000000.")
+                }
+                previous = key.time
+            }
+        }
+        guard time > keys[0].time else { return keys[0].value }
+        for index in 1..<keys.count where time < keys[index].time {
+            let a = keys[index - 1], b = keys[index]
+            var t = (time - a.time) / (b.time - a.time)
+            switch interpolation {
+            case .hold: t = 0
+            case .linear: break
+            case .easeInOut: t = t * t * (3 - 2 * t)
+            }
+            return a.value + (b.value - a.value) * t
+        }
+        return keys[keys.count - 1].value
+    }
+}
+
 struct SceneParameterBinding: Codable, Sendable {
     struct Modifier: Codable, Sendable {
         enum Operation: String, Codable, Sendable { case multiply, add }
@@ -112,12 +148,13 @@ struct SceneParameterBinding: Codable, Sendable {
     var offset: Double = 0
     var signal: Signal? = nil
     var period: Double = 8
+    var keyframes: SceneKeyframeTrack? = nil
     var modifiers: [Modifier] = []
     var referencedParameters: [String] { (parameter.isEmpty ? [] : [parameter]) + modifiers.compactMap(\.parameter) }
-    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers }
-    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = []) {
+    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers, keyframes }
+    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = [], keyframes: SceneKeyframeTrack? = nil) {
         self.target = target; self.parameter = parameter; self.scale = scale; self.offset = offset; self.signal = signal; self.period = period
-        self.modifiers = modifiers
+        self.modifiers = modifiers; self.keyframes = keyframes
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -127,6 +164,7 @@ struct SceneParameterBinding: Codable, Sendable {
         offset = try values.decode(Double.self, forKey: .offset)
         signal = try values.decodeIfPresent(Signal.self, forKey: .signal)
         period = try values.decodeIfPresent(Double.self, forKey: .period) ?? 8
+        keyframes = try values.decodeIfPresent(SceneKeyframeTrack.self, forKey: .keyframes)
         modifiers = try values.decodeIfPresent([Modifier].self, forKey: .modifiers) ?? []
     }
 }
@@ -273,7 +311,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...9).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...10).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -320,6 +358,7 @@ struct LocalSceneSource: SceneSource {
             throw SceneError.invalid("Parameters and bindings require scene version 7.")
         }
         let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [])
+        guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
         guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
         guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
@@ -468,7 +507,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

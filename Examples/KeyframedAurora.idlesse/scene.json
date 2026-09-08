@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    {
+      "id": "7F2A0000-0000-4000-8000-000000000010",
+      "type": "gradient",
+      "transform": {
+        "scale": 1.2
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "target": {
+        "nodeID": "7F2A0000-0000-4000-8000-000000000010",
+        "property": "transform.rotation"
+      },
+      "scale": 1,
+      "offset": 0,
+      "keyframes": {
+        "interpolation": "easeInOut",
+        "keys": [
+          {
+            "time": 0,
+            "value": -8
+          },
+          {
+            "time": 3,
+            "value": 8
+          },
+          {
+            "time": 6,
+            "value": -8
+          }
+        ]
+      }
+    }
+  ]
+}

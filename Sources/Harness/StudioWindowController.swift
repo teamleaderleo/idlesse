@@ -323,6 +323,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         inspector.addArrangedSubview(NSStackView(views: [
             NSButton(title: "Controls…", target: self, action: #selector(editControls)),
             NSButton(title: "Bind…", target: self, action: #selector(editBinding))]))
+        inspector.addArrangedSubview(NSButton(title: "Keyframes…", target: self, action: #selector(editKeyframes)))
         pointerToggle.target = self; pointerToggle.action = #selector(togglePointer)
         pointerToggle.font = .systemFont(ofSize: 10)
         inspector.addArrangedSubview(pointerToggle)
@@ -562,6 +563,53 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         if renderer?.updateScene(scene) != true { rebuild() }
         updatePlayback()
     }
+    @objc private func editKeyframes() {
+        guard !saving, let node = editor.selectedNode, !node.locked else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Keyframes — " + node.displayName
+        dialog.informativeText = "Enter time:value pairs separated by commas (seconds). Replaces the selected property's binding. Use Time… to seek or loop; video remains independent."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let properties = ScenePropertyAddress.Property.allCases
+        let property = NSPopUpButton(frame: .zero, pullsDown: false)
+        property.addItems(withTitles: properties.map(\.rawValue))
+        property.setAccessibilityLabel("Keyframe property")
+        let interpolation = NSPopUpButton(frame: .zero, pullsDown: false)
+        interpolation.addItems(withTitles: ["Linear", "Hold", "Ease In Out"])
+        interpolation.setAccessibilityLabel("Keyframe interpolation")
+        let values = NSTextField(string: "0:-0.3, 3:0.3, 6:-0.3")
+        values.setAccessibilityLabel("Keyframe time and value pairs")
+        values.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        let stack = NSStackView(views: [property, interpolation, values])
+        stack.orientation = .vertical; stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 380, height: 100)
+        dialog.accessoryView = stack
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, !self.saving,
+                  self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
+            do {
+                let entries = values.stringValue.split(separator: ",", omittingEmptySubsequences: false)
+                guard entries.count <= 128 else { throw SceneError.invalid("Use at most 128 keys.") }
+                let keys = try entries.map { entry -> SceneKeyframeTrack.Key in
+                    let pair = entry.split(separator: ":", omittingEmptySubsequences: false)
+                    guard pair.count == 2,
+                          let time = Double(pair[0].trimmingCharacters(in: .whitespaces)),
+                          let value = Double(pair[1].trimmingCharacters(in: .whitespaces)) else {
+                        throw SceneError.invalid("Use comma-separated time:value pairs, such as 0:0, 3:1.")
+                    }
+                    return .init(time: time, value: value)
+                }
+                let modes: [SceneKeyframeTrack.Interpolation] = [.linear, .hold, .easeInOut]
+                let track = SceneKeyframeTrack(interpolation: modes[interpolation.indexOfSelectedItem], keys: keys)
+                var next = self.scene
+                let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+                next.bindings.removeAll { $0.target == target }
+                next.bindings.append(.init(target: target, keyframes: track))
+                _ = try next.evaluated()
+                _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Set Keyframes", controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+    }
+
     @objc private func editBinding() {
         guard !saving, let node = editor.selectedNode, !node.locked else { return }
         let dialog = NSAlert()
