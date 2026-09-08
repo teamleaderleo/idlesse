@@ -1,8 +1,14 @@
 import AppKit
 import AVFoundation
+import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        precondition(SceneFrameRate.matchDisplay.requested(maximum: 160) == 160)
+        precondition(SceneFrameRate.matchDisplay.requested(maximum: 240) == 240)
+        precondition(SceneFrameRate.fps160.requested(maximum: 60) == 60)
+        precondition(SceneFrameRate.fps120.requested(maximum: 160) == 120)
+        precondition(SceneFrameRate.automatic.requested(maximum: 160) == nil)
         guard !NSScreen.screens.isEmpty else { fatalError("Wallpaper tests need a logged-in display session") }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-wallpaper-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -128,6 +134,10 @@ enum WallpaperSmoke {
         let sceneClock = SceneClock(now: { instant })
         sceneClock.setPaused(false)
         let gradient = try GradientRenderer(bounds: NSRect(x: 0, y: 0, width: 32, height: 32), clock: sceneClock) { errors.append($0) }
+        gradient.setPreferredFrameRate(160)
+        precondition((gradient.view as? MTKView)?.preferredFramesPerSecond == 160)
+        gradient.setPreferredFrameRate(nil)
+        precondition((gradient.view as? MTKView)?.preferredFramesPerSecond == 30)
         let frame = try gradient.renderProbe()
         precondition(Set(frame).count > 16 && stride(from: 3, to: frame.count, by: 4).allSatisfy { frame[$0] == 255 })
         instant = 10

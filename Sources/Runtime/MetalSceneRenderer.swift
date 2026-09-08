@@ -224,6 +224,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             from: MTLRegionMake2D(0, 0, 32, 32), mipmapLevel: 0) }
         return bytes
     }
+    func setPreferredFrameRate(_ rate: Int?) {
+        guard diagnostics.state != .disposed else { return }
+        metal.preferredFramesPerSecond = rate ?? 60
+    }
     func setPaused(_ paused: Bool) {
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running

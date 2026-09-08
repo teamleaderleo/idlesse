@@ -10,6 +10,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let detailLabel = NSTextField(labelWithString: "")
     private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
     private let engine = NSPopUpButton()
+    private let frameRate = NSPopUpButton()
     private let applyButton = NSButton(title: "Use on Desktop", target: nil, action: nil)
     private var renderer: SceneRenderer?
     private var scene = SceneDescriptor(title: "Aurora", nodes: [SceneNode(content: .gradient)])
@@ -47,6 +48,14 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         observers.append((NotificationCenter.default, token))
         window.center()
         let root = window.contentView!
+        frameRate.addItems(withTitles: SceneFrameRate.allCases.map { $0.title })
+        frameRate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
+        frameRate.target = self
+        frameRate.action = #selector(changeFrameRate)
+        frameRate.toolTip = "Scene redraw rate for preview and desktop. Videos retain their source frame rate. Auto uses the renderer default."
+        let rateToken = NotificationCenter.default.addObserver(forName: SceneFrameRate.changed,
+            object: nil, queue: .main) { [weak self] _ in self?.updateFrameRate() }
+        observers.append((NotificationCenter.default, rateToken))
         titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingMiddle
@@ -72,14 +81,16 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         canvas.layer?.backgroundColor = NSColor.black.cgColor
         canvas.layer?.cornerRadius = 12
         canvas.layer?.masksToBounds = true
-        for child in [heading, canvas, controls] {
+        for child in [heading, canvas, controls, frameRate] {
             child.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(child)
         }
         NSLayoutConstraint.activate([
             heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
             heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            heading.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
+            heading.trailingAnchor.constraint(lessThanOrEqualTo: frameRate.leadingAnchor, constant: -16),
+            frameRate.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            frameRate.centerYAnchor.constraint(equalTo: heading.centerYAnchor),
             canvas.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18),
             canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             canvas.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
@@ -118,10 +129,21 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         next.view.autoresizingMask = [.width, .height]
         canvas.addSubview(next.view)
         renderer = next
+        updateFrameRate()
         titleLabel.stringValue = scene.title
         detailLabel.stringValue = "\(scene.nodes.count) layer\(scene.nodes.count == 1 ? "" : "s") · \(engine.indexOfSelectedItem == 1 ? "Experimental SDR preview" : "Standard preview")"
         updatePlayback()
     }
+    @objc private func changeFrameRate() {
+        SceneFrameRate.selected = SceneFrameRate.allCases[frameRate.indexOfSelectedItem]
+    }
+    private func updateFrameRate() {
+        let maximum = window.screen?.maximumFramesPerSecond ?? 60
+        frameRate.item(at: 1)?.title = "Match Display (\(maximum) Hz)"
+        frameRate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
+        renderer?.setPreferredFrameRate(SceneFrameRate.selected.requested(maximum: maximum))
+    }
+    func windowDidChangeScreen(_ notification: Notification) { updateFrameRate() }
     private func updatePlayback() {
         let stopped = paused || asleep || ProcessInfo.processInfo.isLowPowerModeEnabled || !window.isVisible || window.isMiniaturized || NSApp.isHidden
         clock.setPaused(stopped)
