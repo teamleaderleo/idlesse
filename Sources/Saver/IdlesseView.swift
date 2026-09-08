@@ -49,6 +49,12 @@ final class IdlesseView: ScreenSaverView {
         super.stopAnimation()
     }
 
+    /// Used by the standalone preview harness after its own options window saves.
+    /// The real screen saver host continues to use configureSheet above.
+    func reloadFromPreferences() {
+        restartSlideshow()
+    }
+
     deinit {
         stopTimers()
         library.stopAccess()
