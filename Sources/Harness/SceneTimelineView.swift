@@ -1,11 +1,38 @@
 import AppKit
 
+/// View state only; changing the visible interval never changes authored keys.
+struct TimelineViewport {
+    var duration: Double = 8
+    var start: Double = 0
+    var span: Double = 8
+    mutating func fit() { start = 0; span = duration }
+    mutating func resize(to value: Double) {
+        let fitted = abs(span - duration) < 0.000001
+        duration = max(0.01, value)
+        if fitted { fit() } else { constrain() }
+    }
+    mutating func zoom(_ factor: Double, around time: Double) {
+        let anchor = min(start + span, max(start, time))
+        let fraction = (anchor - start) / span
+        span = min(duration, max(min(0.1, duration), span * factor))
+        start = anchor - span * fraction
+        constrain()
+    }
+    mutating func pan(_ fraction: Double) { start += span * fraction; constrain() }
+    private mutating func constrain() {
+        span = min(duration, max(min(0.1, duration), span))
+        start = min(duration - span, max(0, start))
+    }
+}
+
 /// Studio-only transport UI. Shares the host's existing status tick; owns no timer.
 final class SceneTimelineView: NSStackView {
     private let label = NSTextField(labelWithString: "SCENE TIME")
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 8, target: nil, action: nil)
     private let markers = TimelineMarkers()
     private let trackPicker = NSPopUpButton()
+    private var viewport = TimelineViewport()
+    private let intervalLabel = NSTextField(labelWithString: "")
     private var targets: [ScenePropertyAddress] = []
     private var tracks: [SceneKeyframeTrack] = []
     private var chosenTarget: ScenePropertyAddress?
@@ -30,7 +57,22 @@ final class SceneTimelineView: NSStackView {
         trackPicker.target = self; trackPicker.action = #selector(selectTrack)
         trackPicker.setAccessibilityLabel("Timeline property track")
         trackPicker.toolTip = "Drag keys to edit time and value. Return edits exact values; arrows nudge time/value (Shift for larger steps). Double-click adds; Delete removes. ⌘C/⌘V copies and pastes a track."
-        addArrangedSubview(trackPicker)
+        let navigation = NSStackView(views: [trackPicker])
+        navigation.spacing = 4
+        for (title, action, help) in [
+            ("‹", #selector(panEarlier), "Show earlier timeline time"),
+            ("−", #selector(zoomOut), "Zoom out timeline"),
+            ("Fit", #selector(fitTimeline), "Fit the entire timeline"),
+            ("+", #selector(zoomIn), "Zoom in around the playhead"),
+            ("›", #selector(panLater), "Show later timeline time")
+        ] {
+            let button = NSButton(title: title, target: self, action: action)
+            button.toolTip = help; button.setAccessibilityLabel(help)
+            navigation.addArrangedSubview(button)
+        }
+        intervalLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        navigation.addArrangedSubview(intervalLabel)
+        addArrangedSubview(navigation)
         markers.onMove = { [weak self] index, time in
             guard let self, let target = self.chosenTarget else { return }
             self.onMoveKey?(target, index, time)
@@ -38,6 +80,14 @@ final class SceneTimelineView: NSStackView {
         markers.onEdit = { [weak self] track, name in
             guard let self, let target = self.chosenTarget else { return }
             self.onEditTrack?(target, track, name)
+        }
+        markers.onPan = { [weak self] fraction in
+            guard let self else { return }
+            self.markers.cancelDrag(); self.viewport.pan(fraction); self.updateViewport()
+        }
+        markers.onZoom = { [weak self] factor in
+            guard let self else { return }
+            self.markers.cancelDrag(); self.viewport.zoom(factor, around: self.slider.doubleValue); self.updateViewport()
         }
         let markerRow = NSView()
         markers.translatesAutoresizingMaskIntoConstraints = false
@@ -56,6 +106,7 @@ final class SceneTimelineView: NSStackView {
     func update(scene: SceneDescriptor, selectedID: UUID?, time: Double, enabled: Bool) {
         let tracks = scene.bindings.compactMap(\.keyframes)
         let end = max(0.01, scene.timeline?.duration ?? tracks.compactMap { $0.keys.last?.time }.max() ?? 8)
+        viewport.resize(to: end)
         slider.maxValue = end; slider.doubleValue = min(end, time)
         slider.isEnabled = enabled; loop.isEnabled = enabled
         label.stringValue = String(format: "%.2f s  /  %.2f s", time, end)
@@ -68,13 +119,27 @@ final class SceneTimelineView: NSStackView {
             if let chosenTarget, let index = targets.firstIndex(of: chosenTarget) { trackPicker.selectItem(at: index) }
             chosenTarget = targets.indices.contains(trackPicker.indexOfSelectedItem) ? targets[trackPicker.indexOfSelectedItem] : nil
             markers.cancelDrag()
+            viewport.fit()
         }
         self.tracks = bindings.compactMap(\.keyframes)
         trackPicker.isEnabled = !targets.isEmpty
         markers.editable = enabled && scene.allNodes.first(where: { $0.id == selectedID })?.locked == false
         markers.end = end
+        updateViewport()
         updateMarkers()
     }
+    private func updateViewport() {
+        markers.start = viewport.start
+        markers.span = viewport.span
+        markers.playhead = slider.doubleValue
+        intervalLabel.stringValue = String(format: "%.2f–%.2f s", viewport.start, viewport.start + viewport.span)
+        markers.needsDisplay = true
+    }
+    @objc private func zoomIn() { markers.cancelDrag(); viewport.zoom(0.5, around: slider.doubleValue); updateViewport() }
+    @objc private func zoomOut() { markers.cancelDrag(); viewport.zoom(2, around: slider.doubleValue); updateViewport() }
+    @objc private func fitTimeline() { markers.cancelDrag(); viewport.fit(); updateViewport() }
+    @objc private func panEarlier() { markers.cancelDrag(); viewport.pan(-0.5); updateViewport() }
+    @objc private func panLater() { markers.cancelDrag(); viewport.pan(0.5); updateViewport() }
     private func updateMarkers() {
         let index = trackPicker.indexOfSelectedItem
         markers.track = tracks.indices.contains(index) ? tracks[index] : nil
@@ -99,13 +164,28 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
     }
     var editable = false
     var end: Double = 8
+    var start: Double = 0
+    var span: Double = 8
+    var playhead: Double = 0
     var onMove: ((Int, Double) -> Void)?
     var onEdit: ((SceneKeyframeTrack, String) -> Void)?
+    var onPan: ((Double) -> Void)?
+    var onZoom: ((Double) -> Void)?
     private var selected: Int?
     private var draft: SceneKeyframeTrack?
     private var dragEnd: Double = 8
+    private var dragStart: Double = 0
+    private var dragSpan: Double = 8
     private var dragRange: ClosedRange<Double> = -1...1
     override var acceptsFirstResponder: Bool { true }
+    override func scrollWheel(with event: NSEvent) {
+        let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY
+        let scale = event.hasPreciseScrollingDeltas ? 1.0 : 16.0
+        onPan?(-Double(delta) * scale / max(1, Double(bounds.width)))
+    }
+    override func magnify(with event: NSEvent) {
+        onZoom?(min(2, max(0.5, 1 - Double(event.magnification))))
+    }
     func cancelDrag() { draft = nil; selected = nil; needsDisplay = true }
     private var valueRange: ClosedRange<Double> {
         if draft != nil { return dragRange }
@@ -114,14 +194,16 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
         let padding = max(0.01, max((upper - lower) * 0.15, abs(lower) * 0.05))
         return (lower - padding)...(upper + padding)
     }
-    private func x(_ time: Double) -> CGFloat { CGFloat(time / (draft == nil ? end : dragEnd)) * max(1, bounds.width - 8) + 4 }
+    private func x(_ time: Double) -> CGFloat { CGFloat((time - (draft == nil ? start : dragStart)) / (draft == nil ? span : dragSpan)) * max(1, bounds.width - 8) + 4 }
     private func y(_ value: Double) -> CGFloat {
         let range = valueRange
         return 8 + CGFloat((value - range.lowerBound) / (range.upperBound - range.lowerBound)) * max(1, bounds.height - 20)
     }
     private func time(at point: NSPoint, snap: Bool) -> Double {
         let limit = draft == nil ? end : dragEnd
-        let value = min(limit, max(0, Double((point.x - 4) / max(1, bounds.width - 8)) * limit))
+        let lower = draft == nil ? start : dragStart
+        let width = draft == nil ? span : dragSpan
+        let value = min(limit, max(0, lower + Double((point.x - 4) / max(1, bounds.width - 8)) * width))
         return snap ? min(limit, value.rounded()) : (value * 1000).rounded() / 1000
     }
     override func mouseDown(with event: NSEvent) {
@@ -133,7 +215,7 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
             hypot(x(track.keys[$1].time) - point.x, y(track.keys[$1].value) - point.y)
         }
         if let nearest, hypot(x(track.keys[nearest].time) - point.x, y(track.keys[nearest].value) - point.y) <= 10 {
-            selected = nearest; dragEnd = end; dragRange = valueRange; draft = track
+            selected = nearest; dragEnd = end; dragStart = start; dragSpan = span; dragRange = valueRange; draft = track
         } else if event.clickCount == 2 {
             let position = time(at: point, snap: event.modifierFlags.contains(.shift))
             guard track.keys.count < 128, !track.keys.contains(where: { abs($0.time - position) < 0.001 }) else { return }
@@ -228,15 +310,23 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
         let axis = NSBezierPath()
         axis.move(to: NSPoint(x: 0, y: 8)); axis.line(to: NSPoint(x: bounds.width, y: 8)); axis.stroke()
         let curve = NSBezierPath()
-        let limit = draft == nil ? end : dragEnd
+        let lower = draft == nil ? start : dragStart
+        let width = draft == nil ? span : dragSpan
         // Bounded sampling visualizes hold, linear and ease-in-out without a display timer.
         for index in 0...256 {
-            let time = Double(index) / 256 * limit
+            let time = lower + Double(index) / 256 * width
             let point = NSPoint(x: x(time), y: y((try? track.sample(at: time, validating: false)) ?? 0))
             if index == 0 { curve.move(to: point) } else { curve.line(to: point) }
         }
         NSColor.controlAccentColor.withAlphaComponent(0.6).setStroke(); curve.stroke()
+        if (lower...(lower + width)).contains(playhead) {
+            let cursor = NSBezierPath()
+            cursor.move(to: NSPoint(x: x(playhead), y: 8))
+            cursor.line(to: NSPoint(x: x(playhead), y: bounds.height - 16))
+            NSColor.secondaryLabelColor.setStroke(); cursor.stroke()
+        }
         for (index, key) in track.keys.enumerated() {
+            guard (lower...(lower + width)).contains(key.time) else { continue }
             (index == selected ? NSColor.labelColor : NSColor.controlAccentColor).setFill()
             let position = NSPoint(x: x(key.time), y: y(key.value))
             NSBezierPath(ovalIn: NSRect(x: position.x - 4, y: position.y - 4, width: 8, height: 8)).fill()
