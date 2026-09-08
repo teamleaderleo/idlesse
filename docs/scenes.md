@@ -260,3 +260,11 @@ effects stay in the existing Metal pass instead.
 
 `Examples/StyledAurora.idlesse` demonstrates masked, desaturated group composition.
 Arbitrary asset masks, blur, bloom and displacement remain future work.
+
+## V10 keyframe sources
+
+A binding can use `keyframes` instead of `parameter` or `signal`. The track contains `interpolation` (`hold`, `linear`, or `easeInOut`) and 1–128 `keys`, each with numeric `time` and `value`. Times must strictly increase within 0–86400 seconds; values must be finite and within ±1000000. The existing 64-binding and 64 KiB JSON limits still apply. V1–V9 remain readable; tracks require V10.
+
+Tracks sample SceneClock time, hold endpoint values outside their range, then apply the binding scale/offset, ordered modifiers, and final property clamp. Ease-in-out uses smoothstep. No extra timer or GPU texture is allocated for tracks. Metal renders them; video playback remains independent.
+
+`Examples/KeyframedAurora.idlesse` rotates a gradient over six seconds. Studio Time… can seek it or loop 0–6 seconds; transport choices are preview-only and are not saved.

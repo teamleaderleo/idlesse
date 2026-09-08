@@ -187,3 +187,9 @@ texture limits](scenes.md#groups-version-3). Native checks cover creating a grou
 changing opacity, switching Standard/Metal, nudging and undo. Automated GPU checks
 verify isolated/nested opacity, transform and visibility; allocation tests verify
 in-flight exclusivity and bounded resizing; video tests verify live group edits.
+
+### Keyframes
+
+Select a layer and choose **Keyframes…**, select a property and interpolation, then enter comma-separated `time:value` pairs such as `0:-0.3, 3:0.3, 6:-0.3`. Apply replaces that property's existing driver and participates in native Undo. Save persists the track in a V10 package. Use Bind… → Remove Binding to restore the static property.
+
+This initial sheet authors a replacement track; it does not populate an existing track or offer graphical key dragging. The Time… controls provide seeking, speed, and preview looping. A graphical timeline and video clock synchronization remain unfinished.

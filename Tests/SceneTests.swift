@@ -351,6 +351,28 @@ import Foundation
         precondition(SceneTree.edit(firstNode.id, in: &tree) { nodes, index in nodes[index].name = "Edited child" })
         precondition(tree[0].id == group.id && tree[0].children[0].name == "Edited child")
         precondition(SceneTree.siblings(of: firstNode.id, in: tree)?.count == 2)
+        var track = SceneKeyframeTrack(keys: [.init(time: 1, value: 0), .init(time: 3, value: 1)])
+        precondition(try! track.sample(at: 0) == 0)
+        precondition(try! track.sample(at: 2) == 0.5)
+        precondition(try! track.sample(at: 4) == 1)
+        track.interpolation = .hold
+        precondition(try! track.sample(at: 2) == 0)
+        precondition(try! track.sample(at: 3) == 1)
+        track.interpolation = .easeInOut
+        precondition(try! track.sample(at: 1.5) == 0.15625)
+        var keyed = controlled
+        keyed.bindings = [.init(target: controlled.bindings[0].target, keyframes: track)]
+        precondition(keyed.usesTime && keyed.requiresMetal)
+        let keyedPackage = root.appendingPathComponent("Keyed.idlesse")
+        try ScenePackageWriter.write(keyed, to: keyedPackage)
+        let keyedLoaded = try await source.resolve(keyedPackage)
+        precondition(keyedLoaded.bindings[0].keyframes?.keys.count == 2)
+        let sampled = try keyedLoaded.evaluated(signals: .init(time: 2))
+        precondition(try! keyed.bindings[0].target.value(in: sampled.nodes) == 0.5)
+        try Data(#"{"version":9,"title":"Old","capabilities":[]}"#.utf8).write(to: keyedPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(keyedPackage); fatalError("Accepted keyframes in v9") } catch is SceneError {}
+        track.keys[1].time = 1
+        do { _ = try track.sample(at: 2); fatalError("Accepted duplicate key time") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
     }
 }
