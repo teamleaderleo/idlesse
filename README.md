@@ -161,6 +161,11 @@ for controls, measured resource use, verification and current limitations.
 native Undo/Redo, and Save/Save As for `.idlesse` documents. It keeps editing separate
 from the running desktop. See [Studio controls and saving](docs/scene-preview.md).
 
+**Bind…** connects a layer property to a numeric control. **Controls…** generates
+sliders for the scene, with undoable Apply and saved defaults. The wallpaper menu
+offers the same controls for temporary adjustments without restarting playback.
+Try `Examples/ControlledAurora.idlesse` for adjustable brightness and edge darkness.
+
 ## Scene runtime
 
 The desktop host now resolves `.idlesse` scene packages asynchronously and plays

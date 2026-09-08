@@ -67,6 +67,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
 
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void) throws {
+        let playable = try playable.evaluated()
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.invalid("Metal is unavailable on this Mac.")
         }
@@ -235,6 +236,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return true
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
+        guard let scene = try? scene.evaluated() else { return false }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }

@@ -81,6 +81,17 @@ extension StudioWindowController {
         let styledRenderer = editor.renderer
         editor.document.undoManager.undo()
         precondition(editor.editor.selectedNode?.style == .plain && editor.renderer === styledRenderer)
+        var controlled = editor.scene
+        controlled.parameters = ["amount": .init(name: "Amount", value: 0.5, min: 0, max: 1)]
+        controlled.bindings = [.init(target: .init(nodeID: childID, property: .opacity), parameter: "amount")]
+        precondition(editor.applyEdit(controlled.nodes, selected: 1, name: "Bind", controls: controlled))
+        precondition(editor.renderer === styledRenderer && editor.scene.bindings.count == 1)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.bindings.isEmpty)
+        editor.document.undoManager.redo()
+        precondition(editor.scene.parameters["amount"]?.value == 0.5 && editor.scene.bindings.count == 1)
+        editor.editor.rename("Bound child")
+        precondition(editor.scene.bindings.count == 1 && editor.scene.parameters["amount"]?.value == 0.5)
         editor.renderer?.releaseResources()
     }
 }
@@ -267,7 +278,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             var nodes = self.scene.nodes
             guard let id = self.editor.selectedNode?.id else { return }
             _ = SceneTree.edit(id, in: &nodes) { siblings, index in siblings[index].transform = transform }
-            _ = self.renderer?.updateScene(SceneDescriptor(title: self.scene.title, nodes: nodes))
+            _ = self.renderer?.updateScene(self.scene.replacingNodes(nodes))
         }
         dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
         dragOverlay.onNudge = { [weak self] x, y in self?.editor.nudge(x: x, y: y) }
@@ -302,6 +313,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             inspector.addArrangedSubview(row)
         }
         inspector.addArrangedSubview(NSButton(title: "Appearance…", target: self, action: #selector(editAppearance)))
+        inspector.addArrangedSubview(NSStackView(views: [
+            NSButton(title: "Controls…", target: self, action: #selector(editControls)),
+            NSButton(title: "Bind…", target: self, action: #selector(editBinding))]))
         saveCopyButton.target = self
         saveCopyButton.action = #selector(saveCopy)
         saveButton.target = self
@@ -434,14 +448,25 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         removeNodeButton.isEnabled = !saving && siblings.count > 1
         reorderButton.isEnabled = !saving && siblings.count > 1
         nameField.stringValue = node.displayName
-        dragOverlay.roots = scene.nodes
+        var previewNodes = (try? scene.evaluated().nodes) ?? scene.nodes
+        for binding in scene.bindings where [.x, .y, .scale, .rotation].contains(binding.target.property) {
+            _ = SceneTree.edit(binding.target.nodeID, in: &previewNodes) { nodes, index in nodes[index].locked = true }
+        }
+        dragOverlay.roots = previewNodes
         dragOverlay.isEnabled = !saving
         dragOverlay.selected = editor.selection
-        dragOverlay.transform = node.transform
+        dragOverlay.transform = previewNodes.flatMap { $0.descendants }.first { $0.id == node.id }?.transform ?? node.transform
         reorderButton.title = offset == 0 ? "Bring Forward" : "Send Backward"
         let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
                       node.transform.rotation ?? 0, node.opacity]
-        for (field, value) in zip(transformFields, values) { field.stringValue = String(format: "%.3f", value) }
+        for (index, pair) in zip(transformFields, values).enumerated() {
+            let (field, value) = pair
+            let property: ScenePropertyAddress.Property = [.x, .y, .scale, .rotation, .opacity][index]
+            let bound = scene.bindings.contains { $0.target == ScenePropertyAddress(nodeID: node.id, property: property) }
+            field.stringValue = String(format: "%.3f", value)
+            field.isEnabled = !saving && !bound
+            field.toolTip = bound ? "Controlled by a binding. Use Controls… or remove the binding in Bind…. This is the static fallback." : nil
+        }
     }
     @objc private func editTransform() {
         guard !saving, let current = editor.selectedNode else { return }
@@ -461,13 +486,13 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         node.opacity = values[4]
         editor.replaceSelected(node, name: "Change Layer")
     }
-    @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int, name: String = "Change Layer") -> Bool {
+    @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int, name: String = "Change Layer", controls: SceneDescriptor? = nil) -> Bool {
         guard !saving, (1...SceneBudget.maxNodes).contains(nodes.count) else { return false }
         do { try SceneBudget.validate(nodes) } catch { detailLabel.stringValue = error.localizedDescription; return false }
         let previous = scene
         let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
-        scene = SceneDescriptor(title: scene.title, nodes: nodes)
+        scene = (controls ?? scene).replacingNodes(nodes)
         let updated = renderer?.updateScene(scene) ?? false
         if !updated { rebuild() }
         guard updated || renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
@@ -498,6 +523,64 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     private func clearEditHistory() { document.clearHistory(); fieldEditor.undoManager?.removeAllActions() }
     @objc private func renameNode() { editor.rename(nameField.stringValue) }
+    @objc private func editControls() {
+        guard !saving else { return }
+        let original = scene.parameters
+        SceneParameterControls.present(scene: scene, window: window) { [weak self] values in
+            guard let self, self.scene.parameters == original, values != original else { return }
+            var next = self.scene
+            next.parameters = values
+            _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Controls", controls: next)
+        }
+    }
+    @objc private func editBinding() {
+        guard !saving, let node = editor.selectedNode, !node.locked else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Bind — " + node.displayName
+        dialog.informativeText = "A control overrides the property's static value. New controls use the property's range. Reusing a control links layers together. Remove restores the static value."
+        dialog.addButton(withTitle: "Bind"); dialog.addButton(withTitle: "Remove Binding"); dialog.addButton(withTitle: "Cancel")
+        let property = NSPopUpButton(frame: .zero, pullsDown: false)
+        let properties = ScenePropertyAddress.Property.allCases
+        property.addItems(withTitles: properties.map(\.rawValue))
+        property.selectItem(at: properties.firstIndex(of: .opacity)!)
+        property.setAccessibilityLabel("Target property")
+        let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
+        let keys = scene.parameters.keys.sorted()
+        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name })
+        parameter.setAccessibilityLabel("Control")
+        let name = NSTextField(string: node.displayName + " Control")
+        name.setAccessibilityLabel("New control name")
+        let fields = NSStackView(views: [property, parameter, name])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
+        name.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        dialog.accessoryView = fields
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, !self.saving, response != .alertThirdButtonReturn,
+                  self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
+            var next = self.scene
+            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let previousKeys = next.bindings.filter { $0.target == target }.map(\.parameter)
+            next.bindings.removeAll { $0.target == target }
+            if response == .alertFirstButtonReturn {
+                let index = parameter.indexOfSelectedItem
+                let key = index == 0 ? UUID().uuidString : keys[index - 1]
+                if index == 0 {
+                    let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !title.isEmpty, title.count <= 80 else { self.detailLabel.stringValue = "Use a control name of 1–80 characters."; return }
+                    let value = (try? target.value(in: self.scene.nodes)) ?? target.property.range.lowerBound
+                    next.parameters[key] = SceneParameter(name: title, value: value,
+                                                          min: target.property.range.lowerBound, max: target.property.range.upperBound)
+                }
+                next.bindings.append(SceneParameterBinding(target: target, parameter: key))
+            }
+            for key in previousKeys where !next.bindings.contains(where: { $0.parameter == key }) {
+                next.parameters.removeValue(forKey: key)
+            }
+            do { _ = try next.evaluated() } catch { self.detailLabel.stringValue = error.localizedDescription; return }
+            _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Binding", controls: next)
+        }
+    }
     @objc private func editAppearance() {
         guard !saving, var node = editor.selectedNode else { return }
         let dialog = NSAlert()

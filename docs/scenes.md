@@ -1,8 +1,46 @@
 # Idlesse scenes
 
+## Numeric controls and bindings (version 7)
+
+V7 adds up to 16 named numeric parameters and 64 bindings. See
+`Examples/ControlledAurora.idlesse` for a working scene with brightness and edge
+darkness controls. A parameter has `name`, `default`, `min`, and `max` fields.
+Limits and default must be finite, min must be less than max, and default must be
+within the range. Parameter IDs are nonempty strings of at most 64 UTF-8 bytes.
+
+```json
+"parameters": {"amount":{"name":"Edge Darkness","default":0.7,"min":0,"max":1}},
+"bindings": [{
+  "target":{"nodeID":"7F2A0000-0000-4000-8000-000000000001","property":"style.vignette"},
+  "parameter":"amount", "scale":1, "offset":0
+}]
+```
+
+Each binding computes `parameter × scale + offset` and clamps to the target's
+supported range. Scale and offset are required finite numbers. Missing references,
+duplicate property targets and nonfinite results reject the scene. Bindings apply
+to a render copy; static document values remain available when a binding is removed.
+Evaluation happens on preparation and edits, with no new polling or frame timer.
+Style bindings select Metal even when the current value is neutral.
+
+Studio's **Bind…** creates a control for the selected property or reuses an existing
+one with scale 1 and offset 0. Advanced scale/offset edits currently require JSON.
+**Controls…** generates sliders; Apply is undoable and saved as parameter defaults.
+The wallpaper menu's **Scene Controls…** changes active values without saving the
+package, restarting playback, or copying assets. Values survive suspend/resume but
+reset when selecting/reloading a package or relaunching the app.
+
+Deleting a target removes its bindings; duplicating a layer currently creates an
+unbound copy. Renaming/reordering/grouping preserves references. Removing/replacing
+a binding in Studio also removes its former parameter if no bindings use it.
+Bound transform fields show the static fallback disabled; transform-bound layers
+and their children use controls instead of canvas manipulation. Binding removal
+restores ordinary canvas editing. There are no time/pointer/audio signals, color
+parameters, expression trees, or keyframes yet.
+
 ## Persistent identities (version 6)
 
-Studio saves v6 packages. Every node, including groups and nested children, has an
+Studio saves v6 packages, or v7 when controls are present. Every node, including groups and nested children, has an
 `id` containing a UUID string. Missing, malformed, or duplicate IDs reject the
 package. Save and Save As preserve IDs; duplicating a layer assigns fresh IDs to
 its entire subtree. IDs are scoped to a scene, so separate copies may share IDs.
@@ -14,8 +52,7 @@ The runtime's `ScenePropertyAddress` encodes a target as
 Supported scalar properties are transform x/y/scale/rotation, opacity, and style
 exposure/saturation/vignette. Reads and writes resolve recursively by UUID.
 Missing targets and nonfinite/out-of-range writes fail without mutation. This is
-an internal foundation; package bindings, parameters, and animation UI are not
-implemented yet. Persistent identity alone does not change the host's hot-reload
+the target vocabulary for v7 bindings. Persistent identity alone does not change the host's hot-reload
 replacement behavior or synchronize video playback.
 
 ## Basic package (version 1)
@@ -142,7 +179,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-Studio now saves all scenes as v6 to preserve layer identities.
+Studio saves v6 or v7 to preserve layer identities and controls.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR
