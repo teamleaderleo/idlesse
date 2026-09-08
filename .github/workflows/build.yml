@@ -21,6 +21,9 @@ jobs:
       - name: Build preview and universal saver
         run: ./build.sh
 
+      - name: Smoke-test options UI
+        run: '"build/Idlesse Preview.app/Contents/MacOS/IdlessePreview" --smoke-options'
+
       - name: Verify bundles
         run: |
           file "build/Idlesse.saver/Contents/MacOS/Idlesse"
