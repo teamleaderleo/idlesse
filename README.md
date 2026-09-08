@@ -170,6 +170,8 @@ Bindings also support elapsed time, sine waves, and opt-in pointer response. Try
 V9 adds ordered add/multiply modifiers, including control-driven motion strength.
 Try `Examples/AdjustableAurora.idlesse`, or choose **Multiply result by control**
 in Bind to combine a signal with an existing control.
+Studio's **Time…** control seeks, changes motion speed, and loops scene time in
+Metal, including while paused. Video playback remains independent of this clock.
 
 ## Scene runtime
 

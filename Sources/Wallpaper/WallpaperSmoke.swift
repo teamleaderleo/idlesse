@@ -264,6 +264,21 @@ enum WallpaperSmoke {
         let bright = try groupedMetal.renderProbe(signals: .init(time: 3))
         let dark = try groupedMetal.renderProbe(signals: .init(time: 1))
         precondition(dark[0] < bright[0] / 4, "Time signal must reach the actual compositor")
+        groupedMetal.setPaused(true)
+        sceneClock.setPaused(true)
+        try sceneClock.seek(to: 3)
+        groupedMetal.refreshSceneTime()
+        let seekBright = try groupedMetal.renderProbe()
+        try sceneClock.seek(to: 1)
+        groupedMetal.refreshSceneTime()
+        let seekDark = try groupedMetal.renderProbe()
+        precondition(seekDark[0] < seekBright[0] / 4 && groupedMetal.diagnostics.state == .paused,
+                     "Seeking must redraw motion while remaining paused")
+        precondition(groupedMetal.updateScene(breathing))
+        let editedPaused = try groupedMetal.renderProbe()
+        precondition(abs(Int(editedPaused[0]) - Int(seekDark[0])) <= 1,
+                     "Paused scene edits must retain the playhead position")
+        sceneClock.setPaused(false)
         var modulated = breathing
         modulated.parameters["strength"] = .init(name: "Strength", value: 0, min: 0, max: 1)
         modulated.bindings[0].modifiers = [.init(operation: .multiply, parameter: "strength")]
