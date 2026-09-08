@@ -11,16 +11,27 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var texture: MTLTexture?
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
-        var output: AVPlayerItemVideoOutput?
-        var player: AVPlayer?
-        var endObserver: NSObjectProtocol?
+        var player: AVQueuePlayer?
+        var looper: AVPlayerLooper?
         var statusObserver: NSKeyValueObservation?
-        var loops = 0
-        var paused = true
         init(_ node: SceneNode) { self.node = node }
+        func prepareOutputs() {
+            // Replicas arrive asynchronously when the looper becomes ready.
+            // Outputs are not copied from the template; configure each replica.
+            for replica in looper?.loopingPlayerItems ?? [] {
+                guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferMetalCompatibilityKey as String: true])
+                output.suppressesPlayerRendering = true
+                replica.add(output)
+            }
+        }
         deinit {
-            if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+            statusObserver?.invalidate()
             player?.pause()
+            looper?.disableLooping()
+            player?.removeAllItems()
         }
     }
     // SIMD4 fields keep Swift/Metal layout identical (16-byte alignment).
@@ -103,31 +114,20 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                     withBytes: pixels, bytesPerRow: width * 4)
                 input.texture = texture
             case .video(let url):
-                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                    kCVPixelBufferMetalCompatibilityKey as String: true])
-                output.suppressesPlayerRendering = true
                 let item = AVPlayerItem(url: url)
                 item.preferredForwardBufferDuration = 2
-                item.add(output)
-                let player = AVPlayer(playerItem: item)
+                let player = AVQueuePlayer()
                 player.isMuted = true
                 player.preventsDisplaySleepDuringVideoPlayback = false
+                let looper = AVPlayerLooper(player: player, templateItem: item)
                 input.player = player
-                input.output = output
-                input.endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-                    object: item, queue: .main) { [weak input] _ in
-                    guard let input else { return }
-                    input.loops += 1
-                    input.player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak input] finished in
-                        DispatchQueue.main.async {
-                            if finished, let input, !input.paused { input.player?.play() }
-                        }
+                input.looper = looper
+                input.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak input] looper, _ in
+                    if looper.status == .ready {
+                        DispatchQueue.main.async { [weak input] in input?.prepareOutputs() }
                     }
-                }
-                input.statusObserver = item.observe(\.status, options: [.new]) { item, _ in
-                    if item.status == .failed {
-                        DispatchQueue.main.async { onError(item.error?.localizedDescription ?? "Video decoding failed.") }
+                    if looper.status == .failed {
+                        DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
                     }
                 }
             case .gradient: break
@@ -147,7 +147,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         guard let cache else { return false }
         var changed = false
         for input in inputs {
-            guard let output = input.output, let player = input.player else { continue }
+            guard let player = input.player,
+                  let output = player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first
+            else { continue }
             let time = player.currentTime()
             guard output.hasNewPixelBuffer(forItemTime: time),
                   let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { continue }
@@ -160,7 +162,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             input.texture = texture
             changed = true
         }
-        diagnostics.loopCount = inputs.filter { $0.player != nil }.map { $0.loops }.min() ?? 0
+        diagnostics.loopCount = inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0
         return changed
     }
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
@@ -252,7 +254,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         diagnostics.state = paused ? .paused : .running
         needsFrame = true
         inputs.forEach { input in
-            input.paused = paused
             if paused { input.player?.pause() } else { input.player?.play() }
         }
         metal.isPaused = paused || !diagnostics.animated

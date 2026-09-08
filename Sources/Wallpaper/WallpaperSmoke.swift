@@ -48,12 +48,12 @@ enum WallpaperSmoke {
         controller.presentsWindows = false
         var errors: [String] = []
         controller.onError = { errors.append($0) }
-        func wait(timeout: TimeInterval = 15, until condition: () -> Bool) {
+        func wait(timeout: TimeInterval = 15, line: UInt = #line, until condition: () -> Bool) {
             let end = Date(timeIntervalSinceNow: timeout)
             while !condition() && Date() < end {
                 autoreleasepool { _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02)) }
             }
-            precondition(condition(), "Timed out waiting for wallpaper state")
+            precondition(condition(), "Timed out waiting for wallpaper state at line \(line); errors: \(errors)")
         }
         controller.select(imageURL)
         wait { controller.isRunning || !errors.isEmpty }
@@ -193,9 +193,22 @@ enum WallpaperSmoke {
             videoFrame = (try? metalVideo.renderProbe()) ?? []
             return Set(videoFrame).count > 20
         }
-        wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount > 0 }
+        // A growing loop counter alone can hide a stale output on the next replica.
+        // Require changing decoded pixels during three successive loop iterations.
+        for iteration in 1...3 {
+            wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount >= iteration }
+            let first = try metalVideo.renderProbe()
+            wait {
+                let next = (try? metalVideo.renderProbe()) ?? []
+                return next != first && Set(next).count > 20
+            }
+        }
         metalVideo.setPaused(true)
         precondition(metalVideo.diagnostics.state == .paused)
+        let pausedLoops = metalVideo.diagnostics.loopCount
+        metalVideo.setPaused(false)
+        wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount > pausedLoops }
+        precondition(errors.isEmpty)
         metalVideo.releaseResources()
         precondition(metalVideo.diagnostics.activeResources == 0)
 
