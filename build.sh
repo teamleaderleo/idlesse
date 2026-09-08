@@ -112,6 +112,7 @@ build_app() {
     "$ROOT/Sources/Runtime/MetalSceneRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
+    "$ROOT/Sources/Harness/ScenePreviewController.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \
     "$ROOT/Sources/Harness/main.swift" \
     -framework AppKit \
