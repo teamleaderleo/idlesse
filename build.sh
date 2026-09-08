@@ -140,8 +140,8 @@ case "${1:-all}" in
 
     log "Installed screen saver: $SAVER_DEST/Idlesse.saver"
     log "macOS 26: System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse."
-    log "First-time setup may surface Idlesse Settings from the saver host."
-    log "For Tahoe Options diagnostics after one click, run: ./build.sh diagnose"
+    log "Click Options… to open Idlesse Settings."
+    log "If Tahoe still misbehaves after one click, run: ./build.sh diagnose"
     open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
     ;;
   diagnose)
