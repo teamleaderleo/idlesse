@@ -7,6 +7,9 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let canvas = NSView()
     private let titleLabel = NSTextField(labelWithString: "Aurora")
+    private let performanceLabel = NSTextField(labelWithString: "")
+    private var performanceTimer: Timer?
+    private var presentationSample = PresentationRateSample()
     private let detailLabel = NSTextField(labelWithString: "")
     private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
     private let engine = NSPopUpButton()
@@ -59,7 +62,10 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingMiddle
-        let heading = NSStackView(views: [titleLabel, detailLabel])
+        performanceLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        performanceLabel.textColor = .secondaryLabelColor
+        performanceLabel.toolTip = "Measured Metal drawable presentations per second. Video source frames may repeat. Native video and multiple standard layers are not measured."
+        let heading = NSStackView(views: [titleLabel, detailLabel, performanceLabel])
         heading.orientation = .vertical
         heading.alignment = .leading
         heading.spacing = 4
@@ -129,6 +135,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         next.view.autoresizingMask = [.width, .height]
         canvas.addSubview(next.view)
         renderer = next
+        presentationSample = PresentationRateSample()
         updateFrameRate()
         titleLabel.stringValue = scene.title
         detailLabel.stringValue = "\(scene.nodes.count) layer\(scene.nodes.count == 1 ? "" : "s") · \(engine.indexOfSelectedItem == 1 ? "Experimental SDR preview" : "Standard preview")"
@@ -149,6 +156,36 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         clock.setPaused(stopped)
         renderer?.setPaused(stopped)
         pauseButton.title = paused ? "Resume" : "Pause"
+        performanceTimer?.invalidate()
+        performanceTimer = nil
+        presentationSample = PresentationRateSample()
+        updatePerformance()
+        if !stopped && renderer?.diagnostics.animated == true && renderer?.presentedFrameCount != nil {
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updatePerformance() }
+            timer.tolerance = 0.2
+            RunLoop.main.add(timer, forMode: .common)
+            performanceTimer = timer
+        }
+    }
+    private func updatePerformance() {
+        guard let renderer else { performanceLabel.stringValue = ""; return }
+        guard renderer.diagnostics.state == .running else {
+            performanceLabel.stringValue = "Paused · no continuous rendering"
+            return
+        }
+        guard renderer.diagnostics.animated else {
+            performanceLabel.stringValue = "Still image · redraws only when needed"
+            return
+        }
+        guard let count = renderer.presentedFrameCount else {
+            performanceLabel.stringValue = "Presentation rate unavailable for this renderer"
+            return
+        }
+        if let rate = presentationSample.sample(count: count, time: ProcessInfo.processInfo.systemUptime) {
+            performanceLabel.stringValue = String(format: "%.0f presented fps", rate)
+        } else {
+            performanceLabel.stringValue = "Measuring presentation rate…"
+        }
     }
     @objc private func togglePause() { paused.toggle(); updatePlayback() }
     @objc private func changeEngine() {
@@ -243,12 +280,15 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         cancelLoading()
         watcher = nil
         clock.setPaused(true)
+        performanceTimer?.invalidate()
+        performanceTimer = nil
         renderer?.releaseResources()
         renderer = nil
         onClose?()
     }
     func applicationVisibilityChanged() { updatePlayback() }
     deinit {
+        performanceTimer?.invalidate()
         observers.forEach { $0.0.removeObserver($0.1) }
         loadTask?.cancel()
         renderer?.releaseResources()

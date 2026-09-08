@@ -4,6 +4,17 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        let counter = PresentedFrameCounter()
+        counter.record(presentedTime: 0)
+        counter.record(presentedTime: .nan)
+        precondition(counter.total == 0)
+        counter.record(presentedTime: 1)
+        precondition(counter.total == 1)
+        var rateSample = PresentationRateSample()
+        precondition(rateSample.sample(count: 0, time: 10) == nil)
+        precondition(rateSample.sample(count: 160, time: 11) == 160)
+        precondition(rateSample.sample(count: 160, time: 12) == 0)
+        precondition(rateSample.sample(count: 0, time: 13) == nil)
         precondition(SceneFrameRate.matchDisplay.requested(maximum: 160) == 160)
         precondition(SceneFrameRate.matchDisplay.requested(maximum: 240) == 240)
         precondition(SceneFrameRate.fps160.requested(maximum: 60) == 60)
