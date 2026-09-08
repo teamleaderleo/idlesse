@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
 final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let canvas = NSView()
+    private let dragOverlay = SceneDragOverlay()
+    private let addMediaButton = NSButton(title: "+ Image / Video…", target: nil, action: nil)
+    private let addGradientButton = NSButton(title: "+ Gradient", target: nil, action: nil)
+    private let removeNodeButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let reorderButton = NSButton(title: "Bring Forward", target: nil, action: nil)
+    private var importedScopes: [URL] = []
     private let titleLabel = NSTextField(labelWithString: "Aurora")
     private let performanceLabel = NSTextField(labelWithString: "")
     private var performanceTimer: Timer?
@@ -45,7 +51,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         super.init()
         window.title = "Idlesse · Scene Preview"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 1040, height: 480)
+        window.minSize = NSSize(width: 1040, height: 640)
         window.delegate = self
         let workspace = NSWorkspace.shared.notificationCenter
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
@@ -103,6 +109,13 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         inspector.spacing = 10
         inspector.addArrangedSubview(NSTextField(labelWithString: "LAYERS"))
         inspector.addArrangedSubview(nodePicker)
+        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(addGradient)),
+                                  (reorderButton, #selector(reorderNode)), (removeNodeButton, #selector(removeNode))] {
+            button.target = self
+            button.action = action
+            inspector.addArrangedSubview(button)
+        }
+        dragOverlay.onMove = { [weak self] x, y in self?.moveNode(x: x, y: y) }
         for (index, label) in ["X", "Y", "Scale", "Rotation °", "Opacity"].enumerated() {
             let field = NSTextField(string: "")
             field.tag = index
@@ -120,7 +133,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         saveCopyButton.action = #selector(saveCopy)
         inspector.addArrangedSubview(saveCopyButton)
         inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
-        let hint = NSTextField(wrappingLabelWithString: "Press Return to preview. Save creates a new package with its media.")
+        let hint = NSTextField(wrappingLabelWithString: "Press Return to preview. Drag the outline to move; release to apply. Maximum two layers.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
@@ -181,6 +194,9 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         canvas.subviews.forEach { $0.removeFromSuperview() }
         next.view.autoresizingMask = [.width, .height]
         canvas.addSubview(next.view)
+        dragOverlay.frame = canvas.bounds
+        dragOverlay.autoresizingMask = [.width, .height]
+        canvas.addSubview(dragOverlay)
         cancelMeasurement()
         renderer = next
         presentationSample = PresentationRateSample()
@@ -198,11 +214,18 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         selectNode()
         applyButton.isEnabled = selectedURL != nil && !draft && !saving
         saveCopyButton.isEnabled = !saving
+        addMediaButton.isEnabled = !saving && scene.nodes.count < 2
+        addGradientButton.isEnabled = addMediaButton.isEnabled
+        removeNodeButton.isEnabled = !saving && scene.nodes.count > 1
+        reorderButton.isEnabled = !saving && scene.nodes.count > 1
+        dragOverlay.isEnabled = !saving
         window.isDocumentEdited = draft
     }
     @objc private func selectNode() {
         guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
         let node = scene.nodes[nodePicker.indexOfSelectedItem]
+        dragOverlay.transform = node.transform
+        reorderButton.title = nodePicker.indexOfSelectedItem == 0 ? "Bring Forward" : "Send Backward"
         let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
                       node.transform.rotation ?? 0, node.opacity]
         for (field, value) in zip(transformFields, values) { field.stringValue = String(format: "%.3f", value) }
@@ -216,25 +239,112 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
             selectNode()
             return
         }
-        let previous = scene
-        let previousRenderer = renderer
         var nodes = scene.nodes
         nodes[nodePicker.indexOfSelectedItem].transform = .init(x: values[0], y: values[1], scale: values[2], rotation: values[3])
         nodes[nodePicker.indexOfSelectedItem].opacity = values[4]
+        _ = applyEdit(nodes, selected: nodePicker.indexOfSelectedItem)
+    }
+    @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int) -> Bool {
+        guard !saving, (1...2).contains(nodes.count) else { return false }
+        let previous = scene
+        let previousRenderer = renderer
         scene = SceneDescriptor(title: scene.title, nodes: nodes)
         rebuild()
-        guard renderer !== previousRenderer else { scene = previous; selectNode(); return }
+        guard renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
         if savedScene == nil { savedScene = previous }
         cancelLoading()
         watcher = nil
         draft = true
         updateInspector()
+        let needed = Set(nodes.compactMap { $0.assetURL } + (savedScene?.nodes.compactMap { $0.assetURL } ?? []))
+        importedScopes.removeAll { url in
+            guard !needed.contains(url) else { return false }
+            url.stopAccessingSecurityScopedResource()
+            return true
+        }
+        nodePicker.selectItem(at: selected)
+        selectNode()
         detailLabel.stringValue = "Unsaved preview · Save a Copy to keep changes"
+        return true
+    }
+    private func moveNode(x: Double, y: Double) {
+        guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
+        var nodes = scene.nodes
+        let index = nodePicker.indexOfSelectedItem
+        let t = nodes[index].transform
+        nodes[index].transform = .init(x: x, y: y, scale: t.scale, rotation: t.rotation)
+        _ = applyEdit(nodes, selected: index)
+    }
+    @objc private func addGradient() {
+        guard scene.nodes.count < 2 else { return }
+        _ = applyEdit(scene.nodes + [SceneNode(content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))], selected: scene.nodes.count)
+    }
+    @objc private func removeNode() {
+        guard scene.nodes.count > 1 else { return }
+        var nodes = scene.nodes
+        nodes.remove(at: nodePicker.indexOfSelectedItem)
+        _ = applyEdit(nodes, selected: 0)
+    }
+    @objc private func reorderNode() {
+        guard scene.nodes.count == 2 else { return }
+        _ = applyEdit(Array(scene.nodes.reversed()), selected: 1 - nodePicker.indexOfSelectedItem)
+    }
+    @objc private func addMedia() {
+        guard !saving, scene.nodes.count < 2 else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie]
+        panel.prompt = "Add Layer"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.cancelLoading()
+            self.watcher = nil
+            self.saving = true
+            self.updateInspector()
+            self.detailLabel.stringValue = "Opening new layer…"
+            self.loadTask = Task { @MainActor [weak self] in
+                let accessed = url.startAccessingSecurityScopedResource()
+                var adopted = false
+                defer { if accessed && !adopted { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let loaded = try await LocalSceneSource().resolve(url)
+                    if loaded.kind == .video {
+                        let asset = AVURLAsset(url: url)
+                        let playable = try await asset.load(.isPlayable)
+                        let duration = try await asset.load(.duration)
+                        let tracks = try await asset.loadTracks(withMediaType: .video)
+                        guard playable, duration.seconds.isFinite, duration.seconds > 0, !tracks.isEmpty else {
+                            throw SceneError.invalid("That video could not be played.")
+                        }
+                    }
+                    try Task.checkCancellation()
+                    guard let self else { return }
+                    self.saving = false
+                    var node = loaded.nodes[0]
+                    node.transform = .init(x: 0, y: 0, scale: 0.6, rotation: 0)
+                    if self.applyEdit(self.scene.nodes + [node], selected: self.scene.nodes.count) {
+                        if accessed { self.importedScopes.append(url); adopted = true }
+                    }
+                    self.loadTask = nil
+                    self.updateInspector()
+                } catch {
+                    self?.saving = false
+                    self?.loadTask = nil
+                    self?.updateInspector()
+                    self?.detailLabel.stringValue = error.localizedDescription
+                    self?.watchPackage()
+                }
+            }
+        }
+    }
+    private func releaseImportedScopes() {
+        importedScopes.forEach { $0.stopAccessingSecurityScopedResource() }
+        importedScopes.removeAll()
     }
     @objc private func resetChanges() {
         guard !saving, let savedScene else { return }
         scene = savedScene
         self.savedScene = nil
+        releaseImportedScopes()
         draft = false
         rebuild()
         watchPackage()
@@ -374,6 +484,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         guard mayDiscard() else { return }
         draft = false
         savedScene = nil
+        releaseImportedScopes()
         cancelLoading()
         watcher = nil
         renderer?.releaseResources()
@@ -427,6 +538,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
                 self.scene = next
                 self.rebuild()
                 guard self.renderer !== previousRenderer else { self.scene = previous; return }
+                self.releaseImportedScopes()
                 self.scopedURL?.stopAccessingSecurityScopedResource()
                 self.scopedURL = accessed ? url : nil
                 adopted = true
@@ -469,10 +581,57 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     }
     func applicationVisibilityChanged() { updatePlayback() }
     deinit {
+        releaseImportedScopes()
         performanceTimer?.invalidate()
         observers.forEach { $0.0.removeObserver($0.1) }
         loadTask?.cancel()
         renderer?.releaseResources()
         scopedURL?.stopAccessingSecurityScopedResource()
+    }
+}
+
+
+/// Drag a lightweight outline; commit once on release, avoiding video/player rebuilds per mouse event.
+private final class SceneDragOverlay: NSView {
+    var transform: SceneNode.Transform = .identity { didSet { needsDisplay = true } }
+    var isEnabled = true
+    var onMove: ((Double, Double) -> Void)?
+    private var origin: NSPoint?
+    private var initial = SceneNode.Transform.identity
+    override func hitTest(_ point: NSPoint) -> NSView? { isEnabled ? super.hitTest(point) : nil }
+    override func draw(_ dirtyRect: NSRect) {
+        let scale = transform.scale ?? 1
+        let rectangle = NSRect(x: -bounds.width * scale / 2, y: -bounds.height * scale / 2,
+                               width: bounds.width * scale, height: bounds.height * scale).insetBy(dx: 2, dy: 2)
+        let path = NSBezierPath(rect: rectangle)
+        let matrix = AffineTransform(translationByX: bounds.width * (0.5 + (transform.x ?? 0)),
+                                     byY: bounds.height * (0.5 + (transform.y ?? 0)))
+        var rotated = matrix
+        rotated.rotate(byDegrees: transform.rotation ?? 0)
+        path.transform(using: rotated)
+        NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
+        path.lineWidth = 2
+        path.setLineDash([6, 4], count: 2, phase: 0)
+        path.stroke()
+    }
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        origin = convert(event.locationInWindow, from: nil)
+        initial = transform
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin, bounds.width > 0, bounds.height > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        transform = .init(x: min(2, max(-2, (initial.x ?? 0) + (point.x - origin.x) / bounds.width)),
+                          y: min(2, max(-2, (initial.y ?? 0) + (point.y - origin.y) / bounds.height)),
+                          scale: initial.scale, rotation: initial.rotation)
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard origin != nil else { return }
+        mouseDragged(with: event)
+        origin = nil
+        if (transform.x ?? 0) != (initial.x ?? 0) || (transform.y ?? 0) != (initial.y ?? 0) {
+            onMove?(transform.x ?? 0, transform.y ?? 0)
+        }
     }
 }
