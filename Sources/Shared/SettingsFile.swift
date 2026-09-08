@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct IdlesseStoredSettings: Codable, Equatable {
@@ -46,12 +47,18 @@ enum IdlesseSettingsFile {
     private static let supportPath = "Library/Application Support/Idlesse/settings.json"
     private static let legacySaverContainer = "Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data"
 
-    /// `legacyScreenSaver.appex` remaps its home directory to the Data directory of
-    /// this container. The companion app is unsandboxed, so it reaches that same file
-    /// through the user's real home directory. This avoids cfprefsd/defaults container
-    /// redirection between the app and the saver host.
+    /// A sandboxed companion app sees its own container as NSHomeDirectory(). Use
+    /// the account database to recover the real user home before addressing the
+    /// legacyScreenSaver container.
+    private static var realUserHomeDirectory: URL {
+        if let passwd = getpwuid(getuid()) {
+            return URL(fileURLWithPath: String(cString: passwd.pointee.pw_dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
     static var appURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        realUserHomeDirectory
             .appendingPathComponent(legacySaverContainer, isDirectory: true)
             .appendingPathComponent(supportPath)
     }
