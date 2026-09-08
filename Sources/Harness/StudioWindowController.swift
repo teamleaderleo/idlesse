@@ -96,6 +96,17 @@ extension StudioWindowController {
         precondition(editor.scene.parameters["amount"]?.value == 0.5 && editor.scene.bindings.count == 1)
         editor.editor.rename("Bound child")
         precondition(editor.scene.bindings.count == 1 && editor.scene.parameters["amount"]?.value == 0.5)
+        var keyed = editor.scene
+        let target = ScenePropertyAddress(nodeID: keyed.allNodes[1].id, property: .opacity)
+        keyed.bindings = [.init(target: target, keyframes: .init(keys: [.init(time: 0, value: 0), .init(time: 4, value: 1)]))]
+        precondition(editor.applyEdit(keyed.nodes, selected: 1, name: "Keyframes", controls: keyed))
+        let keyRenderer = editor.renderer
+        editor.timeline.onMoveKey?(target, 1, 3)
+        precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 3 && editor.renderer === keyRenderer)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 4 && editor.renderer === keyRenderer)
+        editor.document.undoManager.redo()
+        precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 3)
         editor.renderer?.releaseResources()
     }
 }
@@ -373,6 +384,19 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             self.paused = true; self.updatePlayback()
             do { try self.clock.seek(to: time); self.renderer?.refreshSceneTime(); self.updateTimeline() }
             catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+        timeline.onMoveKey = { [weak self] target, index, time in
+            guard let self, !self.saving, self.editor.selectedNode?.id == target.nodeID,
+                  self.editor.selectedNode?.locked == false else { return }
+            var next = self.scene
+            guard let bindingIndex = next.bindings.firstIndex(where: { $0.target == target }),
+                  let track = next.bindings[bindingIndex].keyframes else { return }
+            do {
+                let moved = try track.movingKey(at: index, to: time)
+                guard moved != track else { return }
+                next.bindings[bindingIndex].keyframes = moved
+                _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Move Keyframe", controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
         }
         timeline.onLoop = { [weak self] end in
             guard let self, self.renderer is MetalSceneRenderer else { return }

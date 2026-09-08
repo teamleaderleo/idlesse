@@ -371,6 +371,14 @@ import Foundation
         precondition(try! keyed.bindings[0].target.value(in: sampled.nodes) == 0.5)
         try Data(#"{"version":9,"title":"Old","capabilities":[]}"#.utf8).write(to: keyedPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(keyedPackage); fatalError("Accepted keyframes in v9") } catch is SceneError {}
+        let movedKey = try track.movingKey(at: 0, to: 2)
+        precondition(movedKey.keys[0].time == 2 && movedKey.keys[0].value == track.keys[0].value)
+        let blockedKey = try track.movingKey(at: 0, to: 10)
+        precondition(blockedKey.keys[0].time < track.keys[1].time)
+        _ = try blockedKey.sample(at: 2)
+        precondition(try! track.movingKey(at: 0, to: -10).keys[0].time == 0)
+        do { _ = try track.movingKey(at: 100, to: 2); fatalError("Accepted missing key") } catch is SceneError {}
+        do { _ = try track.movingKey(at: 0, to: .nan); fatalError("Accepted NaN key time") } catch is SceneError {}
         track.keys[1].time = 1
         do { _ = try track.sample(at: 2); fatalError("Accepted duplicate key time") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")

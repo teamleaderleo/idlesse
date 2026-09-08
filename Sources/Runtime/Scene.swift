@@ -102,11 +102,20 @@ struct SceneParameter: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey { case name, value = "default", min, max }
 }
 
-struct SceneKeyframeTrack: Codable, Sendable {
+struct SceneKeyframeTrack: Codable, Sendable, Equatable {
     enum Interpolation: String, Codable, Sendable { case hold, linear, easeInOut }
-    struct Key: Codable, Sendable { var time: Double; var value: Double }
+    struct Key: Codable, Sendable, Equatable { var time: Double; var value: Double }
     var interpolation: Interpolation = .linear
     var keys: [Key]
+    func movingKey(at index: Int, to time: Double) throws -> SceneKeyframeTrack {
+        _ = try sample(at: 0)
+        guard keys.indices.contains(index), time.isFinite else { throw SceneError.invalid("Choose an existing key and finite time.") }
+        let lower = index == 0 ? 0 : keys[index - 1].time.nextUp
+        let upper = index == keys.count - 1 ? 86400 : keys[index + 1].time.nextDown
+        var result = self
+        result.keys[index].time = min(upper, max(lower, time))
+        return result
+    }
     func sample(at time: Double, validating: Bool = true) throws -> Double {
         guard !keys.isEmpty, keys.count <= 128, time.isFinite else { throw SceneError.invalid("A track needs 1–128 keys and a finite sample time.") }
         if validating {
