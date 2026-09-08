@@ -189,6 +189,18 @@ enum WallpaperSmoke {
         gradient.releaseResources()
         precondition(gradient.diagnostics.activeResources == 0)
 
+        let sixteenImages = SceneDescriptor(title: "Sixteen", nodes: (0..<16).map { _ in SceneNode(content: .image(imageURL), opacity: 0.2) })
+        let manyStandard = try LayeredSceneRenderer(playable: sixteenImages,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        precondition(manyStandard.view.subviews.count == 16)
+        precondition(manyStandard.updateScene(SceneDescriptor(title: "Reordered", nodes: sixteenImages.nodes.reversed())))
+        manyStandard.releaseResources()
+        let manyMetal = try MetalSceneRenderer(playable: sixteenImages,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let manyPixels = try manyMetal.renderProbe()
+        precondition(Set(manyPixels).count > 1)
+        precondition(manyMetal.updateScene(SceneDescriptor(title: "Reordered", nodes: sixteenImages.nodes.reversed())))
+        manyMetal.releaseResources()
         // Exercise the experimental compositor through real GPU readback.
         let metalImage = try MetalSceneRenderer(playable: SceneDescriptor(title: "image", nodes: [
             SceneNode(content: .image(imageURL), opacity: 0.5,
@@ -229,6 +241,10 @@ enum WallpaperSmoke {
         precondition(standardLive.updateScene(SceneDescriptor(title: "edit", nodes: editedVideo)))
         precondition(standardLive.view.subviews[0].subviews[0] === originalVideoView)
         precondition(abs(originalVideoView.alphaValue - 0.4) < 0.001)
+        editedVideo[0].visible = false
+        precondition(standardLive.updateScene(SceneDescriptor(title: "hidden", nodes: editedVideo)))
+        precondition(originalVideoView.alphaValue == 0)
+        editedVideo[0].visible = true
         precondition(!standardLive.updateScene(SceneDescriptor(title: "replacement", nodes: [SceneNode(content: .gradient)])))
         standardLive.releaseResources()
         let metalVideo = try MetalSceneRenderer(playable: liveVideoScene,
@@ -252,6 +268,13 @@ enum WallpaperSmoke {
         let loopsBeforeEdit = metalVideo.diagnostics.loopCount
         precondition(metalVideo.updateScene(SceneDescriptor(title: "edit", nodes: editedVideo)))
         precondition(metalVideo.diagnostics.loopCount == loopsBeforeEdit)
+        editedVideo[0].visible = false
+        precondition(metalVideo.updateScene(SceneDescriptor(title: "hidden", nodes: editedVideo)))
+        let hiddenPixels = try metalVideo.renderProbe()
+        precondition(hiddenPixels.enumerated().allSatisfy { $0.offset % 4 == 3 ? $0.element == 255 : $0.element == 0 })
+        precondition(!metalVideo.diagnostics.animated)
+        editedVideo[0].visible = true
+        precondition(metalVideo.updateScene(SceneDescriptor(title: "shown", nodes: editedVideo)))
         wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount > loopsBeforeEdit }
         metalVideo.setPaused(true)
         precondition(metalVideo.diagnostics.state == .paused)

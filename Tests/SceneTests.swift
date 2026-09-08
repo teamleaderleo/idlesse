@@ -122,6 +122,21 @@ import Foundation
             fatalError("Exported invalid scene")
         } catch is SceneError {}
         precondition(!FileManager.default.fileExists(atPath: invalidExport.path))
+        var hidden = SceneNode(content: .gradient)
+        hidden.visible = false
+        hidden.locked = true
+        let hiddenPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: hiddenPackage) }
+        try ScenePackageWriter.write(SceneDescriptor(title: "Hidden", nodes: [hidden]), to: hiddenPackage)
+        let hiddenLoaded = try await source.resolve(hiddenPackage)
+        precondition(!hiddenLoaded.nodes[0].visible && hiddenLoaded.nodes[0].locked)
+        let sixteen = (0..<16).map { _ in SceneNode(content: .image(root.appendingPathComponent("picture.png"))) }
+        try SceneBudget.validate(sixteen)
+        precondition(SceneBudget.imagePixels(sixteen) == 2_000_000)
+        for invalid in [sixteen + [hidden], (0..<3).map { _ in SceneNode(content: .video(root.appendingPathComponent("video.mp4"))) },
+                        (0..<5).map { _ in SceneNode(content: .gradient) }] {
+            do { try SceneBudget.validate(invalid); fatalError("Accepted over-budget scene") } catch is SceneError {}
+        }
         let firstNode = SceneNode(content: .gradient)
         let secondNode = SceneNode(content: .gradient)
         precondition(sceneResourceOrder(from: [firstNode, secondNode], to: [secondNode, firstNode]) == [1, 0])

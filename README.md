@@ -166,7 +166,7 @@ from the running desktop. See [Studio controls and saving](docs/scene-preview.md
 The desktop host now resolves `.idlesse` scene packages asynchronously and plays
 them through separate image and video renderers. See [scene format and current
 limits](docs/scenes.md). The screensaver now resolves its images through the shared async source and
-background image preparation. Desktop packages support two layers with opacity.
+background image preparation. Desktop packages support up to 16 layers (two videos, four gradients), with transforms, opacity, visibility and canvas locking.
 
 Scene format v2 adds typed nodes, positioning, rotation, scale and a built-in
 animated Metal gradient. Open packages hot-reload on save, preserving the last

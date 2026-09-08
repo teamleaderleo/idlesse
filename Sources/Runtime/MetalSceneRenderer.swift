@@ -88,11 +88,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess else {
             throw SceneError.invalid("Could not create the video texture cache.")
         }
+        try SceneBudget.validate(playable.nodes)
         for node in playable.nodes {
             let input = Input(node)
             switch node.content {
             case .image(let url):
-                guard let image = DisplayImageDecoder.load(url, target: metal.drawableSize, mode: .fill),
+                guard let image = DisplayImageDecoder.load(url, target: metal.drawableSize, mode: .fill, pixelLimit: CGFloat(SceneBudget.imagePixels(playable.nodes))),
                       let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                     throw SceneError.invalid("That image could not be opened.")
                 }
@@ -134,7 +135,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             }
             inputs.append(input)
         }
-        diagnostics.animated = playable.animated
+        diagnostics.animated = playable.nodes.contains { $0.visible && $0.kind != .image }
         diagnostics.activeResources = inputs.count
         metal.delegate = self
     }
@@ -146,7 +147,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     @discardableResult private func updateVideos() -> Bool {
         guard let cache else { return false }
         var changed = false
-        for input in inputs {
+        for input in inputs where input.node.visible {
             guard let player = input.player,
                   let output = player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first
             else { continue }
@@ -168,7 +169,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
         guard let pipeline, let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(pipeline)
-        for input in inputs {
+        for input in inputs where input.node.visible {
             let gradient = input.node.kind == .gradient
             guard gradient || input.texture != nil else { continue }
             let aspect = Float(size.width / max(1, size.height))
@@ -197,7 +198,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.nodes) else { return false }
         inputs = order.map { inputs[$0] }
         for (input, node) in zip(inputs, scene.nodes) { input.node = node }
-        needsFrame = true
+        diagnostics.animated = scene.nodes.contains { $0.visible && $0.kind != .image }
+        setPaused(diagnostics.state != .running)
         metal.draw()
         return true
     }
@@ -205,7 +207,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
         let changed = updateVideos()
         needsFrame = needsFrame || changed
-        guard needsFrame || inputs.contains(where: { $0.node.kind == .gradient }) else {
+        guard needsFrame || inputs.contains(where: { $0.node.visible && $0.node.kind == .gradient }) else {
             gate.signal(); return
         }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
@@ -263,7 +265,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         diagnostics.state = paused ? .paused : .running
         needsFrame = true
         inputs.forEach { input in
-            if paused { input.player?.pause() } else { input.player?.play() }
+            if paused || !input.node.visible { input.player?.pause() } else { input.player?.play() }
         }
         metal.isPaused = paused || !diagnostics.animated
         if !diagnostics.animated { metal.draw() }

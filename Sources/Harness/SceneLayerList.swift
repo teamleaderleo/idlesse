@@ -4,6 +4,9 @@ import AppKit
 final class SceneLayerList: NSScrollView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = LayerTableView()
     private var names: [String] = []
+    private var nodes: [SceneNode] = []
+    var onVisibility: ((Int) -> Void)?
+    var onLock: ((Int) -> Void)?
     weak var target: AnyObject?
     var action: Selector?
     var onReorder: ((Int, Int) -> Void)?
@@ -38,16 +41,37 @@ final class SceneLayerList: NSScrollView, NSTableViewDataSource, NSTableViewDele
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func removeAllItems() { names.removeAll(); table.reloadData() }
-    func addItems(withTitles titles: [String]) { names = titles; table.reloadData() }
+    func setNodes(_ nodes: [SceneNode]) {
+        self.nodes = nodes
+        names = nodes.map { $0.displayName }
+        table.reloadData()
+        needsLayout = true
+    }
+    @objc private func visibility(_ sender: NSButton) { onVisibility?(sender.tag) }
+    @objc private func lock(_ sender: NSButton) { onLock?(sender.tag) }
     func selectItem(at index: Int) {
         guard names.indices.contains(index) else { return }
         table.selectRowIndexes(IndexSet(integer: names.count - 1 - index), byExtendingSelection: false)
     }
     func numberOfRows(in tableView: NSTableView) -> Int { names.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let field = NSTextField(labelWithString: names[names.count - 1 - row])
+        let index = names.count - 1 - row
+        let node = nodes[index]
+        let icon = NSImageView(image: NSImage(systemSymbolName: node.kind == .image ? "photo" : node.kind == .video ? "film" : "sparkles", accessibilityDescription: node.kind.rawValue)!)
+        let field = NSTextField(labelWithString: node.displayName)
         field.lineBreakMode = .byTruncatingMiddle
-        return field
+        field.toolTip = node.displayName
+        field.textColor = node.visible ? .labelColor : .secondaryLabelColor
+        let eye = NSButton(image: NSImage(systemSymbolName: node.visible ? "eye" : "eye.slash", accessibilityDescription: node.visible ? "Hide layer" : "Show layer")!, target: self, action: #selector(visibility))
+        let lock = NSButton(image: NSImage(systemSymbolName: node.locked ? "lock.fill" : "lock.open", accessibilityDescription: node.locked ? "Unlock layer" : "Lock layer")!, target: self, action: #selector(lock))
+        for button in [eye, lock] { button.tag = index; button.isBordered = false; button.widthAnchor.constraint(equalToConstant: 22).isActive = true }
+        eye.toolTip = node.visible ? "Hide layer" : "Show layer"
+        lock.toolTip = node.locked ? "Unlock canvas editing" : "Lock canvas editing"
+        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        let stack = NSStackView(views: [icon, field, eye, lock])
+        stack.spacing = 4
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return stack
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         if indexOfSelectedItem >= 0, let action { NSApp.sendAction(action, to: target, from: self) }
@@ -68,6 +92,7 @@ private final class LayerTableView: NSTableView {
     }
     override func mouseDragged(with event: NSEvent) {
         guard sourceRow != nil else { return }
+        autoscroll(with: event)
         let p = convert(event.locationInWindow, from: nil)
         let row = row(at: p)
         insertionRow = row < 0 ? (p.y < 0 ? 0 : numberOfRows) : row + (p.y > rect(ofRow: row).midY ? 1 : 0)
