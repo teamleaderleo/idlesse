@@ -144,17 +144,26 @@ final class IdlessePreferences {
 
     /// Re-read the shared file. The companion app and the sandboxed saver point at
     /// the same underlying file through two different paths.
-    func reloadFromDisk() {
-        if let stored = IdlesseSettingsFile.read() {
-            settings = stored
-        }
+    @discardableResult
+    func reloadFromDisk() -> Bool {
+        guard let stored = IdlesseSettingsFile.read() else { return false }
+        let changed = stored != settings
+        settings = stored
+        return changed
     }
 
+    /// Save a document-scoped security bookmark. Its owner document is the shared
+    /// Idlesse settings file, which both Idlesse.app and legacyScreenSaver can read.
+    /// That makes the folder grant transferable to the sandboxed saver instead of
+    /// tying it to the companion app's signing identity.
     func saveFolder(_ url: URL) throws {
+        // A document-scoped bookmark needs an existing owner document.
+        try IdlesseSettingsFile.write(settings)
+
         let bookmark = try url.bookmarkData(
             options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
             includingResourceValuesForKeys: nil,
-            relativeTo: nil
+            relativeTo: IdlesseSettingsFile.runtimeURL
         )
 
         settings.folderBookmark = bookmark
@@ -167,19 +176,38 @@ final class IdlessePreferences {
         }
 
         var isStale = false
-        let url = try URL(
+
+        // Current format: document-scoped bookmark owned by settings.json.
+        if let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope, .withoutUI],
+            relativeTo: IdlesseSettingsFile.runtimeURL,
+            bookmarkDataIsStale: &isStale
+        ) {
+            if isStale, !IdlesseSettingsFile.isSaverProcess {
+                try? saveFolder(url)
+                try? save()
+            }
+            return url
+        }
+
+        // Compatibility with bookmarks written by early prototypes. These were
+        // app-scoped and may still resolve inside Idlesse.app, allowing the user to
+        // keep previewing until they reselect the folder and create a transferable one.
+        isStale = false
+        let legacyURL = try URL(
             resolvingBookmarkData: bookmark,
             options: [.withSecurityScope, .withoutUI],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
 
-        if isStale {
-            try? saveFolder(url)
+        if !IdlesseSettingsFile.isSaverProcess {
+            try? saveFolder(legacyURL)
             try? save()
         }
 
-        return url
+        return legacyURL
     }
 
     func save() throws {
