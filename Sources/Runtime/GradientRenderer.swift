@@ -5,6 +5,7 @@ import MetalKit
 final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
+    var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
     let view: NSView
     private let metal: MTKView
     private var queue: MTLCommandQueue?
@@ -61,8 +62,10 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         guard encode(command: command, pass: pass, pipeline: pipeline) else { inFlight.signal(); return }
         let gate = inFlight
+        let gpuMetrics = presentations
         command.addCompletedHandler { [weak self] buffer in
             gate.signal()
+            if buffer.status == .completed { gpuMetrics.recordGPU(start: buffer.gpuStartTime, end: buffer.gpuEndTime) }
             if buffer.status == .error {
                 DispatchQueue.main.async { [weak self] in self?.onError("The Metal scene could not render a frame.") }
             }
