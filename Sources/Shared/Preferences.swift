@@ -206,10 +206,8 @@ final class IdlessePreferences {
         return url
     }
 
-    @discardableResult
-    func reloadFromDisk() -> Bool {
+    func reloadFromDisk() {
         defaults.synchronize()
-        return true
     }
 
     /// Hand the current ScreenSaverDefaults buffer to cfprefsd, then wake any
