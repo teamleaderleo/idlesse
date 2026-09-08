@@ -146,7 +146,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         panel.title = "Choose your wallpaper"
         panel.message = "One image or muted looping video, on every display. Stop any time from the Idlesse menu."
         panel.prompt = "Use Wallpaper"
-        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie, UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
+        panel.allowedContentTypes = [.directory, .jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie, UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
         panel.treatsFilePackagesAsDirectories = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false

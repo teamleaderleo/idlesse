@@ -259,15 +259,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             inspector.addArrangedSubview(button)
         }
         dragOverlay.onSelect = { [weak self] index in
-            guard let self, self.scene.nodes.indices.contains(index),
-                  let selection = self.scene.allNodes.firstIndex(where: { $0.id == self.scene.nodes[index].id }) else { return }
-            self.nodePicker.selectItem(at: selection); self.selectNode()
+            guard let self, self.scene.allNodes.indices.contains(index) else { return }
+            self.nodePicker.selectItem(at: index); self.selectNode()
         }
         dragOverlay.onPreviewTransform = { [weak self] transform in
             guard let self, !self.saving else { return }
             var nodes = self.scene.nodes
-            guard let id = self.editor.selectedNode?.id, let index = nodes.firstIndex(where: { $0.id == id }) else { return }
-            nodes[index].transform = transform
+            guard let id = self.editor.selectedNode?.id else { return }
+            _ = SceneTree.edit(id, in: &nodes) { siblings, index in siblings[index].transform = transform }
             _ = self.renderer?.updateScene(SceneDescriptor(title: self.scene.title, nodes: nodes))
         }
         dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
@@ -419,7 +418,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         addGradientButton.isEnabled = addMediaButton.isEnabled
         removeNodeButton.isEnabled = !saving && editor.siblings.count > 1
         reorderButton.isEnabled = !saving && editor.siblings.count > 1
-        dragOverlay.isEnabled = !saving && scene.nodes.contains { $0.id == editor.selectedNode?.id }
+        dragOverlay.isEnabled = !saving
         undoButton.isEnabled = !saving && !undoEdits.isEmpty
         redoButton.isEnabled = !saving && !redoEdits.isEmpty
         window.isDocumentEdited = draft
@@ -435,10 +434,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         removeNodeButton.isEnabled = !saving && siblings.count > 1
         reorderButton.isEnabled = !saving && siblings.count > 1
         nameField.stringValue = node.displayName
-        dragOverlay.nodes = scene.nodes
-        let rootIndex = scene.nodes.firstIndex { $0.id == node.id }
-        dragOverlay.isEnabled = !saving && rootIndex != nil
-        dragOverlay.selected = rootIndex ?? -1
+        dragOverlay.roots = scene.nodes
+        dragOverlay.isEnabled = !saving
+        dragOverlay.selected = editor.selection
         dragOverlay.transform = node.transform
         reorderButton.title = offset == 0 ? "Bring Forward" : "Send Backward"
         let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
@@ -762,7 +760,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let panel = NSOpenPanel()
         panel.title = "Open in Studio"
         panel.prompt = "Open"
-        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
+        panel.allowedContentTypes = [.directory, .jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
             UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
         panel.treatsFilePackagesAsDirectories = false
         panel.canChooseDirectories = true
