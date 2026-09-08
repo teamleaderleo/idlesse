@@ -5,7 +5,22 @@ struct SceneTimeline: Codable, Sendable, Equatable {
     var duration: Double
     var mode: Mode
     var rate: Double = 1
+    var videosFollowScene: Bool = false
+    enum CodingKeys: String, CodingKey { case duration, mode, rate, videosFollowScene }
+    init(duration: Double, mode: Mode, rate: Double = 1, videosFollowScene: Bool = false) {
+        self.duration = duration; self.mode = mode; self.rate = rate; self.videosFollowScene = videosFollowScene
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        duration = try values.decode(Double.self, forKey: .duration)
+        mode = try values.decode(Mode.self, forKey: .mode)
+        rate = try values.decodeIfPresent(Double.self, forKey: .rate) ?? 1
+        videosFollowScene = try values.decodeIfPresent(Bool.self, forKey: .videosFollowScene) ?? false
+    }
     func validate() throws {
+        guard !videosFollowScene || mode != .pingPong else {
+            throw SceneError.invalid("Video transport supports Once and Loop. Disable video following to use Ping-pong.")
+        }
         guard duration.isFinite, (0.01...86400).contains(duration),
               rate.isFinite, (0.1...4).contains(rate) else {
             throw SceneError.invalid("Use a duration of 0.01–86400 seconds and speed of 0.1–4.")
@@ -345,7 +360,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...12).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...13).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -393,6 +408,7 @@ struct LocalSceneSource: SceneSource {
         }
         let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline)
         guard scene.timeline == nil || manifest.version >= 11 else { throw SceneError.invalid("Authored playback requires scene version 11.") }
+        guard result.timeline?.videosFollowScene != true || manifest.version >= 13 else { throw SceneError.invalid("Video transport requires scene version 13.") }
         guard !result.usesSmoothing || manifest.version >= 12 else { throw SceneError.invalid("Smoothing requires scene version 12.") }
         guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
@@ -547,7 +563,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

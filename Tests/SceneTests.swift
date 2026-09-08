@@ -420,6 +420,15 @@ import Foundation
         do { _ = try keyed.evaluated(); fatalError("Accepted invalid smoothing") } catch is SceneError {}
         try Data(#"{"version":11,"title":"Old","capabilities":[]}"#.utf8).write(to: smoothPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(smoothPackage); fatalError("Accepted smoothing in v11") } catch is SceneError {}
+        var followScene = timedLoaded
+        followScene.timeline = .init(duration: 2, mode: .loop, videosFollowScene: true)
+        let followPackage = root.appendingPathComponent("Following.idlesse")
+        try ScenePackageWriter.write(followScene, to: followPackage)
+        let followLoaded = try await source.resolve(followPackage)
+        precondition(followLoaded.timeline?.videosFollowScene == true)
+        try Data(#"{"version":12,"title":"Old","capabilities":[]}"#.utf8).write(to: followPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(followPackage); fatalError("Accepted video transport in v12") } catch is SceneError {}
+        do { try SceneTimeline(duration: 2, mode: .pingPong, videosFollowScene: true).validate(); fatalError("Accepted reverse video transport") } catch is SceneError {}
         let movedKey = try track.movingKey(at: 0, to: 2)
         precondition(movedKey.keys[0].time == 2 && movedKey.keys[0].value == track.keys[0].value)
         let blockedKey = try track.movingKey(at: 0, to: 10)

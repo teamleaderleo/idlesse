@@ -21,7 +21,7 @@ final class SceneTimelineView: NSStackView {
         slider.isContinuous = true
         slider.target = self; slider.action = #selector(scrub)
         slider.setAccessibilityLabel("Scene playhead in seconds")
-        slider.toolTip = "Scrub scene motion; pauses playback. Videos keep independent time."
+        slider.toolTip = "Scrub motion and opted-in videos; pauses playback."
         loop.target = self; loop.action = #selector(loopRange)
         let row = NSStackView(views: [label, slider, loop])
         row.spacing = 12
