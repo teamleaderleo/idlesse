@@ -39,7 +39,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var transform: SIMD4<Float> // normalized x/y, scale, rotation radians
         var media: SIMD4<Float> // crop x/y, opacity, gradient flag
         var viewport: SIMD4<Float> // width/height aspect, time, reserved
-        var style: SIMD4<Float> // ellipse mask, exposure, saturation, reserved
+        var style: SIMD4<Float> // ellipse mask, exposure, saturation, vignette
     }
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
@@ -213,7 +213,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 var u = Uniforms(transform: SIMD4(Float(t.x ?? 0), Float(t.y ?? 0), Float(t.scale ?? 1), Float((t.rotation ?? 0) * .pi / 180)),
                     media: SIMD4(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
                     viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0),
-                    style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), 0))
+                    style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), Float(node.style.vignette)))
                 encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
@@ -364,10 +364,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return {float4(q, 0, 1), float2((p.x+1)*0.5, (1-p.y)*0.5)};
     }
     float4 styled(float4 pixel, float2 uv, constant U &u) {
-        if (u.style.x == 0.0 && u.style.y == 0.0 && u.style.z == 1.0) return pixel * u.media.z;
+        if (u.style.x == 0.0 && u.style.y == 0.0 && u.style.z == 1.0 && u.style.w == 0.0) return pixel * u.media.z;
         float3 color = pixel.rgb / max(pixel.a, 0.00001);
         float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
         color = clamp(mix(float3(luma), color, u.style.z) * exp2(u.style.y), 0.0, 1.0);
+        float2 radial = uv * 2.0 - 1.0;
+        color *= 1.0 - u.style.w * smoothstep(0.15, 1.5, dot(radial, radial));
         float coverage = 1.0;
         if (u.style.x > 0.5) {
             float distance = length(uv * 2.0 - 1.0);

@@ -502,7 +502,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving, var node = editor.selectedNode else { return }
         let dialog = NSAlert()
         dialog.messageText = "Appearance — " + node.displayName
-        dialog.informativeText = "Mask and color effects use Metal. Exposure: −2…2 stops. Saturation: 0…2 (1 is original)."
+        dialog.informativeText = "Mask and color effects use Metal. Exposure: −2…2 stops. Saturation: 0…2 (1 is original). Vignette darkens the edges; 0 turns it off."
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
         let mask = NSPopUpButton(frame: .zero, pullsDown: false)
         mask.addItems(withTitles: ["No Mask", "Ellipse Mask"])
@@ -511,12 +511,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         exposure.setAccessibilityLabel("Exposure")
         let saturation = NSTextField(string: String(node.style.saturation))
         saturation.setAccessibilityLabel("Saturation")
+        let vignette = NSSlider(value: node.style.vignette, minValue: 0, maxValue: 1, target: nil, action: nil)
+        vignette.setAccessibilityLabel("Vignette strength")
         let fields = NSStackView(views: [mask, NSTextField(labelWithString: "Exposure"), exposure,
-                                        NSTextField(labelWithString: "Saturation"), saturation])
+                                        NSTextField(labelWithString: "Saturation"), saturation,
+                                        NSTextField(labelWithString: "Vignette"), vignette])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 150)
+        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 200)
         exposure.widthAnchor.constraint(equalToConstant: 260).isActive = true
         saturation.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        vignette.widthAnchor.constraint(equalToConstant: 260).isActive = true
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
@@ -527,7 +531,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                   ev.isFinite, (-2...2).contains(ev), sat.isFinite, (0...2).contains(sat) else {
                 self.detailLabel.stringValue = "Use exposure −2…2 and saturation 0…2."; return
             }
-            node.style = .init(mask: mask.indexOfSelectedItem == 1 ? .ellipse : nil, exposure: ev, saturation: sat)
+            node.style = .init(mask: mask.indexOfSelectedItem == 1 ? .ellipse : nil, exposure: ev, saturation: sat, vignette: vignette.doubleValue)
             self.editor.replaceSelected(node, name: "Change Appearance")
         }
     }

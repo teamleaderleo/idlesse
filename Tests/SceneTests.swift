@@ -183,7 +183,7 @@ import Foundation
         precondition(SceneBudget.groupTargetSize(width: .infinity, height: 1, count: 1) == nil)
         try Data(#"{"version":2,"title":"Old format","capabilities":[]}"#.utf8).write(to: groupedPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(groupedPackage); fatalError("Accepted groups in v2") } catch is SceneError {}
-        var styledNode = SceneNode(style: .init(mask: .ellipse, exposure: -1, saturation: 0), content: .gradient)
+        var styledNode = SceneNode(style: .init(mask: .ellipse, exposure: -1, saturation: 0, vignette: 0.7), content: .gradient)
         let styledScene = SceneDescriptor(title: "Styled", nodes: [styledNode])
         precondition(styledScene.requiresMetal)
         let styledPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
@@ -191,6 +191,13 @@ import Foundation
         try ScenePackageWriter.write(styledScene, to: styledPackage)
         let styledLoaded = try await source.resolve(styledPackage)
         precondition(styledLoaded.nodes[0].style == styledNode.style)
+        try Data(#"{"version":4,"title":"Old","capabilities":[]}"#.utf8).write(to: styledPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(styledPackage); fatalError("Accepted vignette in v4") } catch is SceneError {}
+        var invalidVignette = styledNode
+        for value in [-0.1, 1.1, Double.infinity, Double.nan] {
+            invalidVignette.style.vignette = value
+            do { try SceneBudget.validate([invalidVignette]); fatalError("Accepted invalid vignette") } catch is SceneError {}
+        }
         try Data(#"{"version":3,"title":"Old","capabilities":[]}"#.utf8).write(to: styledPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(styledPackage); fatalError("Accepted style in v3") } catch is SceneError {}
         styledNode.style.exposure = .infinity

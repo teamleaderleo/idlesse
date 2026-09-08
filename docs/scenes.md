@@ -104,7 +104,14 @@ continue to load. Older builds reject v3 explicitly.
 `Examples/GroupedAurora.idlesse` demonstrates two animated children with no media download.
 
 
-## Appearance (version 4)
+## Appearance (versions 4–5)
+
+Version 5 adds optional `style.vignette`: a finite strength from 0 to 1, default 0.
+It darkens RGB radially in the node's local canvas, leaving alpha and the center
+unchanged. On a group it affects the composed subtree once. It shares the existing
+Metal shading pass and allocates no additional textures. Nonzero vignette requires
+v5; the writer retains earlier versions when this effect is unused. See
+`Examples/VignetteAurora.idlesse` for a minimal editable sample.
 
 V4 adds optional `style` to any node, including a group:
 
@@ -115,7 +122,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-saving writes v4 only when a non-neutral style exists.
+saving writes v4 for non-neutral mask/color styles, or v5 when vignette is nonzero.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR

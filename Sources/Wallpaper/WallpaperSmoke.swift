@@ -245,6 +245,17 @@ enum WallpaperSmoke {
         precondition(abs(Int(styledPixels[groupCenter]) - Int(styledPixels[groupCenter + 1])) <= 1 &&
                      abs(Int(styledPixels[groupCenter]) - Int(styledPixels[groupCenter + 2])) <= 1, "Zero saturation should produce gray")
         precondition(groupedMetal.intermediateTextureBytes <= retainedGroupBytes * 2, "Color and mask use only the existing two-frame group target allowance")
+        groupNode.style = .plain
+        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Plain", nodes: [groupNode])))
+        let plainVignettePixels = try groupedMetal.renderProbe()
+        groupNode.style.vignette = 1
+        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Vignette", nodes: [groupNode])))
+        let vignettePixels = try groupedMetal.renderProbe()
+        precondition(abs(Int(vignettePixels[groupCenter]) - Int(plainVignettePixels[groupCenter])) <= 1,
+                     "Vignette must leave the center unchanged")
+        precondition(vignettePixels[0] < plainVignettePixels[0] / 4, "Vignette must darken corners")
+        precondition(groupedMetal.intermediateTextureBytes <= retainedGroupBytes * 2,
+                     "Vignette must not allocate additional group targets")
         groupedMetal.releaseResources()
         precondition(groupedMetal.intermediateTextureBytes == 0)
         let nestedGroup = SceneNode(content: .group([SceneNode(content: .group([

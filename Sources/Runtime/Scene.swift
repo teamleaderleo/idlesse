@@ -32,16 +32,18 @@ struct SceneNode: Sendable {
         var mask: Mask? = nil
         var exposure: Double = 0
         var saturation: Double = 1
+        var vignette: Double = 0
         static let plain = Style()
-        init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1) {
-            self.mask = mask; self.exposure = exposure; self.saturation = saturation
+        init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1, vignette: Double = 0) {
+            self.mask = mask; self.exposure = exposure; self.saturation = saturation; self.vignette = vignette
         }
-        enum CodingKeys: String, CodingKey { case mask, exposure, saturation }
+        enum CodingKeys: String, CodingKey { case mask, exposure, saturation, vignette }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             mask = try values.decodeIfPresent(Mask.self, forKey: .mask)
             exposure = try values.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
             saturation = try values.decodeIfPresent(Double.self, forKey: .saturation) ?? 1
+            vignette = try values.decodeIfPresent(Double.self, forKey: .vignette) ?? 0
         }
     }
     var style: Style = .plain
@@ -148,7 +150,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...4).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...5).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -185,6 +187,7 @@ struct LocalSceneSource: SceneSource {
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
+            guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             return SceneNode(style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
@@ -269,7 +272,7 @@ enum ScenePackageWriter {
             return json
         }
         let nodes = try scene.nodes.map(encode)
-        for (name, json) in [("manifest.json", ["version": scene.requiresMetal ? 4 : scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.style.vignette != 0 } ? 5 : scene.requiresMetal ? 4 : scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
                              ("scene.json", ["nodes": nodes])] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -337,8 +340,9 @@ enum SceneBudget {
             var result: [SceneNode] = []
             for node in nodes {
                 guard node.style.exposure.isFinite, (-2...2).contains(node.style.exposure),
-                      node.style.saturation.isFinite, (0...2).contains(node.style.saturation) else {
-                    throw SceneError.invalid("Use exposure −2…2 and saturation 0…2.")
+                      node.style.saturation.isFinite, (0...2).contains(node.style.saturation),
+                      node.style.vignette.isFinite, (0...1).contains(node.style.vignette) else {
+                    throw SceneError.invalid("Use exposure −2…2, saturation 0…2 and vignette 0…1.")
                 }
                 result.append(node)
                 if node.kind == .group {

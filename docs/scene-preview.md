@@ -39,8 +39,11 @@ or transformed groups must be reset first: silently distributing group opacity o
 removing a clipping canvas could change the image. There is no cross-group drag
 reparenting yet.
 
-**Appearance…** adds an ellipse mask, exposure (−2…2 stops), and saturation (0…2).
-These edits are undoable and saved in v4. A styled scene automatically uses Metal
+**Appearance…** adds an ellipse mask, exposure (−2…2 stops), saturation (0…2),
+and a vignette strength slider (0…1). Apply commits one undoable live renderer edit.
+Vignette darkens the edges without changing alpha or the center, and costs no extra
+render pass or texture. Vignette scenes save as v5; other appearance edits use v4.
+A styled scene automatically uses Metal
 in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the
 Standard fallback. There is no timeline or arbitrary effect graph yet.
