@@ -33,8 +33,14 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showOptions() {
-        guard let sheet = saverView?.configureSheet, sheet.sheetParent == nil else { return }
-        window.beginSheet(sheet)
+        guard let optionsWindow = saverView?.configureSheet else { return }
+
+        // The real screen saver host presents configureSheet itself. In the standalone
+        // preview app, opening that same window directly is much more reliable than
+        // trying to emulate the host's sheet presentation behavior.
+        optionsWindow.center()
+        optionsWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func installMenu() {
