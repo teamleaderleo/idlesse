@@ -19,7 +19,13 @@ Names, X/Y, scale, rotation and opacity are editable in the inspector; Return co
 
 Use +/− or a trackpad pinch to zoom; scroll to pan. Fit restores the whole canvas.
 Canvas manipulation previews an outline and commits once on release. Committed edits
-preserve playback for transforms, opacity, names and ordering, including undo/redo. Canvas gestures preview these changes live and commit one undo action. Adding, removing or replacing content still rebuilds playback. There are no timeline, group, mask or effect controls.
+preserve playback for transforms, opacity, names and ordering, including undo/redo. Canvas gestures preview these changes live and commit one undo action. Adding, removing or replacing content still rebuilds playback. Select a layer and choose **Group with Next Layer** to combine it with the layer
+above it in drawing order. A group can be named, moved, scaled, rotated, faded,
+hidden, locked, duplicated and saved. Group property edits preserve child playback;
+creating a group currently rebuilds playback. Undo restores the separate layers.
+The list currently treats a group as one row; expanding and editing individual
+children and explicit ungrouping are not yet supported. There are no timeline,
+mask or effect controls.
 
 ## Documents and saving
 
@@ -132,3 +138,11 @@ the maximum decode size per layer. Hidden layers count toward every limit.
 This bounds retained image pixels, not total process memory: video decoders, drawables,
 temporary uploads, the old renderer during replacement, and additional displays cost extra.
 No intermediate effect textures are allocated yet.
+
+
+Group validation counts all descendants toward the 16-node limit. Four group
+containers and two nesting levels are supported. See [v3 group semantics and
+texture limits](scenes.md#groups-version-3). Native checks cover creating a group,
+changing opacity, switching Standard/Metal, nudging and undo. Automated GPU checks
+verify isolated/nested opacity, transform and visibility; allocation tests verify
+in-flight exclusivity and bounded resizing; video tests verify live group edits.

@@ -47,6 +47,17 @@ extension StudioWindowController {
         precondition(editor.restoreSavedScene())
         precondition(!editor.draft && editor.savedScene == nil && editor.undoEdits.isEmpty)
         precondition(editor.scene.nodes.count == 1 && editor.renderer !== running)
+        precondition(editor.applyEdit([SceneNode(content: .gradient), SceneNode(content: .gradient)], selected: 0))
+        editor.editor.groupWithNext()
+        precondition(editor.scene.nodes.count == 1 && editor.scene.nodes[0].children.count == 2)
+        let groupedRenderer = editor.renderer
+        editor.editor.nudge(x: 0.1, y: 0)
+        precondition(editor.renderer === groupedRenderer && editor.scene.nodes[0].transform.x == 0.1)
+        editor.document.undoManager.undo()
+        editor.document.undoManager.undo()
+        precondition(editor.scene.nodes.count == 2)
+        editor.document.undoManager.redo()
+        precondition(editor.scene.nodes.count == 1 && editor.scene.nodes[0].children.count == 2)
         editor.renderer?.releaseResources()
     }
 }
@@ -66,6 +77,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private weak var editingClient: NSTextField?
     private lazy var editor = SceneEditorController(document: document)
     private let nameField = NSTextField(string: "")
+    private let groupButton = NSButton(title: "Group with Next Layer", target: nil, action: nil)
     private let duplicateButton = NSButton(title: "Duplicate Layer", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private typealias EditSnapshot = SceneDocument.Snapshot
@@ -245,6 +257,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         duplicateButton.target = self
         duplicateButton.action = #selector(duplicateNode)
         inspector.addArrangedSubview(duplicateButton)
+        groupButton.target = self
+        groupButton.action = #selector(groupNodes)
+        groupButton.toolTip = "Combine this layer and the next layer in drawing order. Undo restores the individual layers."
+        inspector.addArrangedSubview(groupButton)
         for (index, label) in ["X", "Y", "Scale", "Rotation °", "Opacity"].enumerated() {
             let field = NSTextField(string: "")
             field.tag = index
@@ -382,6 +398,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func selectNode() {
         guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
         let node = scene.nodes[nodePicker.indexOfSelectedItem]
+        groupButton.isEnabled = !saving && nodePicker.indexOfSelectedItem + 1 < scene.nodes.count && scene.allNodes.count < SceneBudget.maxNodes
         editor.selection = nodePicker.indexOfSelectedItem
         nameField.stringValue = node.displayName
         dragOverlay.nodes = scene.nodes
@@ -448,6 +465,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     private func clearEditHistory() { document.clearHistory(); fieldEditor.undoManager?.removeAllActions() }
     @objc private func renameNode() { editor.rename(nameField.stringValue) }
+    @objc private func groupNodes() { editor.groupWithNext() }
     @objc private func duplicateNode() { editor.duplicate() }
     @objc private func addGradient() {
         guard scene.nodes.count < SceneBudget.maxNodes else { return }
@@ -733,7 +751,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private func watchPackage() {
         watcher = nil
         guard !draft, undoEdits.isEmpty, redoEdits.isEmpty, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
-        watcher = SceneWatcher(package: url, assets: scene.nodes.compactMap { $0.assetURL }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.allNodes.compactMap { $0.assetURL }) { [weak self] in
             self?.load(url)
         }
     }

@@ -198,7 +198,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             do {
                 let playable = try await self.source.resolve(url)
-                for node in playable.nodes where node.kind == .video {
+                for node in playable.allNodes where node.kind == .video {
                     guard let assetURL = node.assetURL else { continue }
                     let asset = AVURLAsset(url: assetURL)
                     let playable = try await asset.load(.isPlayable)
@@ -250,7 +250,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func watch(url: URL, scene: SceneDescriptor) {
         watcher = nil
         guard url.pathExtension.lowercased() == "idlesse" else { return }
-        watcher = SceneWatcher(package: url, assets: scene.nodes.compactMap { $0.assetURL }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.allNodes.compactMap { $0.assetURL }) { [weak self] in
             guard let self, self.selectedURL == url else { return }
             self.select(url, reloading: true)
         }

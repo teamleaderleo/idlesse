@@ -44,9 +44,10 @@ still run. Probe readback is confined to tests.
   tests inspect the default renderer's view hierarchy and cannot simply be run with
   that switch. Direct compositor tests cover GPU output and pause/disposal separately.
 
-After those gates, add offscreen group composition with explicit texture budgets,
-then masks/blend modes and a small effect vocabulary. Declarative parameters and
-bindings should precede scripts. A small editor can then reuse the package watcher.
+Offscreen group composition now exists with a 128 MiB target-pool budget (see
+[groups](scenes.md#groups-version-3)). After the promotion gates, continue with
+masks/blend modes and a small effect vocabulary. Declarative parameters and
+bindings should precede scripts. Studio already reuses the package watcher.
 Keep node limits until resource budgets cover the richer composition graph.
 
 API references: [AVPlayerItemVideoOutput](https://developer.apple.com/documentation/avfoundation/avplayeritemvideooutput)

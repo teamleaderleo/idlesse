@@ -212,6 +212,37 @@ enum WallpaperSmoke {
         precondition(abs(Int(imageFrame[center]) - 77) <= 3 && abs(Int(imageFrame[center+1]) - 90) <= 3,
             "Image upload, translation, scale and premultiplied opacity must compose correctly")
         metalImage.releaseResources()
+        try MetalSceneRenderer.smokeTestGroupTextureBudget()
+        // Opaque overlapping children should still fade to 50%, not 75%.
+        var groupNode = SceneNode(content: .group([SceneNode(content: .image(imageURL)), SceneNode(content: .image(imageURL))]), opacity: 0.5)
+        let groupScene = SceneDescriptor(title: "Group", nodes: [groupNode])
+        let groupedMetal = try MetalSceneRenderer(playable: groupScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let groupFrame = try groupedMetal.renderProbe()
+        let groupCenter = (16 * 32 + 16) * 4
+        precondition(abs(Int(groupFrame[groupCenter]) - 77) <= 3 && abs(Int(groupFrame[groupCenter + 1]) - 90) <= 3,
+            "Group opacity must apply once to the composed subtree")
+        let retainedGroupBytes = groupedMetal.intermediateTextureBytes
+        precondition(retainedGroupBytes > 0 && retainedGroupBytes <= SceneBudget.intermediateTextureBytes)
+        _ = try groupedMetal.renderProbe()
+        precondition(groupedMetal.intermediateTextureBytes == retainedGroupBytes, "Group targets should be reused")
+        groupNode.transform = .init(x: 0.25, y: 0, scale: 0.5, rotation: 0)
+        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Moved", nodes: [groupNode])))
+        let groupMovedFrame = try groupedMetal.renderProbe()
+        precondition(groupMovedFrame[0] == 0 && abs(Int(groupMovedFrame[center]) - 77) <= 3)
+        groupNode.visible = false
+        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Hidden", nodes: [groupNode])))
+        let groupHiddenFrame = try groupedMetal.renderProbe()
+        precondition(stride(from: 0, to: groupHiddenFrame.count, by: 4).allSatisfy { groupHiddenFrame[$0] == 0 })
+        groupedMetal.releaseResources()
+        precondition(groupedMetal.intermediateTextureBytes == 0)
+        let nestedGroup = SceneNode(content: .group([SceneNode(content: .group([
+            SceneNode(content: .image(imageURL)), SceneNode(content: .image(imageURL))]), opacity: 0.5)]), opacity: 0.5)
+        let nestedMetal = try MetalSceneRenderer(playable: SceneDescriptor(title: "Nested", nodes: [nestedGroup]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let nestedPixels = try nestedMetal.renderProbe()
+        precondition(abs(Int(nestedPixels[groupCenter]) - 38) <= 3, "Nested isolated opacity should multiply once per group")
+        nestedMetal.releaseResources()
         let metalScene = try MetalSceneRenderer(playable: SceneDescriptor(title: "mixed", nodes: [
             SceneNode(content: .gradient), SceneNode(content: .image(imageURL), opacity: 0.5)]),
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
@@ -285,6 +316,32 @@ enum WallpaperSmoke {
         metalVideo.releaseResources()
         precondition(metalVideo.diagnostics.activeResources == 0)
 
+        var videoGroup = SceneNode(content: .group([SceneNode(content: .video(videoURL))]))
+        let groupVideoScene = SceneDescriptor(title: "Grouped video", nodes: [videoGroup])
+        let standardGroupVideo = try LayeredSceneRenderer(playable: groupVideoScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let metalGroupVideo = try MetalSceneRenderer(playable: groupVideoScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        standardGroupVideo.setPaused(false)
+        metalGroupVideo.setPaused(false)
+        wait { _ = try? metalGroupVideo.renderProbe(); return metalGroupVideo.diagnostics.loopCount >= 1 && standardGroupVideo.diagnostics.loopCount >= 1 }
+        let groupVideoLoops = metalGroupVideo.diagnostics.loopCount
+        videoGroup.opacity = 0.4
+        videoGroup.transform = .init(x: 0.1, y: 0, scale: 0.8, rotation: 10)
+        let updatedGroupVideo = SceneDescriptor(title: "Moved video", nodes: [videoGroup])
+        precondition(standardGroupVideo.updateScene(updatedGroupVideo) && metalGroupVideo.updateScene(updatedGroupVideo))
+        precondition(metalGroupVideo.diagnostics.loopCount >= groupVideoLoops)
+        videoGroup.visible = false
+        let hiddenVideoGroup = SceneDescriptor(title: "Hidden video", nodes: [videoGroup])
+        precondition(standardGroupVideo.updateScene(hiddenVideoGroup) && metalGroupVideo.updateScene(hiddenVideoGroup))
+        precondition(!metalGroupVideo.diagnostics.animated && !standardGroupVideo.diagnostics.animated)
+        videoGroup.visible = true
+        precondition(metalGroupVideo.updateScene(SceneDescriptor(title: "Shown video", nodes: [videoGroup])))
+        wait { _ = try? metalGroupVideo.renderProbe(); return metalGroupVideo.diagnostics.loopCount > groupVideoLoops }
+        standardGroupVideo.releaseResources()
+        metalGroupVideo.releaseResources()
+        precondition(errors.isEmpty)
+
         try Data(#"{"version":99,"title":"Future scene","capabilities":[]}"#.utf8)
             .write(to: package.appendingPathComponent("manifest.json"))
         controller.select(package)
@@ -317,6 +374,6 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient and mixed compositor, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, isolated/nested groups and bounded target allocation, mixed compositor, grouped video live edits, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }

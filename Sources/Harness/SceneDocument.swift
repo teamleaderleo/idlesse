@@ -42,7 +42,7 @@ final class SceneDocument {
             url.pathExtension.lowercased() == "idlesse" ? try ScenePackageWriter.revision(of: url) : nil
         }.value
         let scene = try await LocalSceneSource().resolve(url)
-        for node in scene.nodes {
+        for node in scene.allNodes {
             guard case .video(let videoURL) = node.content else { continue }
             let asset = AVURLAsset(url: videoURL)
             let playable = try await asset.load(.isPlayable)
@@ -99,7 +99,7 @@ final class SceneDocument {
     }
     func pruneAssets() {
         let scenes = [scene] + (savedScene.map { [$0] } ?? []) + (undoTargets + redoTargets).map { $0.scene }
-        let needed = Set(scenes.flatMap { $0.nodes.compactMap { $0.assetURL } })
+        let needed = Set(scenes.flatMap { $0.allNodes.compactMap { $0.assetURL } })
         workingAssets.removeAll { url in
             guard !needed.contains(url) else { return false }
             url.stopAccessingSecurityScopedResource()
