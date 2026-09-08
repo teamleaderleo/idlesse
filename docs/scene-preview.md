@@ -42,7 +42,7 @@ reparenting yet.
 **Appearance…** adds an ellipse mask, exposure (−2…2 stops), saturation (0…2),
 and a vignette strength slider (0…1). Apply commits one undoable live renderer edit.
 Vignette darkens the edges without changing alpha or the center, and costs no extra
-render pass or texture. Vignette scenes save as v5; other appearance edits use v4.
+render pass or texture. All scenes now save as v6 with persistent layer IDs.
 A styled scene automatically uses Metal
 in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the

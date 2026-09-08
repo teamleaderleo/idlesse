@@ -147,6 +147,39 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: groupedPackage) }
         try ScenePackageWriter.write(SceneDescriptor(title: "Grouped", nodes: [group]), to: groupedPackage)
         let grouped = try await source.resolve(groupedPackage)
+        precondition(grouped.allNodes.map(\.id) == group.descendants.map(\.id))
+        let reloaded = try await source.resolve(groupedPackage)
+        precondition(reloaded.allNodes.map(\.id) == grouped.allNodes.map(\.id))
+        var addressed = reloaded.nodes
+        for property in ScenePropertyAddress.Property.allCases {
+            let address = ScenePropertyAddress(nodeID: firstNode.id, property: property)
+            let decoded = try JSONDecoder().decode(ScenePropertyAddress.self, from: JSONEncoder().encode(address))
+            precondition(decoded == address)
+            let value = (property.range.lowerBound + property.range.upperBound) / 2
+            try address.set(value, in: &addressed)
+            let actual = try address.value(in: addressed)
+            precondition(actual == value)
+            for invalid in [Double.nan, Double.infinity, property.range.upperBound + 1] {
+                do { try address.set(invalid, in: &addressed); fatalError("Accepted invalid property") } catch is SceneError {}
+            }
+            let unchanged = try address.value(in: addressed)
+            precondition(unchanged == value)
+        }
+        do {
+            try ScenePropertyAddress(nodeID: UUID(), property: .opacity).set(0.5, in: &addressed)
+            fatalError("Accepted missing target")
+        } catch is SceneError {}
+        let nodeFile = groupedPackage.appendingPathComponent("scene.json")
+        let originalNodes = try Data(contentsOf: nodeFile)
+        for invalidNodes in [
+            #"{"nodes":[{"type":"gradient"}]}"#,
+            #"{"nodes":[{"type":"gradient","id":"bad"}]}"#,
+            "{\"nodes\":[{\"type\":\"gradient\",\"id\":\"\(group.id)\"},{\"type\":\"gradient\",\"id\":\"\(group.id)\"}]}"
+        ] {
+            try Data(invalidNodes.utf8).write(to: nodeFile)
+            do { _ = try await source.resolve(groupedPackage); fatalError("Accepted invalid v6 identity") } catch {}
+        }
+        try originalNodes.write(to: nodeFile)
         precondition(grouped.nodes[0].kind == .group && grouped.nodes[0].children.count == 2 && grouped.nodes[0].opacity == 0.5)
         let duplicate = group.duplicated()
         precondition(Set((group.descendants + duplicate.descendants).map { $0.id }).count == 6)
