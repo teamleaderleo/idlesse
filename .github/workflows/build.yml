@@ -18,16 +18,17 @@ jobs:
           xcodebuild -version
           swiftc --version
 
-      - name: Build preview and universal saver
+      - name: Build app and universal saver
         run: ./build.sh
 
-      - name: Smoke-test options UI
-        run: '"build/Idlesse Preview.app/Contents/MacOS/IdlessePreview" --smoke-options'
+      - name: Smoke-test settings UI
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
 
       - name: Verify bundles
         run: |
           file "build/Idlesse.saver/Contents/MacOS/Idlesse"
           plutil -lint "build/Idlesse.saver/Contents/Info.plist"
-          plutil -lint "build/Idlesse Preview.app/Contents/Info.plist"
+          plutil -lint "build/Idlesse.app/Contents/Info.plist"
           codesign --verify --strict "build/Idlesse.saver"
-          codesign --verify --strict "build/Idlesse Preview.app"
+          codesign --verify --strict "build/Idlesse.app"
+          codesign -d --entitlements :- "build/Idlesse.app" 2>&1 | grep -q "com.apple.security.app-sandbox"
