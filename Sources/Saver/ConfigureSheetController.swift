@@ -31,13 +31,14 @@ final class ConfigureSheetController: NSObject {
         )
         super.init()
 
-        window.title = "Idlesse Options"
+        window.title = "Idlesse Settings"
         window.isReleasedWhenClosed = false
         buildInterface()
         reload()
     }
 
     func reload() {
+        preferences.reload()
         pendingFolderURL = nil
         setFolderPath(preferences.folderDisplayPath)
         refreshPhotosStatus()
@@ -208,11 +209,7 @@ final class ConfigureSheetController: NSObject {
             do {
                 try preferences.saveFolder(pendingFolderURL)
             } catch {
-                let alert = NSAlert()
-                alert.messageText = "Couldn’t remember that folder"
-                alert.informativeText = "Choose the folder again. macOS needs to grant Idlesse persistent read access."
-                alert.alertStyle = .warning
-                alert.runModal()
+                showSaveError(error, folderSpecific: true)
                 return
             }
         }
@@ -244,9 +241,29 @@ final class ConfigureSheetController: NSObject {
             preferences.playbackOrder = order
         }
 
-        preferences.save()
+        do {
+            try preferences.save()
+        } catch {
+            showSaveError(error, folderSpecific: false)
+            return
+        }
+
         onSave()
         dismiss()
+    }
+
+    private func showSaveError(_ error: Error, folderSpecific: Bool) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = folderSpecific ? "Couldn’t remember that folder" : "Couldn’t save Idlesse settings"
+
+        if preferences.isCompanion {
+            alert.informativeText = "Idlesse needs permission to update the screen saver’s settings container. If macOS asks for access, allow it and try again.\n\n\(error.localizedDescription)"
+        } else {
+            alert.informativeText = "Try again, or open the Idlesse app to configure the screen saver.\n\n\(error.localizedDescription)"
+        }
+
+        alert.runModal()
     }
 
     @objc private func cancel() {
