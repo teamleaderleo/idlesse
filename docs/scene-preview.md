@@ -45,3 +45,30 @@ Match Display (160 Hz) on Aurora and verified the scene remained visible. This
 verifies detection and selection, not sustained 160 fps presentation. Smoke tests
 cover 160/240 Hz matching, fixed-rate clamping, Auto fallback, and updating the
 standalone gradient's Metal frame-rate request.
+
+## Live presentation readout
+
+The preview samples successful Metal drawable presentations once per second, using
+`MTLDrawable.addPresentedHandler` and excluding zero/invalid presented timestamps.
+The readout counts displayed drawables, not render requests or unique video frames.
+Counter storage is constant-size and protected for callback-thread access. The UI
+sampling timer stops while paused/hidden/minimized/closed or displaying static content.
+Native AVPlayerLayer playback and multi-layer standard rendering report unavailable
+rather than inventing a combined frame rate.
+
+The experimental compositor skips GPU submissions when neither a video texture nor
+scene geometry has changed and no procedural gradient is present. Video polling
+still follows the requested cadence; no CPU/energy reduction is quantified yet.
+Gradients continue to animate at the selected cadence. Pending video changes are
+retained when no drawable is available so a frame can be retried on the next draw.
+
+2026-09-08 live development-build observations on the reported 160 Hz screen:
+Aurora showed 84–85 presented fps in the standard path and 72 in a later unified
+compositor sample. These are short UI observations under ongoing desktop activity,
+not controlled comparisons or evidence that one renderer is faster. Neither sample
+establishes sustained 160 fps. Build and wallpaper/GPU smoke tests passed, including
+counter rejection of invalid timestamps and elapsed-time sampling/reset checks.
+The 4K Evelyn illustration video subsequently showed 58–60 presented fps with Match
+Display still at 160 Hz. Pause changed the readout to its idle state; the preview
+was left paused. Loop-boundary smoothness and controlled energy measurements remain
+outstanding.

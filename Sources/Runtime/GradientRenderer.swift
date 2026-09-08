@@ -3,6 +3,8 @@ import MetalKit
 
 /// A built-in Metal node; no community shader execution or permissions required.
 final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
+    private let presentations = PresentedFrameCounter()
+    var presentedFrameCount: Int? { presentations.total }
     let view: NSView
     private let metal: MTKView
     private var queue: MTLCommandQueue?
@@ -64,6 +66,10 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             if buffer.status == .error {
                 DispatchQueue.main.async { [weak self] in self?.onError("The Metal scene could not render a frame.") }
             }
+        }
+        let presentations = self.presentations
+        drawable.addPresentedHandler { drawable in
+            presentations.record(presentedTime: drawable.presentedTime)
         }
         command.present(drawable)
         command.commit()

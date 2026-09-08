@@ -29,6 +29,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var media: SIMD4<Float> // crop x/y, opacity, gradient flag
         var viewport: SIMD4<Float> // width/height aspect, time, reserved
     }
+    private let presentations = PresentedFrameCounter()
+    var presentedFrameCount: Int? { presentations.total }
     let view: NSView
     private let metal: MTKView
     private let clock: SceneClock
@@ -37,6 +39,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var pipeline: MTLRenderPipelineState?
     private var cache: CVMetalTextureCache?
     private var inputs: [Input] = []
+    private var needsFrame = true
     private let gate = DispatchSemaphore(value: 2)
     private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 0)
 
@@ -136,10 +139,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        needsFrame = true
         if !diagnostics.animated { view.draw() }
     }
-    private func updateVideos() {
-        guard let cache else { return }
+    @discardableResult private func updateVideos() -> Bool {
+        guard let cache else { return false }
+        var changed = false
         for input in inputs {
             guard let output = input.output, let player = input.player else { continue }
             let time = player.currentTime()
@@ -152,8 +157,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             input.pixelBuffer = buffer
             input.videoTexture = wrapper
             input.texture = texture
+            changed = true
         }
         diagnostics.loopCount = inputs.filter { $0.player != nil }.map { $0.loops }.min() ?? 0
+        return changed
     }
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
         guard let pipeline, let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return false }
@@ -184,7 +191,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
-        updateVideos()
+        let changed = updateVideos()
+        needsFrame = needsFrame || changed
+        guard needsFrame || inputs.contains(where: { $0.node.kind == .gradient }) else {
+            gate.signal(); return
+        }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
               let command = queue.makeCommandBuffer(), encode(command, pass, size: view.drawableSize) else {
             gate.signal(); return
@@ -196,8 +207,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 DispatchQueue.main.async { [weak self] in self?.onError("The compositor could not render a frame.") }
             }
         }
+        let presentations = self.presentations
+        drawable.addPresentedHandler { drawable in
+            presentations.record(presentedTime: drawable.presentedTime)
+        }
         command.present(drawable)
         command.commit()
+        needsFrame = false
         diagnostics.frameCount += 1
     }
     /// Small GPU readback for tests; never used by the display loop.
@@ -231,6 +247,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     func setPaused(_ paused: Bool) {
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
+        needsFrame = true
         inputs.forEach { input in
             input.paused = paused
             if paused { input.player?.pause() } else { input.player?.play() }

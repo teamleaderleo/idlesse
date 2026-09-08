@@ -28,6 +28,32 @@ enum SceneFrameRate: Int, CaseIterable {
     }
 }
 
+/// Constant-space accounting; callbacks may arrive off the main thread.
+final class PresentedFrameCounter {
+    private let lock = NSLock()
+    private var count = 0
+    func record(presentedTime: TimeInterval) {
+        guard presentedTime > 0, presentedTime.isFinite else { return }
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+    var total: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+
+struct PresentationRateSample {
+    private var previous: (count: Int, time: TimeInterval)?
+    mutating func sample(count: Int, time: TimeInterval) -> Double? {
+        defer { previous = (count, time) }
+        guard let previous, time > previous.time, count >= previous.count else { return nil }
+        return Double(count - previous.count) / (time - previous.time)
+    }
+}
+
 struct RendererDiagnostics {
     enum State { case ready, running, paused, disposed }
     var state: State
@@ -42,12 +68,14 @@ struct RendererDiagnostics {
 protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
+    var presentedFrameCount: Int? { get }
     func setPaused(_ paused: Bool)
     func setPreferredFrameRate(_ rate: Int?)
     func releaseResources()
 }
 
 extension SceneRenderer {
+    var presentedFrameCount: Int? { nil }
     // AVPlayerLayer follows source playback; static images do not need a redraw loop.
     func setPreferredFrameRate(_ rate: Int?) {}
 }
@@ -136,6 +164,10 @@ final class LayeredSceneRenderer: SceneRenderer {
     let view: NSView
     private var children: [SceneRenderer] = []
     private var state: RendererDiagnostics.State = .ready
+    var presentedFrameCount: Int? {
+        // Separate layer surfaces cannot be reported as one scene presentation.
+        children.count == 1 ? children.first?.presentedFrameCount : nil
+    }
     var diagnostics: RendererDiagnostics {
         let snapshots = children.map { $0.diagnostics }
         return RendererDiagnostics(state: state, animated: snapshots.contains { $0.animated },
