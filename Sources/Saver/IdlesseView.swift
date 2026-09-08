@@ -42,8 +42,8 @@ final class IdlesseView: ScreenSaverView {
 
         // Tahoe has a known legacyScreenSaver regression where System Settings can
         // ask a saver for its configuration window but then fail to present that
-        // window. Give the host a chance to attach the sheet normally, then fall
-        // back to showing the very same window ourselves if it never gets a parent.
+        // window. Keep this best-effort path for older/fixed systems; Idlesse.app is
+        // the canonical settings surface on Tahoe.
         if #available(macOS 26.0, *) {
             optionsWindow.level = .floating
 
@@ -79,8 +79,7 @@ final class IdlesseView: ScreenSaverView {
         super.stopAnimation()
     }
 
-    /// Used by the standalone preview harness after its own options window saves.
-    /// The real screen saver host continues to use configureSheet above.
+    /// Used by the companion app after its settings window saves.
     func reloadFromPreferences() {
         restartSlideshow()
     }
@@ -99,6 +98,7 @@ final class IdlesseView: ScreenSaverView {
 
     private func restartSlideshow() {
         stopTimers()
+        preferences.reloadFromDisk()
 
         library.playbackOffset = preferences.multiDisplayMode == .different ? currentDisplayIndex : 0
         library.reload()
@@ -117,7 +117,7 @@ final class IdlesseView: ScreenSaverView {
         }
 
         guard let first = library.next(excluding: nil) else {
-            canvas.message = library.lastError ?? "Choose a folder in Options…"
+            canvas.message = library.lastError ?? "Choose a folder in Idlesse Settings."
             return
         }
 
