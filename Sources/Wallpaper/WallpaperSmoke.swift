@@ -62,6 +62,30 @@ enum WallpaperSmoke {
                      "A failed replacement must preserve the existing wallpaper")
         errors.removeAll()
 
+        // Exercise the package path through the same production host.
+        let package = folder.appendingPathComponent("Test.idlesse")
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: videoURL, to: package.appendingPathComponent("assets/loop.mp4"))
+        try Data(#"{"version":1,"title":"Test scene","capabilities":[]}"#.utf8)
+            .write(to: package.appendingPathComponent("manifest.json"))
+        try Data(#"{"layers":[{"type":"video","asset":"assets/loop.mp4"}]}"#.utf8)
+            .write(to: package.appendingPathComponent("scene.json"))
+        controller.select(package)
+        wait { !controller.isLoading }
+        precondition(errors.isEmpty && controller.selectedURL == package && controller.surfaces.first?.player != nil)
+        controller.setAsleep(true)
+        controller.setAsleep(false)
+        precondition(controller.surfaces.first?.player != nil, "Package must survive display sleep")
+
+        try Data(#"{"version":99,"title":"Future scene","capabilities":[]}"#.utf8)
+            .write(to: package.appendingPathComponent("manifest.json"))
+        controller.select(package)
+        wait { !controller.isLoading }
+        precondition(!errors.isEmpty && controller.surfaces.first?.player != nil,
+                     "Unsupported scene must preserve the current renderer")
+        errors.removeAll()
+        controller.stop()
+
         controller.select(videoURL)
         wait { controller.surfaces.first?.player != nil || !errors.isEmpty }
         precondition(errors.isEmpty)
@@ -85,6 +109,6 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: image, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        print("Wallpaper checks passed: image, scene package, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }

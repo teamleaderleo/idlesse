@@ -7,18 +7,13 @@ private final class DesktopWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
-private final class VideoWallpaperView: NSView {
-    override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
-}
-
 final class WallpaperSurface {
     let window: NSWindow
-    private(set) var player: AVQueuePlayer?
-    private var looper: AVPlayerLooper?
-    var completedLoops: Int { looper?.loopCount ?? 0 }
-    private var observation: NSKeyValueObservation?
+    private let renderer: SceneRenderer
+    var player: AVQueuePlayer? { renderer.player }
+    var completedLoops: Int { renderer.completedLoops }
 
-    init(screen: NSScreen, url: URL, video: Bool, onError: @escaping (String) -> Void) throws {
+    init(screen: NSScreen, playable: Playable, onError: @escaping (String) -> Void) throws {
         window = DesktopWindow(contentRect: screen.frame, styleMask: .borderless,
             backing: .buffered, defer: false)
         window.setFrame(screen.frame, display: false)
@@ -34,37 +29,12 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if video {
-            let view = VideoWallpaperView(frame: bounds)
-            view.wantsLayer = true
-            let queue = AVQueuePlayer()
-            queue.isMuted = true
-            queue.volume = 0
-            queue.preventsDisplaySleepDuringVideoPlayback = false
-            let item = AVPlayerItem(url: url)
-            item.preferredForwardBufferDuration = 2
-            let loop = AVPlayerLooper(player: queue, templateItem: item)
-            (view.layer as? AVPlayerLayer)?.player = queue
-            (view.layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
-            window.contentView = view
-            player = queue
-            looper = loop
-            observation = loop.observe(\.status, options: [.new]) { loop, _ in
-                if loop.status == .failed {
-                    DispatchQueue.main.async { onError(loop.error?.localizedDescription ?? "Video playback failed.") }
-                }
-            }
+        if playable.kind == .video {
+            renderer = VideoRenderer(playable: playable, bounds: bounds, onError: onError)
         } else {
-            let size = CGSize(width: screen.frame.width * screen.backingScaleFactor,
-                              height: screen.frame.height * screen.backingScaleFactor)
-            guard let image = DisplayImageDecoder.load(url, target: size, mode: .fill) else {
-                throw WallpaperError.unreadableImage
-            }
-            let canvas = ImageCanvasView(frame: bounds)
-            canvas.scalingMode = .fill
-            canvas.currentImage = image
-            window.contentView = canvas
+            renderer = try StaticImageRenderer(playable: playable, bounds: bounds, scale: screen.backingScaleFactor)
         }
+        window.contentView = renderer.view
     }
 
     func show(paused: Bool) {
@@ -72,18 +42,10 @@ final class WallpaperSurface {
         setPaused(paused)
     }
 
-    func setPaused(_ paused: Bool) {
-        if paused { player?.pause() } else { player?.play() }
-    }
+    func setPaused(_ paused: Bool) { renderer.setPaused(paused) }
 
     func close() {
-        observation = nil
-        player?.pause()
-        looper?.disableLooping()
-        if let layer = window.contentView?.layer as? AVPlayerLayer { layer.player = nil }
-        player?.removeAllItems()
-        looper = nil
-        player = nil
+        renderer.releaseResources()
         window.contentView = nil
         window.close()
     }
@@ -107,7 +69,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var surfaces: [WallpaperSurface] = []
     private(set) var selectedURL: URL?
     private(set) var pausedByUser = false
-    private var selectedIsVideo = false
+    private var playable: Playable?
+    private var selectedIsVideo: Bool { playable?.kind == .video }
+    private let source: SceneSource = LocalSceneSource()
     private var scopeStarted = false
     private var asleep = false
     private var systemAsleep = false
@@ -167,7 +131,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         panel.title = "Choose your wallpaper"
         panel.message = "One image or muted looping video, on every display. Stop any time from the Idlesse menu."
         panel.prompt = "Use Wallpaper"
-        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie]
+        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie, UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
+        panel.treatsFilePackagesAsDirectories = false
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = selectedURL?.deletingLastPathComponent()
@@ -216,9 +181,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
             }
             do {
-                let video = try Self.isVideo(url)
+                let playable = try await self.source.resolve(url)
+                let video = playable.kind == .video
                 if video {
-                    let asset = AVURLAsset(url: url)
+                    let asset = AVURLAsset(url: playable.assetURL)
                     let playable = try await asset.load(.isPlayable)
                     let duration = try await asset.load(.duration)
                     let tracks = try await asset.loadTracks(withMediaType: .video)
@@ -229,12 +195,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 guard !Task.isCancelled, request == self.generation else { return }
                 // Build before replacing the old wallpaper, so a bad file leaves it intact.
                 let replacement = self.suspended ? [] :
-                    try self.makeSurfaces(url: url, video: video, request: request)
+                    try self.makeSurfaces(playable: playable, request: request)
                 self.releaseSurfaces()
                 if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
                 self.selectedURL = url
                 self.scopeStarted = access
-                self.selectedIsVideo = video
+                self.playable = playable
                 adopted = true
                 self.pausedByUser = false
                 self.surfaces = replacement
@@ -250,14 +216,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(url: URL, video: Bool, request: Int) throws -> [WallpaperSurface] {
+    private func makeSurfaces(playable: Playable, request: Int) throws -> [WallpaperSurface] {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         do {
             for screen in NSScreen.screens {
                 let surface = try autoreleasepool {
-                    try WallpaperSurface(screen: screen, url: url, video: video) { [weak self] message in
+                    try WallpaperSurface(screen: screen, playable: playable) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
                         self.stop()
@@ -274,11 +240,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     private func rebuild() {
-        guard let selectedURL, !suspended else { return }
+        guard let playable, !suspended else { return }
         // Release first on display changes to avoid temporarily doubling players.
         releaseSurfaces()
         do {
-            surfaces = try makeSurfaces(url: selectedURL, video: selectedIsVideo, request: generation)
+            surfaces = try makeSurfaces(playable: playable, request: generation)
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
             stop()
@@ -325,6 +291,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         if scopeStarted { selectedURL?.stopAccessingSecurityScopedResource() }
         scopeStarted = false
         selectedURL = nil
+        playable = nil
         isLoading = false
         pausedByUser = false
         updateMenu()

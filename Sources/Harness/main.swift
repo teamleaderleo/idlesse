@@ -7,6 +7,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var settingsButton: NSButton!
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
+    private var pendingSceneURL: URL?
 
     private lazy var settingsController = ConfigureSheetController(preferences: IdlessePreferences.shared) { [weak self] in
         self?.saverView?.reloadFromPreferences()
@@ -76,11 +77,20 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         saverView.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
 
-        if IdlessePreferences.shared.folderDisplayPath == nil {
+        if let pendingSceneURL {
+            wallpaper.select(pendingSceneURL)
+            self.pendingSceneURL = nil
+        } else if IdlessePreferences.shared.folderDisplayPath == nil {
             DispatchQueue.main.async { [weak self] in
                 self?.showSettings()
             }
         }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        if window == nil { pendingSceneURL = url }
+        else { wallpaper.select(url) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
