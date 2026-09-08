@@ -1,6 +1,6 @@
 import AppKit
 
-/// Outline-only manipulation: no player rebuilds until a gesture finishes.
+/// Live manipulation with one document commit per gesture.
 final class SceneDragOverlay: NSView {
     var transform: SceneNode.Transform = .identity { didSet { needsDisplay = true } }
     var nodes: [SceneNode] = []
@@ -43,6 +43,7 @@ final class SceneDragOverlay: NSView {
                abs(dx * sin(a) + dy * cos(a)) <= sceneRect.height * (t.scale ?? 1) / 2
     }
     override func draw(_ dirtyRect: NSRect) {
+        guard nodes.indices.contains(selected), nodes[selected].visible, !nodes[selected].locked else { return }
         let corners = corners(transform)
         let path = NSBezierPath()
         path.move(to: corners[0])
@@ -64,11 +65,12 @@ final class SceneDragOverlay: NSView {
         guard isEnabled else { return }
         window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
-        if distance(p, rotationHandle(transform)) < 12 { gesture = .rotate }
-        else if corners(transform).contains(where: { distance(p, $0) < 12 }) { gesture = .scale }
+        let editable = nodes.indices.contains(selected) && nodes[selected].visible && !nodes[selected].locked
+        if editable && distance(p, rotationHandle(transform)) < 12 { gesture = .rotate }
+        else if editable && corners(transform).contains(where: { distance(p, $0) < 12 }) { gesture = .scale }
         else {
             // Option-click cycles through overlapping rectangles; normal click selects frontmost.
-            let hits = nodes.indices.reversed().filter { nodes[$0].opacity > 0 && contains(p, transform: nodes[$0].transform) }
+            let hits = nodes.indices.reversed().filter { nodes[$0].visible && !nodes[$0].locked && nodes[$0].opacity > 0 && contains(p, transform: nodes[$0].transform) }
             if let first = hits.first {
                 let index: Int
                 if event.modifierFlags.contains(.option), let position = hits.firstIndex(of: selected) {
@@ -110,7 +112,7 @@ final class SceneDragOverlay: NSView {
         }
     }
     override func keyDown(with event: NSEvent) {
-        guard isEnabled else { return }
+        guard isEnabled, nodes.indices.contains(selected), !nodes[selected].locked, nodes[selected].visible else { return }
         let step = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
         switch event.keyCode {
         case 123: onNudge?(-step / max(1, sceneRect.width), 0)

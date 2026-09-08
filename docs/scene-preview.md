@@ -9,12 +9,12 @@ comparison renderer, independent of editing.
 
 The left list shows frontmost layers first. Select there or click a layer’s rectangle
 on the canvas. Option-click cycles through overlapping layers; selection uses layer
-bounds, not per-pixel alpha. Drag rows to reorder them. Two layers remain the limit.
+bounds, not per-pixel alpha. Drag rows to reorder them. Scenes support up to 16 layers, two videos and four gradients. Eye and lock buttons control visibility and canvas editing; both are saved and undoable. Hidden media stays allocated but pauses. Layer type icons avoid decoding thumbnail copies.
 
 Drag a layer to move it, its corner squares to scale it uniformly, or the circle
 above it to rotate. Shift snaps rotation to 15°. With the canvas focused, arrow keys
 nudge by one canvas point; Shift nudges by ten. Delete removes the selected layer
-unless it is the last. Duplicate Layer (⌘D) is available below the two-layer limit.
+unless it is the last. Duplicate Layer (⌘D) is available within the scene resource limits.
 Names, X/Y, scale, rotation and opacity are editable in the inspector; Return commits.
 
 Use +/− or a trackpad pinch to zoom; scroll to pan. Fit restores the whole canvas.
@@ -123,3 +123,12 @@ The 4K Evelyn illustration video subsequently showed 58–60 presented fps with 
 Display still at 160 Hz. Pause changed the readout to its idle state; the preview
 was left paused. Loop-boundary smoothness and controlled energy measurements remain
 outstanding.
+
+### Resource limits
+
+Each display shares a 32-million-pixel still-image decoding allowance across its image
+nodes, with at most 16 million pixels per image. More image layers therefore reduce
+the maximum decode size per layer. Hidden layers count toward every limit.
+This bounds retained image pixels, not total process memory: video decoders, drawables,
+temporary uploads, the old renderer during replacement, and additional displays cost extra.
+No intermediate effect textures are allocated yet.

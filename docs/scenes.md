@@ -35,17 +35,26 @@ decoding off the main thread and checks cancellation before and after decode;
 the host rejects stale results after Stop or restart. Folder scanning and sorting
 remain synchronous. The saver still shows images only, not layered/video packages.
 A separately linkable Swift package is not yet extracted.
-Cloud fetching, cache eviction, playlists, richer composition and Studio are future
-work. Scene assets must currently be locally readable, including synced files.
+Cloud fetching, cache eviction, playlists and richer composition are future
+work. Studio supports native layer editing and safe package saves. Scene assets must currently be locally readable, including synced files.
 
 Run `./test.sh` for scene and image checks and `./test-wallpaper.sh` for real
 renderer lifecycle checks, including a generated video scene package.
 
 ## Resource limits
 
-At most two layers per scene. Each image keeps the existing 16-million-pixel
-limit; two images can therefore retain up to roughly 128 MB of decoded pixels
-per display, excluding framework allocations. Each video layer has its own
-native player. Layered scenes are not promised the memory cost of a single image.
-Static layers do not introduce a continuous rendering timer. Pause reaches every
-video; Stop releases every child renderer. The v2 gradient has its own Metal renderer; image/video composition still uses AppKit.
+Scenes support 1–16 nodes, at most two videos and four gradients. Hidden nodes
+count toward these limits. The image nodes share 32 million decoded pixels per
+display, with at most 16 million per image (roughly 128 MB of four-byte pixels
+combined, excluding framework and temporary allocations). Video decoding and
+display surfaces consume additional memory. Each video has its own native player.
+
+Optional `visible` and `locked` booleans default to true and false respectively.
+Hidden nodes are not drawn; their players/gradient renderers pause while retaining
+resources. Locking prevents canvas manipulation, while inspector edits remain
+available. Both properties round-trip through Studio and participate in undo.
+
+Standard composes AppKit views; the experimental Metal compositor draws nodes
+into one surface. Static scenes do not introduce a continuous rendering timer.
+Stop releases every child renderer. Groups and intermediate effect textures are
+not implemented yet.

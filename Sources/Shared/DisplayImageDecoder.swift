@@ -6,7 +6,8 @@ import ImageIO
 enum DisplayImageDecoder {
     static let pixelBudget: CGFloat = 16_000_000
 
-    static func load(_ url: URL, target: CGSize, mode: IdlesseScalingMode) -> NSImage? {
+    static func load(_ url: URL, target: CGSize, mode: IdlesseScalingMode, pixelLimit: CGFloat = pixelBudget) -> NSImage? {
+        guard pixelLimit.isFinite, pixelLimit >= 1 else { return nil }
         guard let source = CGImageSourceCreateWithURL(url as CFURL,
             [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -19,8 +20,9 @@ enum DisplayImageDecoder {
         let fit = min(target.width / w, target.height / h)
         let fill = max(target.width / w, target.height / h)
         let desired: CGFloat = mode == .actual ? 1 : (mode == .fill ? fill : fit)
-        let scale = min(1, max(0, desired), sqrt(pixelBudget / (w * h)), 8192 / max(w, h))
-        let edge = max(1, Int(floor(max(w, h) * scale)))
+        let scale = min(1, max(0, desired), sqrt(min(pixelBudget, pixelLimit) / (w * h)), 8192 / max(w, h))
+        // Leave one pixel of headroom for ImageIO rounding the other dimension up.
+        let edge = max(1, Int(floor(max(w, h) * scale)) - 1)
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

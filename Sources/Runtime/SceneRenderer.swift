@@ -105,10 +105,10 @@ private final class VideoWallpaperView: NSView {
 final class StaticImageRenderer: SceneRenderer {
     let view: NSView
     private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 1)
-    init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat) throws {
+    init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, pixelLimit: CGFloat = DisplayImageDecoder.pixelBudget) throws {
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         guard let url = playable.assetURL,
-              let image = DisplayImageDecoder.load(url, target: size, mode: .fill) else {
+              let image = DisplayImageDecoder.load(url, target: size, mode: .fill, pixelLimit: pixelLimit) else {
             throw SceneError.invalid("That image could not be opened.")
         }
         let canvas = ImageCanvasView(frame: bounds)
@@ -192,7 +192,7 @@ final class LayeredSceneRenderer: SceneRenderer {
     }
     var diagnostics: RendererDiagnostics {
         let snapshots = children.map { $0.diagnostics }
-        return RendererDiagnostics(state: state, animated: snapshots.contains { $0.animated },
+        return RendererDiagnostics(state: state, animated: zip(snapshots, nodes).contains { $0.0.animated && $0.1.visible },
             activeResources: snapshots.reduce(0) { $0 + $1.activeResources },
             loopCount: snapshots.filter { $0.animated }.map { $0.loopCount }.min() ?? 0,
             frameCount: snapshots.reduce(0) { $0 + $1.frameCount },
@@ -201,6 +201,7 @@ final class LayeredSceneRenderer: SceneRenderer {
     }
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void) throws {
+        try SceneBudget.validate(playable.nodes)
         nodes = playable.nodes
         view = NSView(frame: bounds)
         view.wantsLayer = true
@@ -210,12 +211,12 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale)
+                    child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(SceneBudget.imagePixels(playable.nodes)))
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, onError: onError)
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
                 }
-                child.view.alphaValue = node.opacity
+                child.view.alphaValue = node.visible ? node.opacity : 0
                 let container = NSView(frame: bounds)
                 container.wantsLayer = true
                 container.addSubview(child.view)
@@ -245,7 +246,7 @@ final class LayeredSceneRenderer: SceneRenderer {
         view.subviews = reordered
         let bounds = view.bounds
         for (index, node) in nodes.enumerated() {
-            children[index].view.alphaValue = node.opacity
+            children[index].view.alphaValue = node.visible ? node.opacity : 0
             let t = node.transform
             var matrix = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,
                                                        (0.5 + (t.y ?? 0)) * bounds.height, 0)
@@ -255,6 +256,7 @@ final class LayeredSceneRenderer: SceneRenderer {
             reordered[index].layer?.sublayerTransform = matrix
         }
         CATransaction.commit()
+        for (child, node) in zip(children, nodes) { child.setPaused(state != .running || !node.visible) }
         return true
     }
     func setPreferredFrameRate(_ rate: Int?) {
@@ -263,7 +265,7 @@ final class LayeredSceneRenderer: SceneRenderer {
     func setPaused(_ paused: Bool) {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
-        children.forEach { $0.setPaused(paused) }
+        for (child, node) in zip(children, nodes) { child.setPaused(paused || !node.visible) }
     }
     func releaseResources() {
         state = .disposed

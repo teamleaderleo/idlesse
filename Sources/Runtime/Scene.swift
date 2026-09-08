@@ -28,6 +28,8 @@ struct SceneNode: Sendable {
     var name: String? = nil
     var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? "Gradient" }
     let content: Content
+    var visible = true
+    var locked = false
     var opacity: Double = 1
     var transform: Transform = .identity
     var kind: SceneDescriptor.Kind {
@@ -62,6 +64,8 @@ struct LocalSceneSource: SceneSource {
             let name: String?
             let type: SceneDescriptor.Kind
             let asset: String?
+            let visible: Bool?
+            let locked: Bool?
             let opacity: Double?
             let transform: SceneNode.Transform?
         }
@@ -118,8 +122,8 @@ struct LocalSceneSource: SceneSource {
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
-              (1...2).contains(descriptions.count) else {
-            throw SceneError.invalid("Use one or two layers in v1, or nodes in v2.")
+              (1...SceneBudget.maxNodes).contains(descriptions.count) else {
+            throw SceneError.invalid("Use 1–16 layers in v1, or nodes in v2.")
         }
         let nodes = try descriptions.map { node -> SceneNode in
             let opacity = node.opacity ?? 1
@@ -143,8 +147,9 @@ struct LocalSceneSource: SceneSource {
                 }
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
-            return SceneNode(name: node.name.map { String($0.prefix(120)) }, content: content, opacity: opacity, transform: transform)
+            return SceneNode(name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
+        try SceneBudget.validate(nodes)
         return SceneDescriptor(title: manifest.title, nodes: nodes)
     }
 }
@@ -177,6 +182,7 @@ enum ScenePackageWriter {
         return try Revision(manifest: json("manifest.json"), scene: json("scene.json"), files: records.sorted())
     }
     static func write(_ scene: SceneDescriptor, to destination: URL, replacing expected: Revision? = nil) throws {
+        try SceneBudget.validate(scene.nodes)
         let files = FileManager.default
         guard destination.isFileURL, destination.pathExtension.lowercased() == "idlesse",
               expected != nil || !files.fileExists(atPath: destination.path) else {
@@ -200,7 +206,7 @@ enum ScenePackageWriter {
         var nodes: [[String: Any]] = []
         for (index, node) in scene.nodes.enumerated() {
             try Task.checkCancellation()
-            var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity,
+            var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity, "visible": node.visible, "locked": node.locked,
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
             if let name = node.name { json["name"] = name }
@@ -269,4 +275,20 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
         order.append(index)
     }
     return order
+}
+
+/// Per-display retained image allowance; video decoder and drawable memory are separate.
+enum SceneBudget {
+    static let maxNodes = 16
+    static let maxVideos = 2
+    static let maxGradients = 4
+    static let decodedImagePixels = 32_000_000
+    static func validate(_ nodes: [SceneNode]) throws {
+        guard (1...maxNodes).contains(nodes.count) else { throw SceneError.invalid("A scene supports 1–16 layers.") }
+        guard nodes.filter({ $0.kind == .video }).count <= maxVideos else { throw SceneError.invalid("A scene supports at most two video layers, including hidden layers.") }
+        guard nodes.filter({ $0.kind == .gradient }).count <= maxGradients else { throw SceneError.invalid("A scene supports at most four gradient layers, including hidden layers.") }
+    }
+    static func imagePixels(_ nodes: [SceneNode]) -> Int {
+        min(16_000_000, decodedImagePixels / max(1, nodes.filter { $0.kind == .image }.count))
+    }
 }

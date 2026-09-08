@@ -34,6 +34,10 @@ for (label, target, mode, maxEdge) in [
     }
 }
 precondition(DisplayImageDecoder.load(folder.appendingPathComponent("missing"), target: .zero, mode: .fit) == nil)
+let bounded = DisplayImageDecoder.load(file, target: CGSize(width: 16000, height: 16000), mode: .fill, pixelLimit: 2_000_000)!
+let boundedBitmap = bounded.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+precondition(boundedBitmap.width * boundedBitmap.height <= 2_000_000)
+precondition(DisplayImageDecoder.load(file, target: .zero, mode: .fill, pixelLimit: .nan) == nil)
 print("Decoder checks passed")
 
 // Check fit/fill geometry and color at representative opaque interior pixels.

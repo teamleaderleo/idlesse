@@ -14,6 +14,17 @@ extension StudioWindowController {
         precondition(editor.scene.nodes.count == 1 && !editor.draft && editor.document.undoManager.canRedo)
         editor.document.undoManager.redo()
         precondition(editor.scene.nodes.count == 2 && editor.draft && editor.nodePicker.indexOfSelectedItem == 1)
+        editor.editor.toggleVisibility(1)
+        precondition(!editor.scene.nodes[1].visible)
+        editor.document.undoManager.undo()
+        precondition(editor.scene.nodes[1].visible)
+        editor.editor.toggleLock(1)
+        let lockedTransform = editor.scene.nodes[1].transform.x
+        editor.editor.selection = 1
+        editor.editor.nudge(x: 0.1, y: 0)
+        precondition(editor.scene.nodes[1].transform.x == lockedTransform)
+        editor.document.undoManager.undo()
+        precondition(!editor.scene.nodes[1].locked)
         let running = editor.renderer
         var moved = editor.scene.nodes
         moved[1].transform = .init(x: 0.2, y: 0, scale: 0.6, rotation: 15)
@@ -184,6 +195,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let fit = NSButton(title: "Fit", target: self, action: #selector(fitCanvas))
         let controls = NSStackView(views: [open, sample, pauseButton, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
         controls.spacing = 10
+        nodePicker.onVisibility = { [weak self] in self?.editor.toggleVisibility($0) }
+        nodePicker.onLock = { [weak self] in self?.editor.toggleLock($0) }
         nodePicker.target = self
         nodePicker.action = #selector(selectNode)
         let inspector = NSStackView()
@@ -252,7 +265,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         inspector.addArrangedSubview(saveButton)
         inspector.addArrangedSubview(saveCopyButton)
         inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
-        let hint = NSTextField(wrappingLabelWithString: "Drag to move. Corners resize; circle rotates. Shift snaps rotation or nudges 10×. Option-click selects behind. Two layers maximum.")
+        let hint = NSTextField(wrappingLabelWithString: "Drag to move. Corners resize; circle rotates. Shift snaps rotation or nudges 10×. Option-click selects behind. 16 layers · up to 2 videos and 4 gradients.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
@@ -285,7 +298,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             viewport.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18),
             viewport.leadingAnchor.constraint(equalTo: nodePicker.trailingAnchor, constant: 12),
             nodePicker.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            nodePicker.widthAnchor.constraint(equalToConstant: 170),
+            nodePicker.widthAnchor.constraint(equalToConstant: 230),
             nodePicker.topAnchor.constraint(equalTo: viewport.topAnchor),
             nodePicker.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
             viewport.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -18),
@@ -348,15 +361,15 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private func updateInspector() {
         let selected = max(0, nodePicker.indexOfSelectedItem)
         nodePicker.removeAllItems()
-        nodePicker.addItems(withTitles: scene.nodes.enumerated().map { "\($0.element.displayName) · \($0.element.kind.rawValue)" })
+        nodePicker.setNodes(scene.nodes)
         nodePicker.selectItem(at: min(selected, scene.nodes.count - 1))
         selectNode()
         applyButton.isEnabled = selectedURL != nil && !draft && !saving
         saveCopyButton.isEnabled = !saving
         saveButton.isEnabled = !saving
         nameField.isEditable = !saving
-        duplicateButton.isEnabled = !saving && scene.nodes.count < 2
-        addMediaButton.isEnabled = !saving && scene.nodes.count < 2
+        duplicateButton.isEnabled = !saving && scene.nodes.count < SceneBudget.maxNodes
+        addMediaButton.isEnabled = !saving && scene.nodes.count < SceneBudget.maxNodes
         addGradientButton.isEnabled = addMediaButton.isEnabled
         removeNodeButton.isEnabled = !saving && scene.nodes.count > 1
         reorderButton.isEnabled = !saving && scene.nodes.count > 1
@@ -399,7 +412,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         _ = applyEdit(nodes, selected: nodePicker.indexOfSelectedItem)
     }
     @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int, name: String = "Change Layer") -> Bool {
-        guard !saving, (1...2).contains(nodes.count) else { return false }
+        guard !saving, (1...SceneBudget.maxNodes).contains(nodes.count) else { return false }
+        do { try SceneBudget.validate(nodes) } catch { detailLabel.stringValue = error.localizedDescription; return false }
         let previous = scene
         let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
@@ -436,16 +450,20 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func renameNode() { editor.rename(nameField.stringValue) }
     @objc private func duplicateNode() { editor.duplicate() }
     @objc private func addGradient() {
-        guard scene.nodes.count < 2 else { return }
+        guard scene.nodes.count < SceneBudget.maxNodes else { return }
         _ = applyEdit(scene.nodes + [SceneNode(name: "Gradient \(scene.nodes.count + 1)", content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))], selected: scene.nodes.count, name: "Add Gradient")
     }
     @objc private func removeNode() { editor.remove() }
     @objc private func reorderNode() {
-        guard scene.nodes.count == 2 else { return }
-        _ = applyEdit(Array(scene.nodes.reversed()), selected: 1 - nodePicker.indexOfSelectedItem, name: "Reorder Layer")
+        let index = nodePicker.indexOfSelectedItem
+        guard scene.nodes.count > 1, scene.nodes.indices.contains(index) else { return }
+        let destination = index == 0 ? 1 : index - 1
+        var nodes = scene.nodes
+        nodes.swapAt(index, destination)
+        _ = applyEdit(nodes, selected: destination, name: "Reorder Layer")
     }
     @objc private func addMedia() {
-        guard !saving, scene.nodes.count < 2 else { return }
+        guard !saving, scene.nodes.count < SceneBudget.maxNodes else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie]
         panel.prompt = "Add Layer"
