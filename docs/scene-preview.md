@@ -271,3 +271,19 @@ Capture is shared across displays/hosts and released when no active host needs i
 the supplied fixture quietly for five seconds, checks nonzero levels and shared-client/
 pause teardown, then stops capture. Ordinary automated tests use synthetic samples and
 do not request audio permission.
+
+### Ordered effects
+
+Select a layer or group and open **Appearance…**. The eight effect slots run from
+top to bottom; select **None** to skip a slot. Choose blur, bloom, exposure,
+saturation, or vignette and enter its amount. Applying is one undoable edit and
+preserves playback in Metal. Save/Save As writes a V15 package when a stack exists.
+The older mask/color controls run after the stack, so existing bindings keep working.
+Audio Aurora now includes exposure followed by bloom, with audio driving its final
+exposure/vignette. Audio capture remains off until explicitly enabled.
+
+2026-09-08 native check: Appearance Apply → Undo → reopen restored bloom 0.9
+after editing it to 1.4, while scene time continued. The Audio Aurora Studio-window
+10-second measurement reported 91.7 presented fps and 0.75 ms GPU/frame with Match
+Display (160 Hz) selected and audio capture off. This is a windowed sample, not a
+4K desktop, energy, or audio-enabled benchmark.

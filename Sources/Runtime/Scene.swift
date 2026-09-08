@@ -247,6 +247,20 @@ struct SceneNode: Codable, Sendable {
         static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
     }
     struct Style: Codable, Sendable, Equatable {
+        struct Effect: Codable, Sendable, Equatable {
+            enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette }
+            var type: Kind
+            var amount: Double
+            var range: ClosedRange<Double> {
+                switch type {
+                case .blur: return 0...24
+                case .bloom, .saturation: return 0...2
+                case .exposure: return -2...2
+                case .vignette: return 0...1
+                }
+            }
+        }
+        var effects: [Effect] = []
         enum Mask: String, Codable, Sendable { case ellipse }
         var mask: Mask? = nil
         var exposure: Double = 0
@@ -256,13 +270,14 @@ struct SceneNode: Codable, Sendable {
         init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1, vignette: Double = 0) {
             self.mask = mask; self.exposure = exposure; self.saturation = saturation; self.vignette = vignette
         }
-        enum CodingKeys: String, CodingKey { case mask, exposure, saturation, vignette }
+        enum CodingKeys: String, CodingKey { case mask, exposure, saturation, vignette, effects }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             mask = try values.decodeIfPresent(Mask.self, forKey: .mask)
             exposure = try values.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
             saturation = try values.decodeIfPresent(Double.self, forKey: .saturation) ?? 1
             vignette = try values.decodeIfPresent(Double.self, forKey: .vignette) ?? 0
+            effects = try values.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         }
     }
     var style: Style = .plain
@@ -383,7 +398,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...14).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...15).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -421,6 +436,7 @@ struct LocalSceneSource: SceneSource {
             }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
+            guard (node.style?.effects.isEmpty ?? true) || manifest.version >= 15 else { throw SceneError.invalid("Ordered effects require scene version 15.") }
             guard manifest.version < 6 || node.id != nil else { throw SceneError.invalid("Every v6 node needs a UUID id.") }
             return SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
@@ -587,7 +603,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { !$0.style.effects.isEmpty } ? 15 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -654,6 +670,9 @@ enum SceneBudget {
             guard depth <= maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
             var result: [SceneNode] = []
             for node in nodes {
+                guard node.style.effects.count <= 8, node.style.effects.allSatisfy({ $0.amount.isFinite && $0.range.contains($0.amount) }) else {
+                    throw SceneError.invalid("Use at most eight effects per layer, with amounts inside each effect's range.")
+                }
                 guard node.style.exposure.isFinite, (-2...2).contains(node.style.exposure),
                       node.style.saturation.isFinite, (0...2).contains(node.style.saturation),
                       node.style.vignette.isFinite, (0...1).contains(node.style.vignette) else {
@@ -677,7 +696,7 @@ enum SceneBudget {
     /// Two in-flight frames share a fixed byte allowance. Larger group surfaces
     /// are reduced uniformly; images/video assets themselves are never rewritten.
     static func groupTargetSize(width: Double, height: Double, count: Int) -> (width: Int, height: Int)? {
-        guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...maxGroups).contains(count) else { return nil }
+        guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...(maxGroups + 3 * maxNodes)).contains(count) else { return nil }
         let pixels = Double(intermediateTextureBytes / (2 * count) - 65_536) / 4
         let scale = min(1, 16384 / max(width, height), sqrt(pixels / width / height))
         return (max(1, Int(floor(width * scale))), max(1, Int(floor(height * scale))))

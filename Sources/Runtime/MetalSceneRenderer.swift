@@ -254,9 +254,39 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
         guard let pipeline, let device = metal.device else { return false }
         let groups = roots.flatMap { $0.descendants }.filter { $0.kind == .group }
-        guard let lease = targets.acquire(device: device, size: size, count: groups.count) else { return false }
+        guard let lease = targets.acquire(device: device, size: size, count: groups.count + 3 * roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }.count) else { return false }
         let groupTextures = Dictionary(uniqueKeysWithValues: zip(groups.map { $0.id }, lease.textures))
+        let effected = roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }
+        var effectTargets: [UUID: [MTLTexture]] = [:]
+        for (index, node) in effected.enumerated() {
+            let start = groups.count + index * 3
+            effectTargets[node.id] = Array(lease.textures[start..<(start + 3)])
+        }
+        var outputs: [UUID: MTLTexture] = [:]
         let byID = Dictionary(uniqueKeysWithValues: inputs.map { ($0.node.id, $0) })
+        func renderPass(_ texture: MTLTexture) -> MTLRenderPassDescriptor {
+            let result = MTLRenderPassDescriptor()
+            result.colorAttachments[0].texture = texture
+            result.colorAttachments[0].loadAction = .clear
+            result.colorAttachments[0].storeAction = .store
+            result.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+            return result
+        }
+        func effectPass(source: MTLTexture?, original: MTLTexture? = nil, destination: MTLTexture,
+                        mode: Float, amount: Float, gradient: Bool = false, crop: SIMD2<Float> = SIMD2(1, 1)) -> Bool {
+            guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(destination)) else { return false }
+            var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(crop.x, crop.y, 1, gradient ? 1 : 0),
+                viewport: SIMD4(Float(size.width / max(1, size.height)), Float(clock.time.truncatingRemainder(dividingBy: 3600)), mode, amount),
+                style: SIMD4(0, 0, 1, 0))
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.setFragmentTexture(source, index: 0)
+            encoder.setFragmentTexture(original, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
+            return true
+        }
         func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor) -> Bool {
             // Children finish their offscreen passes before their parent encoder begins.
             for node in nodes where node.visible && node.kind == .group {
@@ -268,14 +298,45 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 childPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
                 guard encodeNodes(node.children, into: childPass) else { return false }
             }
+            for node in nodes where node.visible && !node.style.effects.isEmpty {
+                guard let scratch = effectTargets[node.id] else { return false }
+                let source = node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture
+                guard node.kind == .gradient || source != nil else { continue }
+                let aspect = Float(size.width / max(1, size.height))
+                let mediaAspect = node.kind == .group ? aspect : source.map { Float($0.width) / Float($0.height) } ?? aspect
+                guard effectPass(source: source, destination: scratch[0], mode: 0, amount: 0, gradient: node.kind == .gradient,
+                                 crop: SIMD2(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect))) else { return false }
+                var current = scratch[0]
+                for effect in node.style.effects {
+                    let available = scratch.filter { $0 !== current }
+                    let amount = Float(effect.amount)
+                    switch effect.type {
+                    case .blur, .bloom:
+                        if amount == 0 { continue }
+                        // Radius is relative to scene height, so budget downsampling preserves the visual extent.
+                        let radius = (effect.type == .bloom ? Float(12) : amount) / 1080
+                        guard effectPass(source: current, destination: available[0], mode: effect.type == .bloom ? 7 : 1, amount: radius),
+                              effectPass(source: available[0], destination: available[1], mode: 2, amount: radius) else { return false }
+                        if effect.type == .bloom {
+                            guard effectPass(source: available[1], original: current, destination: available[0], mode: 3, amount: amount) else { return false }
+                            current = available[0]
+                        } else { current = available[1] }
+                    case .exposure, .saturation, .vignette:
+                        let mode: Float = effect.type == .exposure ? 4 : effect.type == .saturation ? 5 : 6
+                        guard effectPass(source: current, destination: available[0], mode: mode, amount: amount) else { return false }
+                        current = available[0]
+                    }
+                }
+                outputs[node.id] = current
+            }
             guard let encoder = command.makeRenderCommandEncoder(descriptor: target) else { return false }
             encoder.setRenderPipelineState(pipeline)
             for node in nodes where node.visible {
-                let gradient = node.kind == .gradient
-                let texture = node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture
+                let gradient = node.kind == .gradient && outputs[node.id] == nil
+                let texture = outputs[node.id] ?? (node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture)
                 guard gradient || texture != nil else { continue }
                 let aspect = Float(size.width / max(1, size.height))
-                let mediaAspect = node.kind == .group ? aspect : texture.map { Float($0.width) / Float($0.height) } ?? aspect
+                let mediaAspect = (node.kind == .group || outputs[node.id] != nil) ? aspect : texture.map { Float($0.width) / Float($0.height) } ?? aspect
                 let t = node.transform
                 var u = Uniforms(transform: SIMD4(Float(t.x ?? 0), Float(t.y ?? 0), Float(t.scale ?? 1), Float((t.rotation ?? 0) * .pi / 180)),
                     media: SIMD4(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
@@ -407,6 +468,16 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         pool.recycle(second)
         pool.recycle(resized)
         precondition(pool.allocatedBytes == 0)
+        let effectPool = GroupTexturePool()
+        let count = SceneBudget.maxGroups + 3 * SceneBudget.maxNodes
+        guard let a = effectPool.acquire(device: device, size: size, count: count),
+              let b = effectPool.acquire(device: device, size: size, count: count) else {
+            throw SceneError.invalid("Effect budget allocation failed")
+        }
+        precondition(effectPool.allocatedBytes <= SceneBudget.intermediateTextureBytes)
+        effectPool.dispose()
+        effectPool.recycle(a); effectPool.recycle(b)
+        precondition(effectPool.allocatedBytes == 0)
     }
     /// Small GPU readback for tests; never used by the display loop.
     func renderProbe(signals: SceneSignals? = nil) throws -> [UInt8] {
@@ -495,7 +566,39 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         return float4(color * pixel.a, pixel.a) * (coverage * u.media.z);
     }
-    fragment float4 shade(V v [[stage_in]], constant U &u [[buffer(0)]], texture2d<float> image [[texture(0)]]) {
+    fragment float4 shade(V v [[stage_in]], constant U &u [[buffer(0)]], texture2d<float> image [[texture(0)]], texture2d<float> original [[texture(1)]]) {
+
+        constexpr sampler effectSample(filter::linear, address::clamp_to_edge);
+        int mode = int(u.viewport.z);
+        float amount = u.viewport.w;
+        if (mode == 1 || mode == 2 || mode == 7) {
+            float2 step = mode == 2 ? float2(0, amount / 4) : float2(amount / (4 * u.viewport.x), 0);
+            float4 result = 0;
+            float total = 0;
+            for (int i = -4; i <= 4; ++i) {
+                float weight = exp(-float(i*i) / 8.0);
+                float4 pixel = image.sample(effectSample, v.uv + float(i) * step);
+                if (mode == 7) pixel.rgb *= smoothstep(0.55, 0.85, max(pixel.r, max(pixel.g, pixel.b)));
+                result += pixel * weight;
+                total += weight;
+            }
+            return result / total;
+        }
+        if (mode == 3) {
+            float4 base = original.sample(effectSample, v.uv);
+            float4 glow = image.sample(effectSample, v.uv);
+            float a = max(base.a, min(1.0, max(glow.r, max(glow.g, glow.b)) * amount));
+            return float4(min(float3(a), base.rgb + glow.rgb * amount), a);
+        }
+        if (mode >= 4 && mode <= 6) {
+            float4 pixel = image.sample(effectSample, v.uv);
+            float3 color = pixel.rgb / max(pixel.a, 0.00001);
+            if (mode == 4) color *= exp2(amount);
+            if (mode == 5) color = mix(float3(dot(color, float3(0.2126,0.7152,0.0722))), color, amount);
+            if (mode == 6) { float2 radial = v.uv * 2 - 1; color *= 1 - amount * smoothstep(0.15, 1.5, dot(radial, radial)); }
+            return float4(clamp(color, 0.0, 1.0) * pixel.a, pixel.a);
+        }
+
         if (u.media.w > 0.5) {
             float2 uv = float2(v.uv.x, 1.0-v.uv.y);
             float t = u.viewport.y;

@@ -299,3 +299,26 @@ and Low Power Mode stop the relevant host's demand. Stale levels expire after 0.
 Native capture supports Float32 mono/stereo; other formats produce an error.
 
 Implementation reference: [Apple’s Core Audio tap sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps).
+
+## V15 ordered effects
+
+`style.effects` is an optional ordered array of up to eight `{ "type", "amount" }`
+objects per node. Types are `blur` (0–24), `bloom` (0–2), `exposure` (−2–2),
+`saturation` (0–2), and `vignette` (0–1). Effects run top to bottom before the
+existing style fields, mask, opacity, and transform. Existing packages retain their
+fixed appearance behavior. New stacks require V15 and Metal. Groups apply a stack
+to their composited children; any node type can use the same stack.
+
+Blur uses two nine-tap separable Gaussian passes. Its radius is measured in pixels
+at a 1080-pixel scene height and scales with the canvas. Bloom soft-selects bright
+pixels (0.55–0.85 SDR), blurs at a fixed 12-pixel radius, then adds the result with
+the authored strength. Both preserve premultiplied alpha. These are SDR effects;
+they do not imply HDR support. Boundaries clamp to the node's canvas.
+
+Effect nodes lease three reusable targets each. All effect and group targets share
+the existing 128 MiB per-renderer pool, including in-flight and cached targets.
+Resolution falls uniformly when needed to stay inside the cap; more effects can
+therefore reduce intermediate resolution. Each node reuses its three targets across
+the entire stack. Static scenes remain event-driven. Stack changes update an existing
+Metal renderer without restarting its media. Effect amounts are currently static;
+audio/time bindings can still animate the final appearance properties.

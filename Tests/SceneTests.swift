@@ -469,6 +469,23 @@ import Foundation
             try Data(manifestJSON.utf8).write(to: audioPackage.appendingPathComponent("manifest.json"))
             do { _ = try await source.resolve(audioPackage); fatalError("Accepted invalid audio capability") } catch is SceneError {}
         }
+        var effectNode = SceneNode(content: .gradient)
+        effectNode.style.effects = [.init(type: .exposure, amount: 1), .init(type: .bloom, amount: 0.8), .init(type: .blur, amount: 12)]
+        let effectScene = SceneDescriptor(title: "Effects", nodes: [effectNode])
+        let effectPackage = root.appendingPathComponent("Effects.idlesse")
+        try ScenePackageWriter.write(effectScene, to: effectPackage)
+        let effectLoaded = try await source.resolve(effectPackage)
+        precondition(effectLoaded.nodes[0].style.effects == effectNode.style.effects && effectLoaded.requiresMetal)
+        try Data(#"{"version":14,"title":"Old","capabilities":[]}"#.utf8).write(to: effectPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(effectPackage); fatalError("Accepted old effect schema") } catch is SceneError {}
+        for invalid in [
+            Array(repeating: SceneNode.Style.Effect(type: .bloom, amount: 1), count: 9),
+            [.init(type: .blur, amount: 25)],
+            [.init(type: .bloom, amount: .nan)]
+        ] {
+            effectNode.style.effects = invalid
+            do { try SceneBudget.validate([effectNode]); fatalError("Accepted invalid effect budget") } catch is SceneError {}
+        }
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }

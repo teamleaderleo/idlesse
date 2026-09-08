@@ -889,11 +889,33 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         saturation.setAccessibilityLabel("Saturation")
         let vignette = NSSlider(value: node.style.vignette, minValue: 0, maxValue: 1, target: nil, action: nil)
         vignette.setAccessibilityLabel("Vignette strength")
+        let effectKinds: [SceneNode.Style.Effect.Kind] = [.blur, .bloom, .exposure, .saturation, .vignette]
+        let effectRows: [(NSPopUpButton, NSTextField)] = (0..<8).map { index in
+            let kind = NSPopUpButton(frame: .zero, pullsDown: false)
+            kind.addItems(withTitles: ["None", "Blur", "Bloom", "Exposure", "Saturation", "Vignette"])
+            let value = NSTextField(string: "")
+            if index < node.style.effects.count {
+                let effect = node.style.effects[index]
+                kind.selectItem(at: (effectKinds.firstIndex(of: effect.type) ?? 0) + 1)
+                value.stringValue = String(effect.amount)
+            }
+            kind.setAccessibilityLabel("Effect \(index + 1) type")
+            value.setAccessibilityLabel("Effect \(index + 1) amount")
+            kind.widthAnchor.constraint(equalToConstant: 150).isActive = true
+            value.widthAnchor.constraint(equalToConstant: 90).isActive = true
+            return (kind, value)
+        }
         let fields = NSStackView(views: [mask, NSTextField(labelWithString: "Exposure"), exposure,
                                         NSTextField(labelWithString: "Saturation"), saturation,
                                         NSTextField(labelWithString: "Vignette"), vignette])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 200)
+        fields.addArrangedSubview(NSTextField(labelWithString: "Effects • applied top to bottom"))
+        for (kind, value) in effectRows {
+            fields.addArrangedSubview(NSStackView(views: [kind, value]))
+        }
+        let hint = NSTextField(wrappingLabelWithString: "Blur 0–24 · Bloom 0–2 · Exposure −2–2\nSaturation 0–2 · Vignette 0–1. None skips a slot.")
+        fields.addArrangedSubview(hint)
+        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 520)
         exposure.widthAnchor.constraint(equalToConstant: 260).isActive = true
         saturation.widthAnchor.constraint(equalToConstant: 260).isActive = true
         vignette.widthAnchor.constraint(equalToConstant: 260).isActive = true
@@ -907,7 +929,19 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                   ev.isFinite, (-2...2).contains(ev), sat.isFinite, (0...2).contains(sat) else {
                 self.detailLabel.stringValue = "Use exposure −2…2 and saturation 0…2."; return
             }
+            var effects: [SceneNode.Style.Effect] = []
+            for (kind, value) in effectRows where kind.indexOfSelectedItem > 0 {
+                guard let amount = Double(value.stringValue), amount.isFinite else {
+                    self.detailLabel.stringValue = "Every enabled effect needs a finite amount."; return
+                }
+                let effect = SceneNode.Style.Effect(type: effectKinds[kind.indexOfSelectedItem - 1], amount: amount)
+                guard effect.range.contains(amount) else {
+                    self.detailLabel.stringValue = "Effect amount is outside its supported range."; return
+                }
+                effects.append(effect)
+            }
             node.style = .init(mask: mask.indexOfSelectedItem == 1 ? .ellipse : nil, exposure: ev, saturation: sat, vignette: vignette.doubleValue)
+            node.style.effects = effects
             self.editor.replaceSelected(node, name: "Change Appearance")
         }
     }
@@ -1216,7 +1250,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func showAudioSample() {
         guard mayDiscard() else { return }
         showSample()
-        let node = SceneNode(name: "Audio Glow", content: .gradient)
+        var node = SceneNode(name: "Audio Glow", content: .gradient)
+        node.style.effects = [.init(type: .exposure, amount: 0.8), .init(type: .bloom, amount: 0.9)]
         let audio = SceneDescriptor(title: "Audio Aurora", nodes: [node], parameters: ["gain": .init(name: "Audio Sensitivity", value: 1, min: 0.1, max: 4)], bindings: [
             .init(target: .init(nodeID: node.id, property: .exposure), scale: 6, signal: .audioBass,
                   modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: -0.5)], smoothing: 0.08),
