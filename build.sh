@@ -6,7 +6,9 @@ BUILD="$ROOT/build"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 MIN_MACOS="${MIN_MACOS:-14.0}"
 CONFIG="${CONFIG:-debug}"
-ARCHS="${ARCHS:-arm64 x86_64}"
+# Idlesse is currently developed/tested on Apple Silicon. Override ARCHS later
+# (for example: ARCHS="arm64 x86_64") when we actually need a universal build.
+ARCHS="${ARCHS:-arm64}"
 
 SAVER="$BUILD/Idlesse.saver"
 APP="$BUILD/Idlesse.app"
