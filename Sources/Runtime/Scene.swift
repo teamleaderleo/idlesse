@@ -18,7 +18,7 @@ struct SceneDescriptor: Sendable {
 }
 
 struct SceneNode: Sendable {
-    var id = UUID() // Document-local identity, preserved by edits and undo.
+    var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
     indirect enum Content: Sendable { case image(URL), video(URL), gradient, group([SceneNode]) }
     struct Transform: Decodable, Sendable {
         let x: Double?
@@ -92,6 +92,7 @@ struct LocalSceneSource: SceneSource {
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
+            let id: UUID?
             let style: SceneNode.Style?
             let children: [Node]?
             let name: String?
@@ -150,7 +151,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...5).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...6).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -188,11 +189,69 @@ struct LocalSceneSource: SceneSource {
             }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
-            return SceneNode(style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            guard manifest.version < 6 || node.id != nil else { throw SceneError.invalid("Every v6 node needs a UUID id.") }
+            return SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
         return SceneDescriptor(title: manifest.title, nodes: nodes)
+    }
+}
+
+/// A typed, serializable target shared by future controls and animation tracks.
+struct ScenePropertyAddress: Codable, Sendable, Equatable {
+    enum Property: String, Codable, Sendable, CaseIterable {
+        case x = "transform.x", y = "transform.y", scale = "transform.scale", rotation = "transform.rotation"
+        case opacity, exposure = "style.exposure", saturation = "style.saturation", vignette = "style.vignette"
+        var range: ClosedRange<Double> {
+            switch self {
+            case .x, .y, .exposure: return -2...2
+            case .scale: return 0.05...4
+            case .rotation: return -360...360
+            case .opacity, .vignette: return 0...1
+            case .saturation: return 0...2
+            }
+        }
+    }
+    let nodeID: UUID
+    let property: Property
+
+    func value(in nodes: [SceneNode]) throws -> Double {
+        guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else {
+            throw SceneError.invalid("The property target no longer exists.")
+        }
+        switch property {
+        case .x: return node.transform.x ?? 0
+        case .y: return node.transform.y ?? 0
+        case .scale: return node.transform.scale ?? 1
+        case .rotation: return node.transform.rotation ?? 0
+        case .opacity: return node.opacity
+        case .exposure: return node.style.exposure
+        case .saturation: return node.style.saturation
+        case .vignette: return node.style.vignette
+        }
+    }
+
+    /// Reject invalid values before mutation; bindings must explicitly clamp their output.
+    func set(_ value: Double, in nodes: inout [SceneNode]) throws {
+        guard value.isFinite, property.range.contains(value) else {
+            throw SceneError.invalid("The property value is outside its supported range.")
+        }
+        guard SceneTree.edit(nodeID, in: &nodes, { siblings, index in
+            var node = siblings[index]
+            let t = node.transform
+            switch property {
+            case .x: node.transform = .init(x: value, y: t.y, scale: t.scale, rotation: t.rotation)
+            case .y: node.transform = .init(x: t.x, y: value, scale: t.scale, rotation: t.rotation)
+            case .scale: node.transform = .init(x: t.x, y: t.y, scale: value, rotation: t.rotation)
+            case .rotation: node.transform = .init(x: t.x, y: t.y, scale: t.scale, rotation: value)
+            case .opacity: node.opacity = value
+            case .exposure: node.style.exposure = value
+            case .saturation: node.style.saturation = value
+            case .vignette: node.style.vignette = value
+            }
+            siblings[index] = node
+        }) else { throw SceneError.invalid("The property target no longer exists.") }
     }
 }
 
@@ -248,7 +307,7 @@ enum ScenePackageWriter {
         var retained = Set<String>()
         func encode(_ node: SceneNode) throws -> [String: Any] {
             try Task.checkCancellation()
-            var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity, "visible": node.visible, "locked": node.locked,
+            var json: [String: Any] = ["id": node.id.uuidString, "type": node.kind.rawValue, "opacity": node.opacity, "visible": node.visible, "locked": node.locked,
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
             if let name = node.name { json["name"] = name }
@@ -272,7 +331,7 @@ enum ScenePackageWriter {
             return json
         }
         let nodes = try scene.nodes.map(encode)
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.style.vignette != 0 } ? 5 : scene.requiresMetal ? 4 : scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": 6, "title": scene.title, "capabilities": []] as [String: Any]),
                              ("scene.json", ["nodes": nodes])] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

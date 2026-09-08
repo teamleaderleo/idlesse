@@ -1,4 +1,24 @@
-# Idlesse scenes, version 1
+# Idlesse scenes
+
+## Persistent identities (version 6)
+
+Studio saves v6 packages. Every node, including groups and nested children, has an
+`id` containing a UUID string. Missing, malformed, or duplicate IDs reject the
+package. Save and Save As preserve IDs; duplicating a layer assigns fresh IDs to
+its entire subtree. IDs are scoped to a scene, so separate copies may share IDs.
+Versions 1–5 still load and receive fresh IDs, which become persistent on saving.
+Older Idlesse builds reject v6 rather than silently losing identities.
+
+The runtime's `ScenePropertyAddress` encodes a target as
+`{"nodeID":"7F2A0000-0000-4000-8000-000000000001","property":"transform.x"}`.
+Supported scalar properties are transform x/y/scale/rotation, opacity, and style
+exposure/saturation/vignette. Reads and writes resolve recursively by UUID.
+Missing targets and nonfinite/out-of-range writes fail without mutation. This is
+an internal foundation; package bindings, parameters, and animation UI are not
+implemented yet. Persistent identity alone does not change the host's hot-reload
+replacement behavior or synchronize video playback.
+
+## Basic package (version 1)
 
 The desktop app can open an inspectable `.idlesse` directory from Wallpaper… or
 as a document. `Examples/Aurora.idlesse` is a template; supply its video asset.
@@ -110,7 +130,7 @@ Version 5 adds optional `style.vignette`: a finite strength from 0 to 1, default
 It darkens RGB radially in the node's local canvas, leaving alpha and the center
 unchanged. On a group it affects the composed subtree once. It shares the existing
 Metal shading pass and allocates no additional textures. Nonzero vignette requires
-v5; the writer retains earlier versions when this effect is unused. See
+v5 or later. See
 `Examples/VignetteAurora.idlesse` for a minimal editable sample.
 
 V4 adds optional `style` to any node, including a group:
@@ -122,7 +142,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-saving writes v4 for non-neutral mask/color styles, or v5 when vignette is nonzero.
+Studio now saves all scenes as v6 to preserve layer identities.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR
