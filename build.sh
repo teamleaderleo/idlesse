@@ -12,6 +12,7 @@ ARCHS="${ARCHS:-arm64}"
 
 SAVER="$BUILD/Idlesse.saver"
 APP="$BUILD/Idlesse.app"
+TAHOE_DIAG="$HOME/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/idlesse-diag.log"
 
 SHARED_SOURCES=(
   "$ROOT/Sources/Shared/Preferences.swift"
@@ -134,12 +135,27 @@ case "${1:-all}" in
     rm -rf "$SAVER_DEST/Idlesse.saver"
     cp -R "$SAVER" "$SAVER_DEST/Idlesse.saver"
 
+    rm -f "$TAHOE_DIAG" 2>/dev/null || true
     killall legacyScreenSaver 2>/dev/null || true
 
     log "Installed screen saver: $SAVER_DEST/Idlesse.saver"
     log "macOS 26: System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse."
-    log "Selecting Idlesse should surface Idlesse Settings from the saver host."
+    log "First-time setup may surface Idlesse Settings from the saver host."
+    log "For Tahoe Options diagnostics after one click, run: ./build.sh diagnose"
     open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
+    ;;
+  diagnose)
+    if [[ -f "$TAHOE_DIAG" ]]; then
+      tail -n 200 "$TAHOE_DIAG"
+    else
+      echo "No Tahoe Idlesse diagnostic log found at:"
+      echo "$TAHOE_DIAG"
+      echo "Install Idlesse, select it in Wallpaper → Screen Saver, click Options once, then run this command again."
+    fi
+    ;;
+  clear-diagnose)
+    rm -f "$TAHOE_DIAG" 2>/dev/null || true
+    log "Cleared Tahoe diagnostic log."
     ;;
   clean)
     rm -rf "$BUILD"
