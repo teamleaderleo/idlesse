@@ -27,8 +27,11 @@ Disclosure arrows expand groups. Child layers can be named, transformed numerica
 faded, hidden, locked, duplicated, removed, and reordered among siblings without
 restarting their media. Adding a layer while a group is selected inserts it into
 that group; otherwise it inserts beside the selected layer. Undo restores selection
-and expands ancestors when needed. Canvas handles currently edit top-level layers;
-use the inspector for children.
+and expands ancestors when needed. Canvas selection, move/resize/rotate handles,
+and keyboard nudging also work on children through nested parent transforms.
+Normal clicks select the frontmost child; Option-click cycles through overlapping
+children and their groups. Hidden or locked ancestors block canvas interaction.
+Picking respects group clipping and ellipse masks; it does not inspect image alpha.
 
 **Ungroup** restores children when the group's transform, opacity and appearance
 are at their defaults. It carries visibility and locking to the children. Styled

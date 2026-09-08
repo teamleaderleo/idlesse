@@ -28,6 +28,7 @@ enum WallpaperSmoke {
         document.record(branch, name: "Rename Layer")
         precondition(!document.undoManager.canRedo && document.redoTargets.isEmpty)
         StudioWindowController.smokeTestResetRecovery()
+        SceneDragOverlay.smokeTestNestedGeometry()
         let counter = PresentedFrameCounter()
         counter.record(presentedTime: 0)
         counter.record(presentedTime: .nan)
