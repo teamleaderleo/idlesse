@@ -13,7 +13,6 @@ APP="$BUILD/Idlesse.app"
 
 SHARED_SOURCES=(
   "$ROOT/Sources/Shared/Preferences.swift"
-  "$ROOT/Sources/Shared/SettingsFile.swift"
   "$ROOT/Sources/Shared/ImageLibrary.swift"
   "$ROOT/Sources/Shared/ImageCanvasView.swift"
   "$ROOT/Sources/Shared/PhotosProbe.swift"
@@ -85,7 +84,7 @@ build_saver() {
 
 build_app() {
   local arch="$(uname -m)"
-  log "Building Idlesse.app for $arch"
+  log "Building development preview for $arch"
   rm -rf "$APP"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -108,7 +107,7 @@ build_app() {
   chmod +x "$APP/Contents/MacOS/Idlesse"
   codesign --force --sign - "$APP" >/dev/null
 
-  log "App ready: $APP"
+  log "Development preview ready: $APP"
 }
 
 case "${1:-all}" in
@@ -125,22 +124,20 @@ case "${1:-all}" in
     open "$APP"
     ;;
   install)
-    CONFIG=release "$0" all
+    CONFIG=release "$0" saver
 
     SAVER_DEST="$HOME/Library/Screen Savers"
-    APP_DEST="$HOME/Applications"
-    mkdir -p "$SAVER_DEST" "$APP_DEST"
+    mkdir -p "$SAVER_DEST"
 
-    rm -rf "$SAVER_DEST/Idlesse.saver" "$APP_DEST/Idlesse.app"
+    rm -rf "$SAVER_DEST/Idlesse.saver"
     cp -R "$SAVER" "$SAVER_DEST/Idlesse.saver"
-    cp -R "$APP" "$APP_DEST/Idlesse.app"
 
     killall legacyScreenSaver 2>/dev/null || true
 
     log "Installed screen saver: $SAVER_DEST/Idlesse.saver"
-    log "Installed settings app: $APP_DEST/Idlesse.app"
-    log "Configure Idlesse in the app. On macOS 26, System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse selects the saver."
-    open "$APP_DEST/Idlesse.app"
+    log "macOS 26: System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse."
+    log "Selecting Idlesse should surface Idlesse Settings from the saver host."
+    open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
     ;;
   clean)
     rm -rf "$BUILD"
