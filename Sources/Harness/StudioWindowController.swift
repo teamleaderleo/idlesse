@@ -1,6 +1,10 @@
 import AppKit
 import UniformTypeIdentifiers
 
+private final class StudioInspectorView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 extension StudioWindowController {
     /// Exercises recovery without opening a window or touching user media.
     static func smokeTestResetRecovery() {
@@ -111,6 +115,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private weak var editingClient: NSTextField?
     private lazy var editor = SceneEditorController(document: document)
     private let nameField = NSTextField(string: "")
+    private let pointerToggle = NSButton(checkboxWithTitle: "Enable Pointer Response", target: nil, action: nil)
     private let ungroupButton = NSButton(title: "Ungroup", target: nil, action: nil)
     private let groupButton = NSButton(title: "Group with Next Layer", target: nil, action: nil)
     private let duplicateButton = NSButton(title: "Duplicate Layer", target: nil, action: nil)
@@ -316,6 +321,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         inspector.addArrangedSubview(NSStackView(views: [
             NSButton(title: "Controls…", target: self, action: #selector(editControls)),
             NSButton(title: "Bind…", target: self, action: #selector(editBinding))]))
+        pointerToggle.target = self; pointerToggle.action = #selector(togglePointer)
+        pointerToggle.font = .systemFont(ofSize: 10)
+        inspector.addArrangedSubview(pointerToggle)
         saveCopyButton.target = self
         saveCopyButton.action = #selector(saveCopy)
         saveButton.target = self
@@ -329,7 +337,20 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
         inspector.addArrangedSubview(hint)
         inspector.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(inspector)
+        let inspectorDocument = StudioInspectorView(frame: NSRect(x: 0, y: 0, width: 160, height: inspector.fittingSize.height))
+        inspectorDocument.addSubview(inspector)
+        NSLayoutConstraint.activate([
+            inspector.topAnchor.constraint(equalTo: inspectorDocument.topAnchor),
+            inspector.leadingAnchor.constraint(equalTo: inspectorDocument.leadingAnchor),
+            inspector.widthAnchor.constraint(equalToConstant: 160)
+        ])
+        let inspectorScroll = NSScrollView()
+        inspectorScroll.hasVerticalScroller = true
+        inspectorScroll.drawsBackground = false
+        inspectorScroll.documentView = inspectorDocument
+        inspectorScroll.setAccessibilityLabel("Layer inspector")
+        inspectorScroll.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(inspectorScroll)
         canvas.wantsLayer = true
         canvas.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         canvas.layer?.cornerRadius = 12
@@ -359,10 +380,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             nodePicker.widthAnchor.constraint(equalToConstant: 230),
             nodePicker.topAnchor.constraint(equalTo: viewport.topAnchor),
             nodePicker.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
-            viewport.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -18),
-            inspector.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
-            inspector.topAnchor.constraint(equalTo: viewport.topAnchor),
-            inspector.widthAnchor.constraint(equalToConstant: 160),
+            viewport.trailingAnchor.constraint(equalTo: inspectorScroll.leadingAnchor, constant: -18),
+            inspectorScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            inspectorScroll.topAnchor.constraint(equalTo: viewport.topAnchor),
+            inspectorScroll.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
+            inspectorScroll.widthAnchor.constraint(equalToConstant: 178),
             viewport.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -18),
             controls.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
@@ -533,11 +555,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Controls", controls: next)
         }
     }
+    @objc private func togglePointer() {
+        clock.pointerEnabled = pointerToggle.state == .on
+        if renderer?.updateScene(scene) != true { rebuild() }
+        updatePlayback()
+    }
     @objc private func editBinding() {
         guard !saving, let node = editor.selectedNode, !node.locked else { return }
         let dialog = NSAlert()
         dialog.messageText = "Bind — " + node.displayName
-        dialog.informativeText = "A control overrides the property's static value. New controls use the property's range. Reusing a control links layers together. Remove restores the static value."
+        dialog.informativeText = "Output = source × scale + offset, clamped to the property range. Sine runs from −1 to 1. Pointer response needs the enable switch. Remove restores the static value."
         dialog.addButton(withTitle: "Bind"); dialog.addButton(withTitle: "Remove Binding"); dialog.addButton(withTitle: "Cancel")
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
         let properties = ScenePropertyAddress.Property.allCases
@@ -546,13 +573,20 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         property.setAccessibilityLabel("Target property")
         let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
         let keys = scene.parameters.keys.sorted()
-        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name })
+        let signals: [SceneParameterBinding.Signal] = [.time, .sine, .pointerX, .pointerY]
+        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y"])
         parameter.setAccessibilityLabel("Control")
         let name = NSTextField(string: node.displayName + " Control")
         name.setAccessibilityLabel("New control name")
-        let fields = NSStackView(views: [property, parameter, name])
+        let scale = NSTextField(string: "1")
+        let offset = NSTextField(string: "0")
+        let period = NSTextField(string: "8")
+        scale.setAccessibilityLabel("Binding scale"); offset.setAccessibilityLabel("Binding offset"); period.setAccessibilityLabel("Sine period in seconds")
+        let fields = NSStackView(views: [property, parameter, name,
+            NSTextField(labelWithString: "Scale"), scale, NSTextField(labelWithString: "Offset"), offset,
+            NSTextField(labelWithString: "Sine period (seconds)"), period])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 260)
         name.widthAnchor.constraint(equalToConstant: 280).isActive = true
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
@@ -564,7 +598,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             next.bindings.removeAll { $0.target == target }
             if response == .alertFirstButtonReturn {
                 let index = parameter.indexOfSelectedItem
-                let key = index == 0 ? UUID().uuidString : keys[index - 1]
+                guard let amount = Double(scale.stringValue), let base = Double(offset.stringValue), let seconds = Double(period.stringValue) else {
+                    self.detailLabel.stringValue = "Use numeric scale, offset and period values."; return
+                }
+                let signal = index > keys.count ? signals[index - keys.count - 1] : nil
+                let key = signal != nil ? "" : index == 0 ? UUID().uuidString : keys[index - 1]
                 if index == 0 {
                     let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !title.isEmpty, title.count <= 80 else { self.detailLabel.stringValue = "Use a control name of 1–80 characters."; return }
@@ -572,7 +610,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     next.parameters[key] = SceneParameter(name: title, value: value,
                                                           min: target.property.range.lowerBound, max: target.property.range.upperBound)
                 }
-                next.bindings.append(SceneParameterBinding(target: target, parameter: key))
+                next.bindings.append(SceneParameterBinding(target: target, parameter: key, scale: amount, offset: base, signal: signal, period: seconds))
             }
             for key in previousKeys where !next.bindings.contains(where: { $0.parameter == key }) {
                 next.parameters.removeValue(forKey: key)
@@ -871,9 +909,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 guard let self, request == self.generation else { return }
                 let previous = self.scene
                 let previousRenderer = self.renderer
+                let previousPointer = self.clock.pointerEnabled
+                if self.selectedURL != url { self.clock.pointerEnabled = false }
                 self.scene = next
                 self.rebuild()
-                guard self.renderer !== previousRenderer else { self.scene = previous; return }
+                guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; return }
+                self.pointerToggle.state = self.clock.pointerEnabled ? .on : .off
                 self.releaseImportedScopes()
                 self.scopedURL?.stopAccessingSecurityScopedResource()
                 self.scopedURL = accessed ? url : nil

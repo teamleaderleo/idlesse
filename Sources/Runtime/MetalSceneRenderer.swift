@@ -53,6 +53,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var cache: CVMetalTextureCache?
     private var inputs: [Input] = []
     private var roots: [SceneNode] = []
+    private var sourceScene: SceneDescriptor?
     private let targets = GroupTexturePool()
     var intermediateTextureBytes: Int { targets.allocatedBytes }
     private var visibleIDs: Set<UUID> {
@@ -67,6 +68,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
 
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void) throws {
+        let authored = playable
         let playable = try playable.evaluated()
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.invalid("Metal is unavailable on this Mac.")
@@ -96,6 +98,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         self.queue = queue
         self.onError = onError
         super.init()
+        sourceScene = authored
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess else {
             throw SceneError.invalid("Could not create the video texture cache.")
         }
@@ -147,7 +150,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             }
             inputs.append(input)
         }
-        diagnostics.animated = playable.animated
+        diagnostics.animated = playable.animated || authored.usesTime || (authored.usesPointer && clock.pointerEnabled)
         diagnostics.activeResources = inputs.count
         // Fail preparation before the host replaces the last working renderer.
         guard let preparedTargets = targets.acquire(device: device, size: metal.drawableSize,
@@ -236,20 +239,23 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return true
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
+        let authored = scene
         guard let scene = try? scene.evaluated() else { return false }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
         roots = scene.nodes
+        sourceScene = authored
         inputs = order.map { inputs[$0] }
         for (input, node) in zip(inputs, scene.allNodes) { input.node = node }
-        diagnostics.animated = scene.animated
+        diagnostics.animated = scene.animated || authored.usesTime || (authored.usesPointer && clock.pointerEnabled)
         setPaused(diagnostics.state != .running)
         metal.draw()
         return true
     }
     func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
+        if diagnostics.state == .running { updateSignals(currentSignals()) }
         let changed = updateVideos()
         needsFrame = needsFrame || changed
         guard needsFrame || inputs.contains(where: { visibleIDs.contains($0.node.id) && $0.node.kind == .gradient }) else {
@@ -281,6 +287,27 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         needsFrame = false
         diagnostics.frameCount += 1
     }
+    private func currentSignals() -> SceneSignals {
+        var signals = SceneSignals(time: clock.time)
+        if sourceScene?.usesPointer == true, clock.pointerEnabled, let window = metal.window {
+            let point = metal.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            signals.pointerX = min(1, max(-1, Double(point.x / max(1, metal.bounds.width) * 2 - 1)))
+            let y = Double(point.y / max(1, metal.bounds.height) * 2 - 1)
+            signals.pointerY = min(1, max(-1, metal.isFlipped ? -y : y))
+        }
+        return signals
+    }
+    private func updateSignals(_ signals: SceneSignals) {
+        guard let sourceScene, sourceScene.usesSignals,
+              let evaluated = try? sourceScene.evaluated(signals: signals, validating: false) else { return }
+        let changed = sourceScene.bindings.contains { binding in
+            (try? binding.target.value(in: roots)) != (try? binding.target.value(in: evaluated.nodes))
+        }
+        guard changed else { return }
+        roots = evaluated.nodes
+        for (input, node) in zip(inputs, evaluated.allNodes) { input.node = node }
+        needsFrame = true
+    }
     static func smokeTestGroupTextureBudget() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw SceneError.invalid("Metal unavailable") }
         let pool = GroupTexturePool()
@@ -298,7 +325,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         precondition(pool.allocatedBytes == 0)
     }
     /// Small GPU readback for tests; never used by the display loop.
-    func renderProbe() throws -> [UInt8] {
+    func renderProbe(signals: SceneSignals? = nil) throws -> [UInt8] {
+        if let signals { updateSignals(signals) }
         guard let device = metal.device, let queue else { throw SceneError.invalid("Renderer disposed.") }
         updateVideos()
         let spec = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 32, height: 32, mipmapped: false)
@@ -341,6 +369,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         metal.delegate = nil
         inputs.removeAll()
         roots.removeAll()
+        sourceScene = nil
         targets.dispose()
         if let cache { CVMetalTextureCacheFlush(cache, 0) }
         cache = nil

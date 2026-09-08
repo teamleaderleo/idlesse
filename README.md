@@ -165,6 +165,8 @@ from the running desktop. See [Studio controls and saving](docs/scene-preview.md
 sliders for the scene, with undoable Apply and saved defaults. The wallpaper menu
 offers the same controls for temporary adjustments without restarting playback.
 Try `Examples/ControlledAurora.idlesse` for adjustable brightness and edge darkness.
+Bindings also support elapsed time, sine waves, and opt-in pointer response. Try
+`Examples/BreathingAurora.idlesse` for a breathing vignette and gentle pointer tilt.
 
 ## Scene runtime
 

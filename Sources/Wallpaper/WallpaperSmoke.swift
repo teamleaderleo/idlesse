@@ -258,7 +258,26 @@ enum WallpaperSmoke {
         precondition(vignettePixels[0] < plainVignettePixels[0] / 4, "Vignette must darken corners")
         precondition(groupedMetal.intermediateTextureBytes <= retainedGroupBytes * 2,
                      "Vignette must not allocate additional group targets")
+        let breathing = SceneDescriptor(title: "Breathing", nodes: [groupNode], bindings: [
+            .init(target: .init(nodeID: groupNode.id, property: .vignette), scale: 0.5, offset: 0.5, signal: .sine, period: 4)])
+        precondition(groupedMetal.updateScene(breathing) && groupedMetal.diagnostics.animated)
+        let bright = try groupedMetal.renderProbe(signals: .init(time: 3))
+        let dark = try groupedMetal.renderProbe(signals: .init(time: 1))
+        precondition(dark[0] < bright[0] / 4, "Time signal must reach the actual compositor")
+        let reactive = SceneDescriptor(title: "Pointer", nodes: [groupNode], bindings: [
+            .init(target: .init(nodeID: groupNode.id, property: .vignette), scale: 0.5, offset: 0.5, signal: .pointerX)])
+        precondition(groupedMetal.updateScene(reactive) && !groupedMetal.diagnostics.animated)
+        sceneClock.pointerEnabled = true
+        precondition(groupedMetal.updateScene(reactive) && groupedMetal.diagnostics.animated)
+        let left = try groupedMetal.renderProbe(signals: .init(pointerX: -1))
+        let right = try groupedMetal.renderProbe(signals: .init(pointerX: 1))
+        precondition(right[0] < left[0] / 4)
+        sceneClock.pointerEnabled = false
+        precondition(groupedMetal.updateScene(reactive) && !groupedMetal.diagnostics.animated)
         groupedMetal.releaseResources()
+        // Live signal edits may leave a drawable in flight; disposal releases its
+        // leased group targets when that command completes.
+        wait { groupedMetal.intermediateTextureBytes == 0 }
         precondition(groupedMetal.intermediateTextureBytes == 0)
         let nestedGroup = SceneNode(content: .group([SceneNode(content: .group([
             SceneNode(content: .image(imageURL)), SceneNode(content: .image(imageURL))]), opacity: 0.5)]), opacity: 0.5)
