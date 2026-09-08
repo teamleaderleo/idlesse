@@ -4,7 +4,7 @@ import ScreenSaver
 @objc(IdlesseView)
 final class IdlesseView: ScreenSaverView {
     private let canvas = ImageCanvasView(frame: .zero)
-    private let preferences = IdlessePreferences.shared
+    private let preferences: IdlessePreferences
 
     private lazy var library = ImageLibrary(preferences: preferences)
     private lazy var configureController = ConfigureSheetController(preferences: preferences) { [weak self] in
@@ -20,11 +20,19 @@ final class IdlesseView: ScreenSaverView {
     private var running = false
 
     override init(frame: NSRect, isPreview: Bool) {
+        self.preferences = .saver
+        super.init(frame: frame, isPreview: isPreview)!
+        commonInit()
+    }
+
+    init(frame: NSRect, isPreview: Bool, preferences: IdlessePreferences) {
+        self.preferences = preferences
         super.init(frame: frame, isPreview: isPreview)!
         commonInit()
     }
 
     required init?(coder: NSCoder) {
+        self.preferences = .saver
         super.init(coder: coder)
         commonInit()
     }
@@ -36,14 +44,14 @@ final class IdlesseView: ScreenSaverView {
 
     override var configureSheet: NSWindow? {
         NSLog("Idlesse: configureSheet requested")
+        preferences.reload()
         configureController.reload()
 
         let optionsWindow = configureController.window
 
-        // Tahoe has a known legacyScreenSaver regression where System Settings can
-        // ask a saver for its configuration window but then fail to present that
-        // window. Give the host a chance to attach the sheet normally, then fall
-        // back to showing the very same window ourselves if it never gets a parent.
+        // Tahoe can ask for a legacy configuration window and then fail to present it.
+        // Keep the standard hook for older systems and working Tahoe builds, with a
+        // standalone fallback while the companion app remains the canonical UI.
         if #available(macOS 26.0, *) {
             optionsWindow.level = .floating
 
@@ -69,6 +77,7 @@ final class IdlesseView: ScreenSaverView {
         super.startAnimation()
         guard !running else { return }
         running = true
+        preferences.reload()
         restartSlideshow()
     }
 
@@ -79,9 +88,9 @@ final class IdlesseView: ScreenSaverView {
         super.stopAnimation()
     }
 
-    /// Used by the standalone preview harness after its own options window saves.
-    /// The real screen saver host continues to use configureSheet above.
+    /// Used by the companion app after its settings window saves.
     func reloadFromPreferences() {
+        preferences.reload()
         restartSlideshow()
     }
 
@@ -117,7 +126,7 @@ final class IdlesseView: ScreenSaverView {
         }
 
         guard let first = library.next(excluding: nil) else {
-            canvas.message = library.lastError ?? "Choose a folder in Options…"
+            canvas.message = library.lastError ?? "Open Idlesse to choose a picture folder."
             return
         }
 
@@ -172,6 +181,14 @@ final class IdlesseView: ScreenSaverView {
 
     private func refreshLibrary() {
         guard running else { return }
+
+        // The companion app writes the same settings file the saver reads. Pick up
+        // changes while the saver is already running without waiting for a relaunch.
+        if preferences.reloadIfChanged() {
+            restartSlideshow()
+            return
+        }
+
         guard library.refreshIfChanged(currentURL: currentURL) else { return }
 
         if library.count == 0 {
@@ -190,8 +207,6 @@ final class IdlesseView: ScreenSaverView {
 
         canvas.message = nil
 
-        // If the saver had been sitting on an empty folder, begin as soon as an image
-        // appears. Otherwise keep the currently rendered image until its normal timer ends.
         if canvas.currentImage == nil, let first = library.next(excluding: nil) {
             currentURL = first.url
             canvas.currentImage = first.image
