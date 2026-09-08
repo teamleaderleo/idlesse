@@ -4,6 +4,25 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        var viewport = TimelineViewport()
+        viewport.resize(to: 10)
+        precondition(viewport.start == 0 && viewport.span == 10)
+        viewport.zoom(0.5, around: 5)
+        precondition(viewport.start == 2.5 && viewport.span == 5)
+        viewport.pan(10)
+        precondition(viewport.start == 5)
+        viewport.pan(-10)
+        precondition(viewport.start == 0)
+        viewport.resize(to: 2)
+        precondition(viewport.start == 0 && viewport.span == 2)
+        viewport.resize(to: 0.01)
+        viewport.zoom(0.5, around: 0)
+        precondition(viewport.span == 0.01 && viewport.start == 0)
+        viewport.resize(to: 10)
+        for _ in 0..<20 { viewport.zoom(0.5, around: 5) }
+        precondition(viewport.span == 0.1 && viewport.start >= 0 && viewport.start + viewport.span <= 10)
+        viewport.fit()
+        precondition(viewport.start == 0 && viewport.span == 10)
         let document = SceneDocument()
         var allowUndo = true
         document.prepareRestore = { _ in allowUndo }

@@ -206,7 +206,7 @@ Studio and desktop apply authored playback on selection. A changed authored time
 
 ### Curve editing
 
-The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. With the curve focused, Command-C copies the whole track and Command-V replaces the destination track in one Undo step. Return opens precise time/value editing; Up/Down nudge value by 0.01 (Shift: 1). Timeline zoom and multi-key selection remain pending. Smoothing and experimental video transport are described below.
+The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. With the curve focused, Command-C copies the whole track and Command-V replaces the destination track in one Undo step. Return opens precise time/value editing; Up/Down nudge value by 0.01 (Shift: 1). Timeline zoom is described below; multi-key selection remains pending. Smoothing and experimental video transport are described below.
 
 
 ### Signal smoothing (V12)
@@ -242,3 +242,16 @@ explicitly clear or replace the stack with a control multiplier.
 
 Completed Once scenes stop timed Metal drawing when there is no independent video,
 enabled pointer driver, or smoothing requiring updates. Scrubbing restarts scheduling.
+
+### Timeline navigation
+
+The track row has Zoom In/Out, Fit, and earlier/later buttons. Zoom is centered
+on the playhead when it is visible and on the nearest visible edge otherwise.
+The range label shows the visible seconds; the transport slider still spans the
+whole scene. Scroll over the curve to pan and pinch to zoom. Fit restores the
+entire duration. Navigation changes no document data, Undo history, or playback.
+
+The visible interval is bounded by the scene duration and zooms down to 0.1 seconds
+(or the whole duration for shorter scenes). A duration change constrains the interval.
+The curve samples only the visible interval with the same bounded sample count.
+The playhead marker uses Studio's existing status updates; no extra render timer.
