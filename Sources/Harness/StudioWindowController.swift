@@ -139,6 +139,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let frameRate = NSPopUpButton()
     private let applyButton = NSButton(title: "Use on Desktop", target: nil, action: nil)
     private let nodePicker = SceneLayerList()
+    private let timeline = SceneTimelineView(frame: .zero)
     private var transformFields: [NSTextField] = []
     private let saveCopyButton = NSButton(title: "Save As…", target: nil, action: nil)
     private var draft: Bool { get { document.draft } set { document.draft = newValue } }
@@ -367,7 +368,21 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         viewport.hasVerticalScroller = true
         viewport.backgroundColor = .underPageBackgroundColor
         viewport.setAccessibilityLabel("Scene canvas; pinch to zoom and scroll to pan")
-        for child in [heading, viewport, controls, frameRate] {
+        timeline.onSeek = { [weak self] time in
+            guard let self, self.renderer is MetalSceneRenderer else { return }
+            self.paused = true; self.updatePlayback()
+            do { try self.clock.seek(to: time); self.renderer?.refreshSceneTime(); self.updateTimeline() }
+            catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+        timeline.onLoop = { [weak self] end in
+            guard let self, self.renderer is MetalSceneRenderer else { return }
+            do {
+                try self.clock.configure(time: 0, rate: self.clock.playbackRate, loop: 0..<end)
+                self.renderer?.refreshSceneTime(); self.updateTimeline()
+                self.detailLabel.stringValue = "Loop set to 0–\(end) seconds. Resume to play; Time… changes or disables it."
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+        for child in [heading, viewport, controls, frameRate, timeline] {
             child.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(child)
         }
@@ -388,7 +403,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             inspectorScroll.topAnchor.constraint(equalTo: viewport.topAnchor),
             inspectorScroll.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
             inspectorScroll.widthAnchor.constraint(equalToConstant: 178),
-            viewport.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -18),
+            viewport.bottomAnchor.constraint(equalTo: timeline.topAnchor, constant: -12),
+            timeline.leadingAnchor.constraint(equalTo: viewport.leadingAnchor),
+            timeline.trailingAnchor.constraint(equalTo: viewport.trailingAnchor),
+            timeline.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -12),
             controls.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
         ])
@@ -443,6 +461,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         updatePlayback()
     }
     private func updateInspector() {
+        updateTimeline()
         let selected = max(0, nodePicker.indexOfSelectedItem)
         nodePicker.removeAllItems()
         nodePicker.setNodes(scene.nodes)
@@ -568,7 +587,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let dialog = NSAlert()
         dialog.messageText = "Keyframes — " + node.displayName
         dialog.informativeText = "Enter time:value pairs separated by commas (seconds). Replaces the selected property's binding. Use Time… to seek or loop; video remains independent."
-        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Remove Track"); dialog.addButton(withTitle: "Cancel")
         let properties = ScenePropertyAddress.Property.allCases
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
         property.addItems(withTitles: properties.map(\.rawValue))
@@ -582,11 +601,36 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let stack = NSStackView(views: [property, interpolation, values])
         stack.orientation = .vertical; stack.alignment = .leading
         stack.frame = NSRect(x: 0, y: 0, width: 380, height: 100)
+        let selectionAction = StudioControlAction()
+        selectionAction.perform = { [weak self] in
+            guard let self else { return }
+            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            if let track = self.scene.bindings.first(where: { $0.target == target })?.keyframes {
+                values.stringValue = track.keys.map { "\($0.time):\($0.value)" }.joined(separator: ", ")
+                interpolation.selectItem(at: track.interpolation == .linear ? 0 : track.interpolation == .hold ? 1 : 2)
+            } else {
+                let value = (try? target.value(in: self.scene.nodes)) ?? 0
+                values.stringValue = "0:\(value), 3:\(value)"
+                interpolation.selectItem(at: 0)
+            }
+        }
+        property.target = selectionAction; property.action = #selector(StudioControlAction.changed)
+        if let existing = scene.bindings.first(where: { $0.target.nodeID == node.id && $0.keyframes != nil }),
+           let index = properties.firstIndex(of: existing.target.property) { property.selectItem(at: index) }
+        selectionAction.perform()
         dialog.accessoryView = stack
         dialog.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .alertFirstButtonReturn, !self.saving,
+            _ = selectionAction // Retain the popup target through the sheet lifetime.
+            guard let self, response != .alertThirdButtonReturn, !self.saving,
                   self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
             do {
+                let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+                if response == .alertSecondButtonReturn {
+                    var next = self.scene
+                    next.bindings.removeAll { $0.target == target && $0.keyframes != nil }
+                    _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Remove Keyframes", controls: next)
+                    return
+                }
                 let entries = values.stringValue.split(separator: ",", omittingEmptySubsequences: false)
                 guard entries.count <= 128 else { throw SceneError.invalid("Use at most 128 keys.") }
                 let keys = try entries.map { entry -> SceneKeyframeTrack.Key in
@@ -601,9 +645,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 let modes: [SceneKeyframeTrack.Interpolation] = [.linear, .hold, .easeInOut]
                 let track = SceneKeyframeTrack(interpolation: modes[interpolation.indexOfSelectedItem], keys: keys)
                 var next = self.scene
-                let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+                let existing = next.bindings.first { $0.target == target && $0.keyframes != nil }
                 next.bindings.removeAll { $0.target == target }
-                next.bindings.append(.init(target: target, keyframes: track))
+                var binding = existing ?? SceneParameterBinding(target: target)
+                binding.keyframes = track
+                next.bindings.append(binding)
                 _ = try next.evaluated()
                 _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Set Keyframes", controls: next)
             } catch { self.detailLabel.stringValue = error.localizedDescription }
@@ -901,7 +947,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         measureButton.isEnabled = false
         measureButton.title = "Measuring…"
     }
+    private func updateTimeline() {
+        timeline.update(scene: scene, selectedID: editor.selectedNode?.id, time: clock.time, enabled: renderer is MetalSceneRenderer)
+    }
     private func updatePerformance() {
+        updateTimeline()
         performanceLabel.stringValue = host.performanceText()
         measureButton.isEnabled = measurement == nil && renderer?.diagnostics.state == .running && renderer?.diagnostics.animated == true && renderer?.gpuTotals != nil
         if measurementResult != nil { measureButton.title = "Measure Again" }
@@ -947,6 +997,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 }
                 try self.clock.configure(time: time, rate: speed, loop: range)
                 self.renderer?.refreshSceneTime()
+                self.updateTimeline()
                 self.detailLabel.stringValue = "Scene transport updated; video playback is independent."
             } catch { self.detailLabel.stringValue = error.localizedDescription }
         }
@@ -1014,6 +1065,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 self.scene = next
                 self.rebuild()
                 guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; return }
+                if self.selectedURL != url {
+                    try self.clock.configure(time: 0, rate: 1, loop: nil)
+                    self.renderer?.refreshSceneTime()
+                }
                 self.pointerToggle.state = self.clock.pointerEnabled ? .on : .off
                 self.releaseImportedScopes()
                 self.scopedURL?.stopAccessingSecurityScopedResource()
