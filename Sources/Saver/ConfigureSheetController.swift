@@ -13,7 +13,7 @@ final class ConfigureSheetController: NSObject {
     private let scalingPopup = NSPopUpButton()
     private let backgroundColorWell = NSColorWell()
     private let multiDisplayPopup = NSPopUpButton()
-    private let shuffleButton = NSButton(checkboxWithTitle: "Random order", target: nil, action: nil)
+    private let orderingPopup = NSPopUpButton()
     private let subfoldersButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
 
     private var pendingFolderURL: URL?
@@ -22,7 +22,7 @@ final class ConfigureSheetController: NSObject {
         self.preferences = preferences
         self.onSave = onSave
         self.window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 455),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 485),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -55,7 +55,7 @@ final class ConfigureSheetController: NSObject {
         scalingPopup.selectItem(withTitle: preferences.scalingMode.title)
         backgroundColorWell.color = preferences.backgroundColor
         multiDisplayPopup.selectItem(withTitle: preferences.multiDisplayMode.title)
-        shuffleButton.state = preferences.shuffle ? .on : .off
+        orderingPopup.selectItem(withTitle: preferences.playbackOrder.title)
         subfoldersButton.state = preferences.includeSubfolders ? .on : .off
     }
 
@@ -121,7 +121,9 @@ final class ConfigureSheetController: NSObject {
         multiDisplayPopup.addItems(withTitles: IdlesseMultiDisplayMode.allCases.map(\.title))
         root.addArrangedSubview(makeRow(label: "Displays", control: multiDisplayPopup))
 
-        root.addArrangedSubview(shuffleButton)
+        orderingPopup.addItems(withTitles: IdlessePlaybackOrder.allCases.map(\.title))
+        root.addArrangedSubview(makeRow(label: "Order", control: orderingPopup))
+
         root.addArrangedSubview(subfoldersButton)
 
         let spacer = NSView()
@@ -195,7 +197,6 @@ final class ConfigureSheetController: NSObject {
 
         preferences.displayDuration = max(1, durationField.doubleValue * multiplier)
         preferences.transitionDuration = max(0, transitionField.doubleValue)
-        preferences.shuffle = shuffleButton.state == .on
         preferences.includeSubfolders = subfoldersButton.state == .on
         preferences.backgroundColor = backgroundColorWell.color
 
@@ -207,6 +208,11 @@ final class ConfigureSheetController: NSObject {
         if let title = multiDisplayPopup.titleOfSelectedItem,
            let mode = IdlesseMultiDisplayMode.allCases.first(where: { $0.title == title }) {
             preferences.multiDisplayMode = mode
+        }
+
+        if let title = orderingPopup.titleOfSelectedItem,
+           let order = IdlessePlaybackOrder.allCases.first(where: { $0.title == title }) {
+            preferences.playbackOrder = order
         }
 
         preferences.save()
