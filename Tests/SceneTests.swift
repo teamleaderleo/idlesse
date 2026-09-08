@@ -142,6 +142,47 @@ import Foundation
         precondition(sceneResourceOrder(from: [firstNode, secondNode], to: [secondNode, firstNode]) == [1, 0])
         precondition(sceneResourceOrder(from: [firstNode, secondNode], to: [firstNode, firstNode]) == nil)
         precondition(sceneResourceOrder(from: [firstNode], to: [secondNode]) == nil)
+        let group = SceneNode(name: "Environment", content: .group([firstNode, secondNode]), opacity: 0.5)
+        let groupedPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: groupedPackage) }
+        try ScenePackageWriter.write(SceneDescriptor(title: "Grouped", nodes: [group]), to: groupedPackage)
+        let grouped = try await source.resolve(groupedPackage)
+        precondition(grouped.nodes[0].kind == .group && grouped.nodes[0].children.count == 2 && grouped.nodes[0].opacity == 0.5)
+        let duplicate = group.duplicated()
+        precondition(Set((group.descendants + duplicate.descendants).map { $0.id }).count == 6)
+        var renamedGroup = group
+        renamedGroup.name = "Changed"
+        precondition(sceneResourceOrder(from: [group], to: [renamedGroup]) == [0])
+        renamedGroup.content = .group([SceneNode(content: .gradient)])
+        precondition(sceneResourceOrder(from: [group], to: [renamedGroup]) == nil)
+        let nested = SceneNode(content: .group([group]))
+        try SceneBudget.validate([nested])
+        for invalid in [[SceneNode(content: .group([]))], [SceneNode(content: .group([nested]))],
+                        [SceneNode(content: .group(sixteen))]] {
+            do { try SceneBudget.validate(invalid); fatalError("Accepted invalid group budget") } catch is SceneError {}
+        }
+        let groupedImages = [SceneNode(content: .group(Array(sixteen.prefix(7)))), SceneNode(content: .group(Array(sixteen.suffix(7))))]
+        try SceneBudget.validate(groupedImages)
+        precondition(SceneBudget.imagePixels(groupedImages) == 32_000_000 / 14)
+        let mediaGroup = SceneDescriptor(title: "Media", nodes: [SceneNode(content: .group([sixteen[0]]))])
+        let mediaPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: mediaPackage) }
+        try ScenePackageWriter.write(mediaGroup, to: mediaPackage)
+        let loadedMedia = try await source.resolve(mediaPackage)
+        precondition(loadedMedia.allNodes.count == 2 && loadedMedia.allNodes.compactMap { $0.assetURL }.count == 1)
+        let savedAsset = loadedMedia.allNodes.compactMap { $0.assetURL }[0]
+        let mediaRevision = try ScenePackageWriter.revision(of: mediaPackage)
+        try ScenePackageWriter.write(loadedMedia, to: mediaPackage, replacing: mediaRevision)
+        precondition(FileManager.default.fileExists(atPath: savedAsset.path))
+        let secondRevision = try ScenePackageWriter.revision(of: mediaPackage)
+        try ScenePackageWriter.write(SceneDescriptor(title: "Replacement", nodes: [SceneNode(content: .gradient)]), to: mediaPackage, replacing: secondRevision)
+        precondition(!FileManager.default.fileExists(atPath: savedAsset.path), "Removed nested assets must be pruned")
+        let size = SceneBudget.groupTargetSize(width: 7680, height: 4320, count: 4)!
+        precondition(size.width * size.height * 4 * 4 * 2 <= SceneBudget.intermediateTextureBytes)
+        precondition(size.width < 7680 && abs(Double(size.width) / Double(size.height) - 16.0 / 9) < 0.01)
+        precondition(SceneBudget.groupTargetSize(width: .infinity, height: 1, count: 1) == nil)
+        try Data(#"{"version":2,"title":"Old format","capabilities":[]}"#.utf8).write(to: groupedPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(groupedPackage); fatalError("Accepted groups in v2") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
     }
 }

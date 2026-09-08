@@ -21,11 +21,17 @@ final class SceneEditorController {
     func duplicate() {
         guard document.scene.nodes.count < SceneBudget.maxNodes, document.scene.nodes.indices.contains(selection) else { return }
         var nodes = document.scene.nodes
-        var copy = nodes[selection]
-        copy.id = UUID()
+        var copy = nodes[selection].duplicated()
         copy.name = copy.displayName + " Copy"
         nodes.insert(copy, at: selection + 1)
         _ = commit?(nodes, selection + 1, "Duplicate Layer")
+    }
+    func groupWithNext() {
+        var nodes = document.scene.nodes
+        guard nodes.indices.contains(selection), nodes.indices.contains(selection + 1) else { return }
+        let group = SceneNode(name: "Group", content: .group(Array(nodes[selection...selection + 1])))
+        nodes.replaceSubrange(selection...selection + 1, with: [group])
+        _ = commit?(nodes, selection, "Group Layers")
     }
     func toggleVisibility(_ index: Int) {
         guard document.scene.nodes.indices.contains(index) else { return }

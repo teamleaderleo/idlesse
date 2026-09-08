@@ -2,12 +2,13 @@ import Foundation
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Sendable {
-    enum Kind: String, Codable, Sendable { case image, video, gradient }
+    enum Kind: String, Codable, Sendable { case image, video, gradient, group }
     let title: String
     let nodes: [SceneNode]
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
-    var animated: Bool { nodes.contains { $0.kind != .image } }
+    var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
+    var animated: Bool { nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
@@ -17,7 +18,7 @@ struct SceneDescriptor: Sendable {
 
 struct SceneNode: Sendable {
     var id = UUID() // Document-local identity, preserved by edits and undo.
-    enum Content: Sendable { case image(URL), video(URL), gradient }
+    indirect enum Content: Sendable { case image(URL), video(URL), gradient, group([SceneNode]) }
     struct Transform: Decodable, Sendable {
         let x: Double?
         let y: Double?
@@ -26,17 +27,26 @@ struct SceneNode: Sendable {
         static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
     }
     var name: String? = nil
-    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? "Gradient" }
-    let content: Content
+    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : "Gradient") }
+    var content: Content
     var visible = true
     var locked = false
     var opacity: Double = 1
     var transform: Transform = .identity
     var kind: SceneDescriptor.Kind {
-        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient }
+        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group }
+    }
+    var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
+    var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
+    var animated: Bool { visible && (kind == .group ? children.contains { $0.animated } : kind != .image) }
+    func duplicated() -> SceneNode {
+        var copy = self
+        copy.id = UUID()
+        if kind == .group { copy.content = .group(children.map { $0.duplicated() }) }
+        return copy
     }
     var assetURL: URL? {
-        switch content { case .image(let url), .video(let url): return url; case .gradient: return nil }
+        switch content { case .image(let url), .video(let url): return url; case .gradient, .group: return nil }
     }
 }
 
@@ -61,6 +71,7 @@ struct LocalSceneSource: SceneSource {
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
+            let children: [Node]?
             let name: String?
             let type: SceneDescriptor.Kind
             let asset: String?
@@ -117,15 +128,16 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...2).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...3).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
               (1...SceneBudget.maxNodes).contains(descriptions.count) else {
-            throw SceneError.invalid("Use 1–16 layers in v1, or nodes in v2.")
+            throw SceneError.invalid("Use 1–16 layers in v1, or nodes in v2/v3.")
         }
-        let nodes = try descriptions.map { node -> SceneNode in
+        func decode(_ node: Scene.Node, depth: Int) throws -> SceneNode {
+            guard depth <= SceneBudget.maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
             let opacity = node.opacity ?? 1
             let transform = node.transform ?? .identity
             guard opacity.isFinite, (0...1).contains(opacity),
@@ -135,11 +147,16 @@ struct LocalSceneSource: SceneSource {
                 throw SceneError.invalid("Invalid opacity or transform; use finite values within the scene limits.")
             }
             let content: SceneNode.Content
-            if node.type == .gradient {
-                guard manifest.version == 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
+            if node.type == .group {
+                guard manifest.version == 3, node.asset == nil, let children = node.children, !children.isEmpty else {
+                    throw SceneError.invalid("Groups require v3, nonempty children, and no asset.")
+                }
+                content = .group(try children.map { try decode($0, depth: depth + 1) })
+            } else if node.type == .gradient {
+                guard node.children == nil, manifest.version >= 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
                 content = .gradient
             } else {
-                guard let path = node.asset else { throw SceneError.invalid("Media nodes need an asset.") }
+                guard node.children == nil, let path = node.asset else { throw SceneError.invalid("Media nodes need an asset.") }
                 let asset = try contained(path, in: root)
                 guard try kind(asset) == node.type else { throw SceneError.invalid("The asset does not match its node type.") }
                 guard try asset.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
@@ -149,6 +166,7 @@ struct LocalSceneSource: SceneSource {
             }
             return SceneNode(name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
+        let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
         return SceneDescriptor(title: manifest.title, nodes: nodes)
     }
@@ -203,8 +221,8 @@ enum ScenePackageWriter {
             throw SceneError.invalid("The package assets folder must be a real directory.")
         }
         try files.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
-        var nodes: [[String: Any]] = []
-        for (index, node) in scene.nodes.enumerated() {
+        var retained = Set<String>()
+        func encode(_ node: SceneNode) throws -> [String: Any] {
             try Task.checkCancellation()
             var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity, "visible": node.visible, "locked": node.locked,
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
@@ -217,14 +235,17 @@ enum ScenePackageWriter {
                 if expected != nil, path.hasPrefix(root) {
                     relative = String(path.dropFirst(root.count))
                 } else {
-                    relative = "assets/\(UUID().uuidString)-\(index).\(source.pathExtension.lowercased())"
+                    relative = "assets/\(UUID().uuidString).\(source.pathExtension.lowercased())"
                     try files.copyItem(at: source, to: staging.appendingPathComponent(relative))
                 }
                 json["asset"] = relative
+                retained.insert(relative)
             }
-            nodes.append(json)
+            if node.kind == .group { json["children"] = try node.children.map(encode) }
+            return json
         }
-        for (name, json) in [("manifest.json", ["version": 2, "title": scene.title, "capabilities": []] as [String: Any]),
+        let nodes = try scene.nodes.map(encode)
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.kind == .group } ? 3 : 2, "title": scene.title, "capabilities": []] as [String: Any]),
                              ("scene.json", ["nodes": nodes])] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -239,8 +260,7 @@ enum ScenePackageWriter {
             // by this edit. Preserve ancillary files, previews, and unrelated assets.
             let previous = try LocalSceneSource.read(destination)
             let root = destination.resolvingSymlinksInPath().path + "/"
-            let retained = Set(nodes.compactMap { $0["asset"] as? String })
-            for asset in previous.nodes.compactMap({ $0.assetURL }) {
+            for asset in previous.allNodes.compactMap({ $0.assetURL }) {
                 let path = asset.resolvingSymlinksInPath().path
                 if path.hasPrefix(root) {
                     let relative = String(path.dropFirst(root.count))
@@ -272,6 +292,7 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
     for node in new {
         guard let index = old.firstIndex(where: { $0.id == node.id }),
               old[index].kind == node.kind, old[index].assetURL == node.assetURL else { return nil }
+        if node.kind == .group, sceneResourceOrder(from: old[index].children, to: node.children) == nil { return nil }
         order.append(index)
     }
     return order
@@ -279,16 +300,42 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
 
 /// Per-display retained image allowance; video decoder and drawable memory are separate.
 enum SceneBudget {
+    static let maxGroups = 4
+    static let maxGroupDepth = 2
+    static let intermediateTextureBytes = 128 * 1024 * 1024
     static let maxNodes = 16
     static let maxVideos = 2
     static let maxGradients = 4
     static let decodedImagePixels = 32_000_000
-    static func validate(_ nodes: [SceneNode]) throws {
+    static func validate(_ roots: [SceneNode]) throws {
+        func walk(_ nodes: [SceneNode], depth: Int) throws -> [SceneNode] {
+            guard depth <= maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
+            var result: [SceneNode] = []
+            for node in nodes {
+                result.append(node)
+                if node.kind == .group {
+                    guard !node.children.isEmpty else { throw SceneError.invalid("Groups need at least one child.") }
+                    result += try walk(node.children, depth: depth + 1)
+                }
+            }
+            return result
+        }
+        let nodes = try walk(roots, depth: 0)
+        guard Set(nodes.map { $0.id }).count == nodes.count else { throw SceneError.invalid("Scene layer identities must be unique.") }
+        guard nodes.filter({ $0.kind == .group }).count <= maxGroups else { throw SceneError.invalid("A scene supports at most four groups.") }
         guard (1...maxNodes).contains(nodes.count) else { throw SceneError.invalid("A scene supports 1–16 layers.") }
         guard nodes.filter({ $0.kind == .video }).count <= maxVideos else { throw SceneError.invalid("A scene supports at most two video layers, including hidden layers.") }
         guard nodes.filter({ $0.kind == .gradient }).count <= maxGradients else { throw SceneError.invalid("A scene supports at most four gradient layers, including hidden layers.") }
     }
+    /// Two in-flight frames share a fixed byte allowance. Larger group surfaces
+    /// are reduced uniformly; images/video assets themselves are never rewritten.
+    static func groupTargetSize(width: Double, height: Double, count: Int) -> (width: Int, height: Int)? {
+        guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...maxGroups).contains(count) else { return nil }
+        let pixels = Double(intermediateTextureBytes / (2 * count) - 65_536) / 4
+        let scale = min(1, 16384 / max(width, height), sqrt(pixels / width / height))
+        return (max(1, Int(floor(width * scale))), max(1, Int(floor(height * scale))))
+    }
     static func imagePixels(_ nodes: [SceneNode]) -> Int {
-        min(16_000_000, decodedImagePixels / max(1, nodes.filter { $0.kind == .image }.count))
+        min(16_000_000, decodedImagePixels / max(1, nodes.flatMap { $0.descendants }.filter { $0.kind == .image }.count))
     }
 }

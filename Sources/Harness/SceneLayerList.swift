@@ -57,7 +57,7 @@ final class SceneLayerList: NSScrollView, NSTableViewDataSource, NSTableViewDele
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let index = names.count - 1 - row
         let node = nodes[index]
-        let icon = NSImageView(image: NSImage(systemSymbolName: node.kind == .image ? "photo" : node.kind == .video ? "film" : "sparkles", accessibilityDescription: node.kind.rawValue)!)
+        let icon = NSImageView(image: NSImage(systemSymbolName: node.kind == .image ? "photo" : node.kind == .video ? "film" : node.kind == .group ? "folder" : "sparkles", accessibilityDescription: node.kind.rawValue)!)
         let field = NSTextField(labelWithString: node.displayName)
         field.lineBreakMode = .byTruncatingMiddle
         field.toolTip = node.displayName

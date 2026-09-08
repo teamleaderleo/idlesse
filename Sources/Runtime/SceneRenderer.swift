@@ -200,8 +200,9 @@ final class LayeredSceneRenderer: SceneRenderer {
             allowsDisplaySleep: snapshots.allSatisfy { $0.allowsDisplaySleep })
     }
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
-         onError: @escaping (String) -> Void) throws {
+         onError: @escaping (String) -> Void, imagePixels: Int? = nil) throws {
         try SceneBudget.validate(playable.nodes)
+        let imagePixels = imagePixels ?? SceneBudget.imagePixels(playable.nodes)
         nodes = playable.nodes
         view = NSView(frame: bounds)
         view.wantsLayer = true
@@ -211,10 +212,14 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(SceneBudget.imagePixels(playable.nodes)))
+                    child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, onError: onError)
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
+                case .group(let nodes):
+                    child = try LayeredSceneRenderer(playable: SceneDescriptor(title: node.displayName, nodes: nodes),
+                        bounds: bounds, scale: scale, clock: clock, onError: onError, imagePixels: imagePixels)
+                    child.view.layer?.allowsGroupOpacity = true
                 }
                 child.view.alphaValue = node.visible ? node.opacity : 0
                 let container = NSView(frame: bounds)
@@ -237,6 +242,11 @@ final class LayeredSceneRenderer: SceneRenderer {
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
         guard state != .disposed, let order = sceneResourceOrder(from: nodes, to: scene.nodes) else { return false }
+        guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
+        // The recursive resource check above preflights every subtree before mutation.
+        for (index, node) in scene.nodes.enumerated() where node.kind == .group {
+            guard children[order[index]].updateScene(SceneDescriptor(title: node.displayName, nodes: node.children)) else { return false }
+        }
         let containers = view.subviews
         let reordered = order.map { containers[$0] }
         children = order.map { children[$0] }

@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"type": "gradient", "name": "Background"},
+    {
+      "type": "group", "name": "Aurora Panels", "opacity": 0.7,
+      "transform": {"scale": 0.8, "rotation": 10},
+      "children": [
+        {"type": "gradient", "name": "Left", "transform": {"x": -0.18, "scale": 0.55}},
+        {"type": "gradient", "name": "Right", "transform": {"x": 0.18, "scale": 0.55, "rotation": 15}}
+      ]
+    }
+  ]
+}

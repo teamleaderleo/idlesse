@@ -13,7 +13,7 @@ as a document. `Examples/Aurora.idlesse` is a template; supply its video asset.
 {"layers":[{"type":"video","asset":"assets/aurora.mp4"}]}
 ```
 
-One or two ordered image/video layers are supported, drawn back to front. Each
+Up to 16 ordered image/video layers are supported, drawn back to front. Each
 layer accepts optional `opacity` from 0 to 1 (default 1). Transparent image
 foregrounds preserve the content beneath them. Layers currently fill the display;
 For transforms and the new gradient node, see [scene format v2](creative-runtime.md).
@@ -43,7 +43,8 @@ renderer lifecycle checks, including a generated video scene package.
 
 ## Resource limits
 
-Scenes support 1–16 nodes, at most two videos and four gradients. Hidden nodes
+Scenes support 1–16 total nodes, including group containers and their descendants,
+at most two videos, four gradients, and four groups. Groups nest at most two levels deep. Hidden nodes
 count toward these limits. The image nodes share 32 million decoded pixels per
 display, with at most 16 million per image (roughly 128 MB of four-byte pixels
 combined, excluding framework and temporary allocations). Video decoding and
@@ -56,5 +57,47 @@ available. Both properties round-trip through Studio and participate in undo.
 
 Standard composes AppKit views; the experimental Metal compositor draws nodes
 into one surface. Static scenes do not introduce a continuous rendering timer.
-Stop releases every child renderer. Groups and intermediate effect textures are
-not implemented yet.
+Stop releases every child renderer. Metal group textures have a separate 128 MiB
+per-renderer cap, including cached targets and targets still used by the GPU.
+Standard uses Core Animation group opacity; its intermediate allocations are managed
+by macOS and do not share the Metal pool limit.
+
+
+## Groups (version 3)
+
+A v3 manifest uses `"version": 3`. It retains the v2 `nodes` structure and adds:
+
+```json
+{
+  "nodes": [{
+    "type": "group",
+    "name": "Environment",
+    "opacity": 0.5,
+    "transform": {"x": 0.1, "scale": 0.8, "rotation": 5},
+    "children": [
+      {"type": "video", "asset": "assets/rain.mp4"},
+      {"type": "image", "asset": "assets/neon.png"}
+    ]
+  }]
+}
+```
+
+Children draw back to front in the group's full-canvas coordinate system. Their
+result is clipped to that canvas, then transformed and faded as one layer. Overlapping
+opaque children in a 50%-opacity group remain 50% opaque, not 75%. Nested group
+opacity multiplies after each subtree is composed. Visibility hides and pauses the
+whole subtree. A locked group cannot be moved with the canvas. Groups require at
+least one child and cannot specify an asset; ordinary nodes cannot specify children.
+
+Metal reuses private BGRA8 render targets leased through GPU completion. Target sizing uses the device allocation estimate, including GPU layout overhead. The target
+size preserves aspect ratio and scales down when two in-flight frames at the current
+group count would exceed the texture budget. This can reduce fine detail at large
+display sizes. No group textures are allocated for flat scenes. Images, video decoders,
+drawables, and a second renderer during replacement consume additional memory.
+The cap is not a total process-memory guarantee.
+
+Saving groups writes v3; flat scenes still write v2. Asset validation, file watching,
+security-scoped access and save cleanup include descendants. Existing v1/v2 packages
+continue to load. Older builds reject v3 explicitly.
+
+`Examples/GroupedAurora.idlesse` demonstrates two animated children with no media download.
