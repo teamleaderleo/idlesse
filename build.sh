@@ -101,6 +101,8 @@ build_app() {
     -framework AVFoundation \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
+    "$ROOT/Sources/Runtime/Scene.swift" \
+    "$ROOT/Sources/Runtime/SceneRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \

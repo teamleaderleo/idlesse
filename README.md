@@ -153,3 +153,9 @@ The app now includes **Wallpaper…** for a desktop image or muted looping MP4/M
 with a menu-bar Stop control. This is separate from the screensaver and leaves
 your saved macOS wallpaper intact. See [wallpaper mode](docs/wallpaper-prototype.md)
 for controls, measured resource use, verification and current limitations.
+
+## Scene runtime
+
+The desktop host now resolves `.idlesse` scene packages asynchronously and plays
+them through separate image and video renderers. See [scene format and current
+limits](docs/scenes.md). The screensaver remains a separate client awaiting migration.
