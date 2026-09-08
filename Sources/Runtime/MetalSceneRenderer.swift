@@ -31,6 +31,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
+    var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
     let view: NSView
     private let metal: MTKView
     private let clock: SceneClock
@@ -201,8 +202,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             gate.signal(); return
         }
         let gate = self.gate
+        let gpuMetrics = presentations
         command.addCompletedHandler { [weak self] command in
             gate.signal()
+            if command.status == .completed { gpuMetrics.recordGPU(start: command.gpuStartTime, end: command.gpuEndTime) }
             if command.status == .error {
                 DispatchQueue.main.async { [weak self] in self?.onError("The compositor could not render a frame.") }
             }

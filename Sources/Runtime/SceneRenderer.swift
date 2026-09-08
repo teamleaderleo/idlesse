@@ -32,6 +32,20 @@ enum SceneFrameRate: Int, CaseIterable {
 final class PresentedFrameCounter {
     private let lock = NSLock()
     private var count = 0
+    private var gpuSeconds = 0.0
+    private var completed = 0
+    func recordGPU(start: TimeInterval, end: TimeInterval) {
+        guard start > 0, end >= start, end.isFinite else { return }
+        lock.lock()
+        gpuSeconds += end - start
+        completed += 1
+        lock.unlock()
+    }
+    var gpuTotals: (seconds: Double, frames: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (gpuSeconds, completed)
+    }
     func record(presentedTime: TimeInterval) {
         guard presentedTime > 0, presentedTime.isFinite else { return }
         lock.lock()
@@ -69,6 +83,7 @@ protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
     var presentedFrameCount: Int? { get }
+    var gpuTotals: (seconds: Double, frames: Int)? { get }
     func setPaused(_ paused: Bool)
     func setPreferredFrameRate(_ rate: Int?)
     func releaseResources()
@@ -76,6 +91,7 @@ protocol SceneRenderer: AnyObject {
 
 extension SceneRenderer {
     var presentedFrameCount: Int? { nil }
+    var gpuTotals: (seconds: Double, frames: Int)? { nil }
     // AVPlayerLayer follows source playback; static images do not need a redraw loop.
     func setPreferredFrameRate(_ rate: Int?) {}
 }
@@ -164,6 +180,9 @@ final class LayeredSceneRenderer: SceneRenderer {
     let view: NSView
     private var children: [SceneRenderer] = []
     private var state: RendererDiagnostics.State = .ready
+    var gpuTotals: (seconds: Double, frames: Int)? {
+        children.count == 1 ? children.first?.gpuTotals : nil
+    }
     var presentedFrameCount: Int? {
         // Separate layer surfaces cannot be reported as one scene presentation.
         children.count == 1 ? children.first?.presentedFrameCount : nil

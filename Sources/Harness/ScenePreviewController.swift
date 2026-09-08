@@ -9,6 +9,9 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let titleLabel = NSTextField(labelWithString: "Aurora")
     private let performanceLabel = NSTextField(labelWithString: "")
     private var performanceTimer: Timer?
+    private let measureButton = NSButton(title: "Measure 10s", target: nil, action: nil)
+    private var measurement: (time: Double, count: Int, gpuSeconds: Double, gpuFrames: Int)?
+    private var measurementResult: String?
     private var presentationSample = PresentationRateSample()
     private let detailLabel = NSTextField(labelWithString: "")
     private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
@@ -36,7 +39,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         super.init()
         window.title = "Idlesse · Scene Preview"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 780, height: 480)
+        window.minSize = NSSize(width: 900, height: 480)
         window.delegate = self
         let workspace = NSWorkspace.shared.notificationCenter
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
@@ -81,7 +84,10 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         applyButton.target = self
         applyButton.action = #selector(useOnDesktop)
         applyButton.isEnabled = false
-        let controls = NSStackView(views: [open, sample, pauseButton, engine, applyButton])
+        measureButton.target = self
+        measureButton.action = #selector(measure)
+        measureButton.toolTip = "Measure this preview for ten seconds without changing the scene. GPU time excludes display scheduling and other apps."
+        let controls = NSStackView(views: [open, sample, pauseButton, engine, measureButton, applyButton])
         controls.spacing = 10
         canvas.wantsLayer = true
         canvas.layer?.backgroundColor = NSColor.black.cgColor
@@ -134,6 +140,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         canvas.subviews.forEach { $0.removeFromSuperview() }
         next.view.autoresizingMask = [.width, .height]
         canvas.addSubview(next.view)
+        cancelMeasurement()
         renderer = next
         presentationSample = PresentationRateSample()
         updateFrameRate()
@@ -142,6 +149,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         updatePlayback()
     }
     @objc private func changeFrameRate() {
+        cancelMeasurement()
         SceneFrameRate.selected = SceneFrameRate.allCases[frameRate.indexOfSelectedItem]
     }
     private func updateFrameRate() {
@@ -150,9 +158,10 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         frameRate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         renderer?.setPreferredFrameRate(SceneFrameRate.selected.requested(maximum: maximum))
     }
-    func windowDidChangeScreen(_ notification: Notification) { updateFrameRate() }
+    func windowDidChangeScreen(_ notification: Notification) { cancelMeasurement(); updateFrameRate() }
     private func updatePlayback() {
         let stopped = paused || asleep || ProcessInfo.processInfo.isLowPowerModeEnabled || !window.isVisible || window.isMiniaturized || NSApp.isHidden
+        if stopped { cancelMeasurement() }
         clock.setPaused(stopped)
         renderer?.setPaused(stopped)
         pauseButton.title = paused ? "Resume" : "Pause"
@@ -167,7 +176,22 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
             performanceTimer = timer
         }
     }
+    private func cancelMeasurement() {
+        measurement = nil
+        measurementResult = nil
+        measureButton.title = "Measure 10s"
+    }
+    @objc private func measure() {
+        guard let renderer, renderer.diagnostics.state == .running,
+              let count = renderer.presentedFrameCount, let gpu = renderer.gpuTotals else { return }
+        measurementResult = nil
+        measurement = (ProcessInfo.processInfo.systemUptime, count, gpu.seconds, gpu.frames)
+        measureButton.isEnabled = false
+        measureButton.title = "Measuring…"
+    }
     private func updatePerformance() {
+        measureButton.isEnabled = measurement == nil && renderer?.diagnostics.state == .running && renderer?.diagnostics.animated == true && renderer?.gpuTotals != nil
+
         guard let renderer else { performanceLabel.stringValue = ""; return }
         guard renderer.diagnostics.state == .running else {
             performanceLabel.stringValue = "Paused · no continuous rendering"
@@ -181,7 +205,25 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
             performanceLabel.stringValue = "Presentation rate unavailable for this renderer"
             return
         }
-        if let rate = presentationSample.sample(count: count, time: ProcessInfo.processInfo.systemUptime) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let measurement, let gpu = renderer.gpuTotals {
+            let elapsed = now - measurement.time
+            if elapsed >= 10 {
+                let frames = gpu.frames - measurement.gpuFrames
+                let rate = Double(count - measurement.count) / elapsed
+                if frames > 0 {
+                    let milliseconds = (gpu.seconds - measurement.gpuSeconds) * 1000 / Double(frames)
+                    measurementResult = String(format: "10s sample: %.1f fps · GPU %.2f ms/frame", rate, milliseconds)
+                } else {
+                    measurementResult = "10s sample: no completed GPU frames"
+                }
+                self.measurement = nil
+                measureButton.title = "Measure Again"
+                measureButton.isEnabled = true
+            }
+        }
+        if let measurementResult { performanceLabel.stringValue = measurementResult; return }
+        if let rate = presentationSample.sample(count: count, time: now) {
             performanceLabel.stringValue = String(format: "%.0f presented fps", rate)
         } else {
             performanceLabel.stringValue = "Measuring presentation rate…"
@@ -278,6 +320,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { updatePlayback() }
     func windowWillClose(_ notification: Notification) {
         cancelLoading()
+        cancelMeasurement()
         watcher = nil
         clock.setPaused(true)
         performanceTimer?.invalidate()
