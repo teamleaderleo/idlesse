@@ -131,7 +131,9 @@ case "${1:-all}" in
     cp -R "$SAVER" "$DEST/Idlesse.saver"
     killall legacyScreenSaver 2>/dev/null || true
     log "Installed to $DEST/Idlesse.saver"
-    log "Open System Settings → Screen Saver and select Idlesse."
+    log "macOS 26: System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse."
+    log "After selecting Idlesse, use Options at the top of the Screen Saver window."
+    open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
     ;;
   clean)
     rm -rf "$BUILD"
