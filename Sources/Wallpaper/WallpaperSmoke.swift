@@ -210,6 +210,16 @@ enum WallpaperSmoke {
         precondition(gradient.diagnostics.activeResources == 0)
 
         let sixteenImages = SceneDescriptor(title: "Sixteen", nodes: (0..<16).map { _ in SceneNode(content: .image(imageURL), opacity: 0.2) })
+        let audioNode = SceneNode(content: .gradient)
+        let audioScene = SceneDescriptor(title: "Audio", nodes: [audioNode], bindings: [
+            .init(target: .init(nodeID: audioNode.id, property: .opacity), scale: 1, offset: 0.1, signal: .audioLevel)
+        ])
+        let audioRenderer = try MetalSceneRenderer(playable: audioScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let quietAudioPixels = try audioRenderer.renderProbe(signals: .init(audio: .init(level: 0)))
+        let loudAudioPixels = try audioRenderer.renderProbe(signals: .init(audio: .init(level: 0.8)))
+        precondition(quietAudioPixels != loudAudioPixels, "Audio levels must affect Metal output")
+        audioRenderer.releaseResources()
         let manyStandard = try LayeredSceneRenderer(playable: sixteenImages,
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
         precondition(manyStandard.view.subviews.count == 16)

@@ -1,0 +1,61 @@
+{
+  "nodes": [
+    {
+      "id": "D3F83815-1B44-4E42-BFAE-3B354DA47819",
+      "type": "gradient",
+      "name": "Audio Glow"
+    }
+  ],
+  "bindings": [
+    {
+      "target": {
+        "nodeID": "D3F83815-1B44-4E42-BFAE-3B354DA47819",
+        "property": "style.exposure"
+      },
+      "parameter": "",
+      "signal": "audio.bass",
+      "scale": 6,
+      "offset": 0,
+      "smoothing": 0.08,
+      "modifiers": [
+        {
+          "operation": "multiply",
+          "parameter": "gain"
+        },
+        {
+          "operation": "add",
+          "value": -0.5
+        }
+      ]
+    },
+    {
+      "target": {
+        "nodeID": "D3F83815-1B44-4E42-BFAE-3B354DA47819",
+        "property": "style.vignette"
+      },
+      "parameter": "",
+      "signal": "audio.level",
+      "scale": -2,
+      "offset": 0,
+      "smoothing": 0.08,
+      "modifiers": [
+        {
+          "operation": "multiply",
+          "parameter": "gain"
+        },
+        {
+          "operation": "add",
+          "value": 0.7
+        }
+      ]
+    }
+  ],
+  "parameters": {
+    "gain": {
+      "name": "Audio Sensitivity",
+      "min": 0.1,
+      "max": 4,
+      "default": 1
+    }
+  }
+}

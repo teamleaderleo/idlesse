@@ -157,6 +157,10 @@ for controls, measured resource use, verification and current limitations.
 
 ## Studio
 
+**Samples → Audio Aurora** demonstrates opt-in system-audio response. Enable Audio
+Response to drive effects with level/bass/mid/treble; **Controls…** adjusts sensitivity.
+Studio shows a live meter, and capture is shared across active hosts without saving audio.
+
 **Studio…** (⌘O) opens the scene editor: layers, canvas movement/resize/rotation,
 native Undo/Redo, and Save/Save As for `.idlesse` documents. It keeps editing separate
 from the running desktop. See [Studio controls and saving](docs/scene-preview.md).

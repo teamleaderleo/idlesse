@@ -255,6 +255,16 @@ if let index = CommandLine.arguments.firstIndex(of: "--benchmark"),
     }
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-audio"), CommandLine.arguments.count > index + 1 {
+    do {
+        try AudioSmoke.run(url: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        exit(EXIT_SUCCESS)
+    } catch {
+        fputs("Audio checks failed: \(error)\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--smoke-wallpaper"),
    CommandLine.arguments.count > index + 1 {
     do {

@@ -107,6 +107,8 @@ build_app() {
     "${SAVER_SOURCES[@]}" \
     "$ROOT/Sources/Runtime/SceneRenderer.swift" \
     "$ROOT/Sources/Runtime/SceneClock.swift" \
+    "$ROOT/Sources/Runtime/AudioBandAnalyzer.swift" \
+    "$ROOT/Sources/Runtime/SystemAudioInput.swift" \
     "$ROOT/Sources/Runtime/SceneWatcher.swift" \
     "$ROOT/Sources/Runtime/GradientRenderer.swift" \
     "$ROOT/Sources/Runtime/MetalSceneRenderer.swift" \
@@ -121,6 +123,7 @@ build_app() {
     "$ROOT/Sources/Harness/SceneDocument.swift" \
     "$ROOT/Sources/Harness/StudioWindowController.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \
+    "$ROOT/Sources/Harness/AudioSmoke.swift" \
     "$ROOT/Sources/Harness/main.swift" \
     -framework AppKit \
     -framework Photos \

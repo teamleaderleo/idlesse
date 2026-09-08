@@ -44,6 +44,7 @@ struct SceneDescriptor: Codable, Sendable {
     var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
     var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
+    var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
     var requiresMetal: Bool { timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
@@ -96,6 +97,10 @@ struct SceneDescriptor: Codable, Sendable {
                 case .sine: source = sin(signals.time.truncatingRemainder(dividingBy: binding.period) / binding.period * 2 * .pi)
                 case .pointerX: source = signals.pointerX
                 case .pointerY: source = signals.pointerY
+                case .audioLevel: source = signals.audio.level
+                case .audioBass: source = signals.audio.bass
+                case .audioMid: source = signals.audio.mid
+                case .audioTreble: source = signals.audio.treble
                 }
             } else {
                 guard let parameter = parameters[binding.parameter] else { throw SceneError.invalid("The binding parameter does not exist.") }
@@ -187,7 +192,7 @@ struct SceneParameterBinding: Codable, Sendable {
         var parameter: String? = nil
         var value: Double? = nil
     }
-    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y" }
+    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
     let target: ScenePropertyAddress
     var parameter: String = ""
     var scale: Double = 1
@@ -217,7 +222,15 @@ struct SceneParameterBinding: Codable, Sendable {
     }
 }
 
+struct SceneAudioLevels: Sendable {
+    var level: Double = 0
+    var bass: Double = 0
+    var mid: Double = 0
+    var treble: Double = 0
+}
+
 struct SceneSignals: Sendable {
+    var audio = SceneAudioLevels()
     var time: Double = 0
     var pointerX: Double = 0
     var pointerY: Double = 0
@@ -349,7 +362,17 @@ struct LocalSceneSource: SceneSource {
         defer { try? handle.close() }
         let data = try handle.read(upToCount: 65_537) ?? Data()
         guard data.count <= 65_536 else { throw SceneError.invalid("Scene JSON exceeds 64 KB.") }
-        return try JSONDecoder().decode(type, from: data)
+        do { return try JSONDecoder().decode(type, from: data) }
+        catch DecodingError.keyNotFound(let key, let context) {
+            let path = (context.codingPath + [key]).map(\.stringValue).joined(separator: ".")
+            throw SceneError.invalid("\(name): missing ‘\(path)’.")
+        } catch DecodingError.typeMismatch(_, let context) {
+            throw SceneError.invalid("\(name): wrong value type at ‘\(context.codingPath.map(\.stringValue).joined(separator: "."))’.")
+        } catch DecodingError.valueNotFound(_, let context) {
+            throw SceneError.invalid("\(name): missing value at ‘\(context.codingPath.map(\.stringValue).joined(separator: "."))’.")
+        } catch DecodingError.dataCorrupted(let context) {
+            throw SceneError.invalid("\(name): invalid JSON or value at ‘\(context.codingPath.map(\.stringValue).joined(separator: "."))’.")
+        }
     }
 
     fileprivate static func read(_ url: URL) throws -> SceneDescriptor {
@@ -360,8 +383,8 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...13).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
-        guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
+        guard (1...14).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
@@ -413,6 +436,7 @@ struct LocalSceneSource: SceneSource {
         guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
         guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
+        guard !result.usesAudio || (manifest.version >= 14 && manifest.capabilities.contains("audio")) else { throw SceneError.invalid("Audio bindings require v14 and the audio capability.") }
         guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
         _ = try result.evaluated()
         return result
@@ -563,7 +587,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

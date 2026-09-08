@@ -140,6 +140,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private weak var editingClient: NSTextField?
     private lazy var editor = SceneEditorController(document: document)
     private let nameField = NSTextField(string: "")
+    private var audioSession: SceneAudioSession?
+    private let audioStatus = NSTextField(wrappingLabelWithString: "Audio response off")
+    private let audioToggle = NSButton(checkboxWithTitle: "Enable Audio Response", target: nil, action: nil)
     private let pointerToggle = NSButton(checkboxWithTitle: "Enable Pointer Response", target: nil, action: nil)
     private let ungroupButton = NSButton(title: "Ungroup", target: nil, action: nil)
     private let groupButton = NSButton(title: "Group with Next Layer", target: nil, action: nil)
@@ -180,6 +183,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private var generation = 0
     private var paused = false
     private var asleep = false
+    private var sessionInactive = false
+    private var displayAsleep = false
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var clock: SceneClock { host.clock }
     private let apply: (URL) -> Void
@@ -190,6 +195,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
+        audioSession = SceneAudioSession(clock: clock) { [weak self] message in
+            self?.audioToggle.state = .off
+            self?.detailLabel.stringValue = message
+        }
         window.title = "Idlesse Studio"
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 1040, height: 820)
@@ -226,6 +235,18 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             self.detailLabel.stringValue = target.draft ? "Unsaved scene" : "Original scene · Redo is available"
         }
         let workspace = NSWorkspace.shared.notificationCenter
+        for (name, inactive) in [(NSWorkspace.sessionDidResignActiveNotification, true), (NSWorkspace.sessionDidBecomeActiveNotification, false)] {
+            let token = workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.sessionInactive = inactive; self?.updatePlayback()
+            }
+            observers.append((workspace, token))
+        }
+        for (name, sleeping) in [(NSWorkspace.screensDidSleepNotification, true), (NSWorkspace.screensDidWakeNotification, false)] {
+            let token = workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.displayAsleep = sleeping; self?.updatePlayback()
+            }
+            observers.append((workspace, token))
+        }
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
             let token = workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.asleep = sleeping
@@ -257,7 +278,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         heading.alignment = .leading
         heading.spacing = 4
         let open = NSButton(title: "Open Scene…", target: self, action: #selector(choose))
-        let sample = NSButton(title: "Aurora", target: self, action: #selector(showSample))
+        let sample = NSPopUpButton(frame: .zero, pullsDown: true)
+        sample.addItems(withTitles: ["Samples", "Aurora", "Audio Aurora"])
+        sample.item(at: 1)?.target = self; sample.item(at: 1)?.action = #selector(showSample)
+        sample.item(at: 2)?.target = self; sample.item(at: 2)?.action = #selector(showAudioSample)
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
         pauseButton.toolTip = "Pause or resume this preview"
@@ -359,6 +383,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         pointerToggle.target = self; pointerToggle.action = #selector(togglePointer)
         pointerToggle.font = .systemFont(ofSize: 10)
         inspector.addArrangedSubview(pointerToggle)
+        audioToggle.target = self; audioToggle.action = #selector(toggleAudio)
+        audioToggle.font = .systemFont(ofSize: 10)
+        audioToggle.toolTip = "Use system audio levels for this session. No audio is saved."
+        inspector.addArrangedSubview(audioToggle)
+        audioStatus.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        audioStatus.setAccessibilityLabel("Audio input levels")
+        audioStatus.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        inspector.addArrangedSubview(audioStatus)
         saveCopyButton.target = self
         saveCopyButton.action = #selector(saveCopy)
         saveButton.target = self
@@ -542,6 +574,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         updatePlayback()
     }
     private func updateInspector() {
+        if !scene.usesAudio { clock.audioEnabled = false }
+        audioToggle.isEnabled = scene.usesAudio && !saving
+        audioToggle.state = clock.audioEnabled ? .on : .off
         updateTimeline()
         let selected = max(0, nodePicker.indexOfSelectedItem)
         nodePicker.removeAllItems()
@@ -662,6 +697,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Controls", controls: next)
         }
     }
+    @objc private func toggleAudio() {
+        guard scene.usesAudio, !saving else { return }
+        clock.audioEnabled = audioToggle.state == .on
+        if renderer?.updateScene(scene) != true { rebuild() }
+        updatePlayback()
+    }
     @objc private func togglePointer() {
         clock.pointerEnabled = pointerToggle.state == .on
         if renderer?.updateScene(scene) != true { rebuild() }
@@ -754,8 +795,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         property.setAccessibilityLabel("Target property")
         let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
         let keys = scene.parameters.keys.sorted()
-        let signals: [SceneParameterBinding.Signal] = [.time, .sine, .pointerX, .pointerY]
-        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y", "Existing Keyframes"])
+        let signals: [SceneParameterBinding.Signal] = [.time, .sine, .pointerX, .pointerY, .audioLevel, .audioBass, .audioMid, .audioTreble]
+        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y", "Audio Level", "Audio Bass", "Audio Mid", "Audio Treble", "Existing Keyframes"])
         parameter.setAccessibilityLabel("Control")
         let name = NSTextField(string: node.displayName + " Control")
         name.setAccessibilityLabel("New control name")
@@ -787,7 +828,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             smoothing.stringValue = String(binding?.smoothing ?? 0)
             multiplier.selectItem(at: 0)
             parameter.lastItem?.isEnabled = binding?.keyframes != nil
-            if binding?.keyframes != nil { parameter.selectItem(at: keys.count + 5) }
+            if binding?.keyframes != nil { parameter.selectItem(at: keys.count + signals.count + 1) }
             else if let signal = binding?.signal, let index = signals.firstIndex(of: signal) { parameter.selectItem(at: keys.count + 1 + index) }
             else if let key = binding?.parameter, let index = keys.firstIndex(of: key) { parameter.selectItem(at: index + 1) }
             else { parameter.selectItem(at: 0) }
@@ -811,7 +852,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 guard let amount = Double(scale.stringValue), let base = Double(offset.stringValue), let seconds = Double(period.stringValue), let damping = Double(smoothing.stringValue) else {
                     self.detailLabel.stringValue = "Use numeric scale, offset, period and smoothing values."; return
                 }
-                let usesTrack = index == keys.count + 5
+                let usesTrack = index == keys.count + signals.count + 1
                 if usesTrack && previous?.keyframes == nil { self.detailLabel.stringValue = "Add keyframes with Keys… first."; return }
                 let signal = index > keys.count && !usesTrack ? signals[index - keys.count - 1] : nil
                 let key = signal != nil || usesTrack ? "" : index == 0 ? UUID().uuidString : keys[index - 1]
@@ -1035,7 +1076,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     func windowDidChangeScreen(_ notification: Notification) { cancelMeasurement(); updateFrameRate() }
     private func updatePlayback() {
-        let stopped = paused || asleep || ProcessInfo.processInfo.isLowPowerModeEnabled || !window.isVisible || window.isMiniaturized || NSApp.isHidden
+        let stopped = paused || asleep || displayAsleep || sessionInactive || ProcessInfo.processInfo.isLowPowerModeEnabled || !window.isVisible || window.isMiniaturized || NSApp.isHidden
         if stopped { cancelMeasurement() }
         host.setPaused(stopped)
         pauseButton.title = paused ? "Resume" : "Pause"
@@ -1067,6 +1108,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         timeline.update(scene: scene, selectedID: editor.selectedNode?.id, time: clock.time, enabled: renderer is MetalSceneRenderer)
     }
     private func updatePerformance() {
+        let levels = clock.audioLevels()
+        audioStatus.stringValue = !clock.audioEnabled ? "Audio response off" : clock.isPaused ? "Audio capture paused" :
+            String(format: "Level %.1f%% · Bass %.1f%%\nMid %.1f%% · Treble %.1f%%", levels.level * 100, levels.bass * 100, levels.mid * 100, levels.treble * 100)
         updateTimeline()
         performanceLabel.stringValue = host.performanceText()
         measureButton.isEnabled = measurement == nil && renderer?.diagnostics.state == .running && renderer?.diagnostics.animated == true && renderer?.gpuTotals != nil
@@ -1169,6 +1213,18 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         window.close()
         apply(selectedURL)
     }
+    @objc private func showAudioSample() {
+        guard mayDiscard() else { return }
+        showSample()
+        let node = SceneNode(name: "Audio Glow", content: .gradient)
+        let audio = SceneDescriptor(title: "Audio Aurora", nodes: [node], parameters: ["gain": .init(name: "Audio Sensitivity", value: 1, min: 0.1, max: 4)], bindings: [
+            .init(target: .init(nodeID: node.id, property: .exposure), scale: 6, signal: .audioBass,
+                  modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: -0.5)], smoothing: 0.08),
+            .init(target: .init(nodeID: node.id, property: .vignette), scale: -2, signal: .audioLevel,
+                  modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: 0.7)], smoothing: 0.08)
+        ])
+        _ = applyEdit(audio.nodes, selected: 0, name: "Create Audio Scene", controls: audio)
+    }
     @objc private func showSample() {
         guard mayDiscard() else { return }
         draft = false
@@ -1196,8 +1252,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         panel.prompt = "Open"
         panel.allowedContentTypes = [.directory, .jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
             UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
-        panel.treatsFilePackagesAsDirectories = false
+        panel.treatsFilePackagesAsDirectories = true
         panel.canChooseDirectories = true
+        panel.canChooseFiles = true
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.load(url)
@@ -1219,10 +1276,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 let previous = self.scene
                 let previousRenderer = self.renderer
                 let previousPointer = self.clock.pointerEnabled
-                if self.selectedURL != url { self.clock.pointerEnabled = false }
+                let previousAudio = self.clock.audioEnabled
+                if self.selectedURL != url { self.clock.pointerEnabled = false; self.clock.audioEnabled = false }
                 self.scene = next
                 self.rebuild()
-                guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; return }
+                guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; self.clock.audioEnabled = previousAudio; return }
                 if self.selectedURL != url || previous.timeline != next.timeline {
                     try self.clock.configure(timeline: next.timeline)
                     self.renderer?.refreshSceneTime()

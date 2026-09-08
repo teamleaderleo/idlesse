@@ -184,7 +184,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             }
             inputs.append(input)
         }
-        diagnostics.animated = playable.animated || authored.usesTime || (authored.usesPointer && clock.pointerEnabled)
+        diagnostics.animated = playable.animated || authored.usesTime || (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
         diagnostics.activeResources = inputs.count
         // Fail preparation before the host replaces the last working renderer.
         guard let preparedTargets = targets.acquire(device: device, size: metal.drawableSize,
@@ -312,7 +312,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         bindingSmoother.reset()
         inputs = order.map { inputs[$0] }
         for (input, node) in zip(inputs, scene.allNodes) { input.node = node }
-        diagnostics.animated = scene.animated || authored.usesTime || (authored.usesPointer && clock.pointerEnabled)
+        diagnostics.animated = scene.animated || authored.usesTime || (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
         setPaused(diagnostics.state != .running)
         metal.draw()
         return true
@@ -363,12 +363,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         // A completed once scene has no moving clock. Independent videos,
         // pointer input and smoothing may still change its final composition.
         let independentVideo = inputs.contains { visibleIDs.contains($0.node.id) && $0.node.kind == .video && !$0.followsClock }
-        let reactive = sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
+        let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
         let finished = clock.isAtEnd && !independentVideo && !reactive
         metal.isPaused = diagnostics.state != .running || !diagnostics.animated || finished
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
+        if sourceScene?.usesAudio == true, clock.audioEnabled { signals.audio = clock.audioLevels() }
         if sourceScene?.usesPointer == true, clock.pointerEnabled, let window = metal.window {
             let point = metal.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
             signals.pointerX = min(1, max(-1, Double(point.x / max(1, metal.bounds.width) * 2 - 1)))

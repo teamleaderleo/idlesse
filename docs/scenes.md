@@ -277,3 +277,25 @@ V11 adds optional top-level `timeline`, for example `{"duration":6,"mode":"loop"
 V12 adds a binding `smoothing` time constant in real seconds, 0–5 (default 0/off), for signal/keyframe sources. Runtime exponential filtering follows modifiers and precedes property clamping. Filter history stays in the renderer and resets on explicit seek, scene edits, or pause/resume; no history is serialized.
 
 V13 adds `timeline.videosFollowScene` (default false). Enabled videos use independently managed items and approximately follow the scene playhead/rate. Short sources repeat; Once holds its endpoint. Follow mode supports Once and Loop, and rejects Ping-pong. Seeking is coalesced; running drift correction uses a 120 ms tolerance, not frame locking. Disabled videos retain their existing independent AVPlayerLooper path. See [Studio documentation](scene-preview.md) for authoring controls and limits.
+
+## V14 audio signals
+
+V14 adds the explicit `audio` manifest capability and `audio.level`, `audio.bass`,
+`audio.mid`, and `audio.treble` binding sources. The capability declares intent;
+it does not enable capture. Studio and the desktop each require a session opt-in.
+Signals are zero while disabled or when no fresh input arrives. Existing modifiers,
+parameters, smoothing and property clamps apply unchanged. No audio is embedded in
+packages. Audio Aurora includes a generated Audio Sensitivity control.
+
+Levels are bounded 0–1 RMS envelopes. Approximate crossover bands use 200 Hz and
+2 kHz boundaries, with DC removal, 30 ms attack and 180 ms release. These are broad
+creative controls, not calibrated spectral measurements. The analyzer uses fixed
+state, handles stereo without phase cancellation, and keeps no sample history.
+
+The app uses one private Core Audio process tap for all active hosts, on macOS 14.2+.
+It does not mute output or record/save/transmit audio. Stopping the last consumer
+destroys the private aggregate device and tap. Sleep, lock, pause, hiding Studio,
+and Low Power Mode stop the relevant host's demand. Stale levels expire after 0.5 s.
+Native capture supports Float32 mono/stereo; other formats produce an error.
+
+Implementation reference: [Apple’s Core Audio tap sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps).

@@ -8,3 +8,5 @@ xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Runtime/SceneClock.swift Tes
 build/tests/scenes
 xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Harness/SceneDocument.swift Tests/RecoveryTests.swift -framework AppKit -framework AVFoundation -o build/tests/recovery
 build/tests/recovery
+xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Runtime/SceneClock.swift Sources/Runtime/AudioBandAnalyzer.swift Tests/AudioTests.swift -o build/tests/audio
+build/tests/audio
