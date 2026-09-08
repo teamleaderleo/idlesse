@@ -402,16 +402,26 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         rebuild()
         watchPackage()
     }
-    private func mayDiscard() -> Bool {
-        guard !saving else { return false }
+    func mayQuit() -> Bool {
+        mayDiscard(resetting: false)
+    }
+    private func mayDiscard(resetting: Bool = true) -> Bool {
+        guard !saving else {
+            window.makeKeyAndOrderFront(nil)
+            detailLabel.stringValue = "Please wait for the current import or save to finish."
+            NSSound.beep()
+            return false
+        }
         guard draft else { return true }
+        window.makeKeyAndOrderFront(nil)
         let alert = NSAlert()
         alert.messageText = "Discard unsaved preview changes?"
         alert.informativeText = "Save a Copy first if you want to keep this scene."
         alert.addButton(withTitle: "Keep Editing")
         alert.addButton(withTitle: "Discard")
         guard alert.runModal() == .alertSecondButtonReturn else { return false }
-        resetChanges()
+        // Quitting does not need to decode the original scene again.
+        if resetting { resetChanges() }
         return true
     }
     @objc private func saveCopy() {

@@ -31,7 +31,9 @@ its position. The outline previews the move without rebuilding players on each m
 event. Edits rebuild the renderer, so videos restart once when the edit is applied.
 Scale and rotation remain numeric controls; there are no resize/rotate handles yet.
 Unsaved drafts suspend package watching and disable Use on Desktop. Opening another
-scene or closing asks before discarding edits.
+scene, closing the window, or quitting the app asks before discarding edits.
+Keep Editing cancels Quit and preserves the draft. Quit also waits for an active
+import or save to finish; retry it afterward.
 
 Save a Copy exports a new v2 package with its media, validates it, and opens that copy.
 Existing destinations are never replaced. Source files stay untouched. Media copies
