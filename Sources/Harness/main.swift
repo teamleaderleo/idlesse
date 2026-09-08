@@ -20,7 +20,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Idlesse"
+        window.title = "Idlesse Development Preview"
         window.center()
 
         guard let contentView = window.contentView else { return }
@@ -28,7 +28,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate {
         saverView.autoresizingMask = [.width, .height]
         contentView.addSubview(saverView)
 
-        settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
+        settingsButton = NSButton(title: "Preview Settings…", target: self, action: #selector(showSettings))
         settingsButton.bezelStyle = .rounded
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(settingsButton)
@@ -42,10 +42,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate {
         saverView.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
 
-        // Idlesse.app is the canonical settings surface on Tahoe, where the legacy
-        // Screen Saver Options button may never call into a third-party .saver.
-        DispatchQueue.main.async { [weak self] in
-            self?.showSettings()
+        if IdlessePreferences.shared.folderDisplayPath == nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.showSettings()
+            }
         }
     }
 
@@ -71,11 +71,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        let settings = NSMenuItem(title: "Preview Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit Idlesse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "Quit Idlesse Development Preview", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         NSApp.mainMenu = mainMenu
     }
@@ -87,11 +87,6 @@ if CommandLine.arguments.contains("--smoke-options") {
     let controller = ConfigureSheetController(preferences: IdlessePreferences.shared) {}
     controller.window.contentView?.layoutSubtreeIfNeeded()
     print("Idlesse settings UI smoke test passed")
-    exit(EXIT_SUCCESS)
-}
-
-if CommandLine.arguments.contains("--print-settings-path") {
-    print(IdlesseSettingsFile.runtimeURL.path)
     exit(EXIT_SUCCESS)
 }
 
