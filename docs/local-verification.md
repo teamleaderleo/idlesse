@@ -1,3 +1,5 @@
+> Historical verification: the standalone Tahoe settings workaround described below was superseded by the native configure-sheet changes from PR #18. Current builds retain native host presentation and NSApplication sheet dismissal. Repeated installed-host Options cycles still need verification.
+
 # Local verification — 2026-09-08
 
 The optimized arm64 saver is installed and selected on macOS 26.6.2. Its signature
