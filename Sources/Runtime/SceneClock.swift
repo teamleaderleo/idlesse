@@ -7,6 +7,7 @@ final class SceneClock {
     private var anchor: TimeInterval
     private var accumulated: TimeInterval = 0
     private var authored: SceneTimeline?
+    private(set) var revision: UInt64 = 0
     private(set) var playbackRate: Double = 1
     private(set) var loopRange: Range<TimeInterval>?
     private(set) var isPaused = true
@@ -49,6 +50,7 @@ final class SceneClock {
                 throw SceneError.invalid("Use a loop within 0–86400 seconds, at least 0.01 seconds long.")
             }
         }
+        revision &+= 1
         authored = nil
         loopRange = loop
         playbackRate = rate
@@ -57,6 +59,7 @@ final class SceneClock {
     }
     func seek(to time: TimeInterval) throws {
         guard time.isFinite, (0...86400).contains(time) else { throw SceneError.invalid("Use a time of 0–86400 seconds.") }
+        revision &+= 1
         accumulated = time
         anchor = now()
     }

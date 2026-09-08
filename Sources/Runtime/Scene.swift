@@ -25,6 +25,7 @@ struct SceneDescriptor: Sendable {
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
+    var usesSmoothing: Bool { bindings.contains { $0.smoothing > 0 } }
     var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
     var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
@@ -43,7 +44,7 @@ struct SceneDescriptor: Sendable {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) }, timeline: timeline)
     }
-    func evaluated(signals: SceneSignals = .init(), validating: Bool = true) throws -> SceneDescriptor {
+    func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
         if validating {
             try timeline?.validate()
             guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
@@ -62,6 +63,10 @@ struct SceneDescriptor: Sendable {
             guard binding.scale.isFinite, binding.offset.isFinite,
                   (!validating || targets.insert(binding.target.nodeID.uuidString + binding.target.property.rawValue).inserted) else {
                 throw SceneError.invalid("Bindings need an existing parameter and a unique property target.")
+            }
+            guard binding.smoothing.isFinite, (0...5).contains(binding.smoothing),
+                  binding.smoothing == 0 || binding.signal != nil || binding.keyframes != nil else {
+                throw SceneError.invalid("Smoothing needs a signal or keyframe source and a duration of 0–5 seconds.")
             }
             let source: Double
             if let track = binding.keyframes {
@@ -102,6 +107,7 @@ struct SceneDescriptor: Sendable {
                 }
             }
             guard raw.isFinite else { throw SceneError.invalid("The binding result is not finite.") }
+            if binding.smoothing > 0, let smooth { raw = smooth(binding.target, raw, binding.smoothing) }
             let range = binding.target.property.range
             try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
         }
@@ -173,13 +179,14 @@ struct SceneParameterBinding: Codable, Sendable {
     var offset: Double = 0
     var signal: Signal? = nil
     var period: Double = 8
+    var smoothing: Double = 0
     var keyframes: SceneKeyframeTrack? = nil
     var modifiers: [Modifier] = []
     var referencedParameters: [String] { (parameter.isEmpty ? [] : [parameter]) + modifiers.compactMap(\.parameter) }
-    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers, keyframes }
-    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = [], keyframes: SceneKeyframeTrack? = nil) {
+    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers, keyframes, smoothing }
+    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = [], keyframes: SceneKeyframeTrack? = nil, smoothing: Double = 0) {
         self.target = target; self.parameter = parameter; self.scale = scale; self.offset = offset; self.signal = signal; self.period = period
-        self.modifiers = modifiers; self.keyframes = keyframes
+        self.modifiers = modifiers; self.keyframes = keyframes; self.smoothing = smoothing
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -189,6 +196,7 @@ struct SceneParameterBinding: Codable, Sendable {
         offset = try values.decode(Double.self, forKey: .offset)
         signal = try values.decodeIfPresent(Signal.self, forKey: .signal)
         period = try values.decodeIfPresent(Double.self, forKey: .period) ?? 8
+        smoothing = try values.decodeIfPresent(Double.self, forKey: .smoothing) ?? 0
         keyframes = try values.decodeIfPresent(SceneKeyframeTrack.self, forKey: .keyframes)
         modifiers = try values.decodeIfPresent([Modifier].self, forKey: .modifiers) ?? []
     }
@@ -337,7 +345,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...11).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...12).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -385,6 +393,7 @@ struct LocalSceneSource: SceneSource {
         }
         let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline)
         guard scene.timeline == nil || manifest.version >= 11 else { throw SceneError.invalid("Authored playback requires scene version 11.") }
+        guard !result.usesSmoothing || manifest.version >= 12 else { throw SceneError.invalid("Smoothing requires scene version 12.") }
         guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
         guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
@@ -395,7 +404,7 @@ struct LocalSceneSource: SceneSource {
 }
 
 /// A typed, serializable target shared by future controls and animation tracks.
-struct ScenePropertyAddress: Codable, Sendable, Equatable {
+struct ScenePropertyAddress: Codable, Sendable, Hashable {
     enum Property: String, Codable, Sendable, CaseIterable {
         case x = "transform.x", y = "transform.y", scale = "transform.scale", rotation = "transform.rotation"
         case opacity, exposure = "style.exposure", saturation = "style.saturation", vignette = "style.vignette"
@@ -538,7 +547,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -652,5 +661,27 @@ enum SceneTree {
             if edit(id, in: &children, body) { nodes[index].content = .group(children); return true }
         }
         return false
+    }
+}
+
+/// Runtime-only filter memory, bounded by the scene's 64 unique binding targets.
+final class SceneBindingSmoother {
+    private var values: [ScenePropertyAddress: Double] = [:]
+    private var lastTime: Double?
+    private var revision: UInt64?
+    private var delta: Double = 0
+    func reset() { values.removeAll(keepingCapacity: true); lastTime = nil; revision = nil }
+    func beginFrame(time: Double, revision: UInt64) {
+        if self.revision != revision { reset(); self.revision = revision }
+        delta = lastTime.map { max(0, time - $0) } ?? 0
+        lastTime = time
+    }
+    func sample(target: ScenePropertyAddress, value: Double, duration: Double) -> Double {
+        guard duration > 0, let previous = values[target] else { values[target] = value; return value }
+        let alpha = -expm1(-delta / duration)
+        let filtered = previous * (1 - alpha) + value * alpha
+        let result = filtered.isFinite ? filtered : value
+        values[target] = result
+        return result
     }
 }

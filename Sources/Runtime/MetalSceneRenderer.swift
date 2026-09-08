@@ -54,6 +54,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var inputs: [Input] = []
     private var roots: [SceneNode] = []
     private var sourceScene: SceneDescriptor?
+    private let bindingSmoother = SceneBindingSmoother()
     private let targets = GroupTexturePool()
     var intermediateTextureBytes: Int { targets.allocatedBytes }
     private var visibleIDs: Set<UUID> {
@@ -246,6 +247,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
         roots = scene.nodes
         sourceScene = authored
+        bindingSmoother.reset()
         inputs = order.map { inputs[$0] }
         for (input, node) in zip(inputs, scene.allNodes) { input.node = node }
         diagnostics.animated = scene.animated || authored.usesTime || (authored.usesPointer && clock.pointerEnabled)
@@ -304,8 +306,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return signals
     }
     private func updateSignals(_ signals: SceneSignals) {
-        guard let sourceScene, sourceScene.usesSignals,
-              let evaluated = try? sourceScene.evaluated(signals: signals, validating: false) else { return }
+        guard let sourceScene, sourceScene.usesSignals else { return }
+        bindingSmoother.beginFrame(time: ProcessInfo.processInfo.systemUptime, revision: clock.revision)
+        guard let evaluated = try? sourceScene.evaluated(signals: signals, validating: false, smooth: { [bindingSmoother] target, value, duration in
+            bindingSmoother.sample(target: target, value: value, duration: duration)
+        }) else { return }
         let changed = sourceScene.bindings.contains { binding in
             (try? binding.target.value(in: roots)) != (try? binding.target.value(in: evaluated.nodes))
         }
@@ -360,6 +365,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         metal.preferredFramesPerSecond = rate ?? 60
     }
     func setPaused(_ paused: Bool) {
+        bindingSmoother.reset()
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
         needsFrame = true
@@ -376,6 +382,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         inputs.removeAll()
         roots.removeAll()
         sourceScene = nil
+        bindingSmoother.reset()
         targets.dispose()
         if let cache { CVMetalTextureCacheFlush(cache, 0) }
         cache = nil
