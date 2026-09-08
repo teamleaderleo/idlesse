@@ -1,12 +1,5 @@
 import AppKit
 
-// The saver extension cannot reliably activate like a normal application.
-// A nonactivating panel can still accept text input when the user clicks Options.
-private final class SettingsPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-
 final class ConfigureSheetController: NSObject {
     let window: NSWindow
 
@@ -28,9 +21,9 @@ final class ConfigureSheetController: NSObject {
     init(preferences: IdlessePreferences, onSave: @escaping () -> Void) {
         self.preferences = preferences
         self.onSave = onSave
-        self.window = SettingsPanel(
+        self.window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 640),
-            styleMask: [.titled, .closable, .nonactivatingPanel],
+            styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
@@ -335,10 +328,14 @@ final class ConfigureSheetController: NSObject {
     }
 
     private func dismiss() {
-        if let parent = window.sheetParent {
-            parent.endSheet(window)
+        // ScreenSaverView's configureSheet contract requires the controller to end
+        // the document-modal session through NSApplication. Let AppKit perform the
+        // native sheet dismissal animation; standalone development windows simply
+        // order themselves out.
+        if window.sheetParent != nil {
+            NSApp.endSheet(window)
         } else {
-            window.close()
+            window.orderOut(nil)
         }
     }
 
