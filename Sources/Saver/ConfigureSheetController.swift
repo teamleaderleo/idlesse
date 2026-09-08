@@ -205,48 +205,47 @@ final class ConfigureSheetController: NSObject {
     }
 
     @objc private func save() {
-        do {
-            if let pendingFolderURL {
+        if let pendingFolderURL {
+            do {
                 try preferences.saveFolder(pendingFolderURL)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Couldn’t remember that folder"
+                alert.informativeText = "Choose the folder again. macOS needs to grant Idlesse persistent read access."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
             }
-
-            let multiplier: Double
-            switch durationUnitPopup.titleOfSelectedItem {
-            case "Hours": multiplier = 3600
-            case "Minutes": multiplier = 60
-            default: multiplier = 1
-            }
-
-            preferences.displayDuration = max(1, durationField.doubleValue * multiplier)
-            preferences.transitionDuration = max(0, transitionField.doubleValue)
-            preferences.includeSubfolders = subfoldersButton.state == .on
-            preferences.backgroundColor = backgroundColorWell.color
-
-            if let title = scalingPopup.titleOfSelectedItem,
-               let mode = IdlesseScalingMode.allCases.first(where: { $0.title == title }) {
-                preferences.scalingMode = mode
-            }
-
-            if let title = multiDisplayPopup.titleOfSelectedItem,
-               let mode = IdlesseMultiDisplayMode.allCases.first(where: { $0.title == title }) {
-                preferences.multiDisplayMode = mode
-            }
-
-            if let title = orderingPopup.titleOfSelectedItem,
-               let order = IdlessePlaybackOrder.allCases.first(where: { $0.title == title }) {
-                preferences.playbackOrder = order
-            }
-
-            try preferences.save()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Couldn’t save Idlesse settings"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-            return
         }
 
+        let multiplier: Double
+        switch durationUnitPopup.titleOfSelectedItem {
+        case "Hours": multiplier = 3600
+        case "Minutes": multiplier = 60
+        default: multiplier = 1
+        }
+
+        preferences.displayDuration = max(1, durationField.doubleValue * multiplier)
+        preferences.transitionDuration = max(0, transitionField.doubleValue)
+        preferences.includeSubfolders = subfoldersButton.state == .on
+        preferences.backgroundColor = backgroundColorWell.color
+
+        if let title = scalingPopup.titleOfSelectedItem,
+           let mode = IdlesseScalingMode.allCases.first(where: { $0.title == title }) {
+            preferences.scalingMode = mode
+        }
+
+        if let title = multiDisplayPopup.titleOfSelectedItem,
+           let mode = IdlesseMultiDisplayMode.allCases.first(where: { $0.title == title }) {
+            preferences.multiDisplayMode = mode
+        }
+
+        if let title = orderingPopup.titleOfSelectedItem,
+           let order = IdlessePlaybackOrder.allCases.first(where: { $0.title == title }) {
+            preferences.playbackOrder = order
+        }
+
+        preferences.save()
         onSave()
         dismiss()
     }
