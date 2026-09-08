@@ -54,7 +54,17 @@ Install the saver for the current user:
 ./build.sh install
 ```
 
-Then open **System Settings → Screen Saver**, select **Idlesse**, and use **Options…** to choose an image folder.
+### Finding Idlesse on macOS 26 Tahoe
+
+Tahoe no longer has a top-level Screen Saver pane in System Settings. Go to:
+
+**System Settings → Wallpaper → Screen Saver → Custom**
+
+Then scroll to **Other** and select **Idlesse**. Once Idlesse is selected, use **Options** at the top of the Screen Saver window to open its settings.
+
+`./build.sh install` opens the Wallpaper settings pane after installation to make this easier.
+
+On older macOS versions, the Screen Saver settings may still appear as their own pane.
 
 ## Development notes
 
