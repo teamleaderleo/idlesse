@@ -28,8 +28,13 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds,
-            scale: screen.backingScaleFactor, clock: clock, onError: onError)
+        if ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" {
+            renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
+                scale: screen.backingScaleFactor, clock: clock, onError: onError)
+        } else {
+            renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds,
+                scale: screen.backingScaleFactor, clock: clock, onError: onError)
+        }
         window.contentView = renderer.view
     }
 

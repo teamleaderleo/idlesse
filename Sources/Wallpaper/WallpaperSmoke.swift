@@ -138,6 +138,40 @@ enum WallpaperSmoke {
         gradient.releaseResources()
         precondition(gradient.diagnostics.activeResources == 0)
 
+        // Exercise the experimental compositor through real GPU readback.
+        let metalImage = try MetalSceneRenderer(playable: SceneDescriptor(title: "image", nodes: [
+            SceneNode(content: .image(imageURL), opacity: 0.5,
+                transform: .init(x: 0.25, y: 0, scale: 0.5, rotation: 0))]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let imageFrame = try metalImage.renderProbe()
+        precondition(imageFrame[0] == 0 && imageFrame[1] == 0, "Translated image must leave backdrop visible")
+        let center = (16 * 32 + 24) * 4
+        precondition(abs(Int(imageFrame[center]) - 77) <= 3 && abs(Int(imageFrame[center+1]) - 90) <= 3,
+            "Image upload, translation, scale and premultiplied opacity must compose correctly")
+        metalImage.releaseResources()
+        let metalScene = try MetalSceneRenderer(playable: SceneDescriptor(title: "mixed", nodes: [
+            SceneNode(content: .gradient), SceneNode(content: .image(imageURL), opacity: 0.5)]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let mixedFrame = try metalScene.renderProbe()
+        precondition(Set(mixedFrame).count > 16 && mixedFrame != imageFrame)
+        instant = 20
+        let changedMixedFrame = try metalScene.renderProbe()
+        precondition(changedMixedFrame != mixedFrame)
+        metalScene.releaseResources()
+        let metalVideo = try MetalSceneRenderer(playable: SceneDescriptor(title: "video", assetURL: videoURL, kind: .video),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        metalVideo.setPaused(false)
+        var videoFrame: [UInt8] = []
+        wait {
+            videoFrame = (try? metalVideo.renderProbe()) ?? []
+            return Set(videoFrame).count > 20
+        }
+        wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount > 0 }
+        metalVideo.setPaused(true)
+        precondition(metalVideo.diagnostics.state == .paused)
+        metalVideo.releaseResources()
+        precondition(metalVideo.diagnostics.activeResources == 0)
+
         try Data(#"{"version":99,"title":"Future scene","capabilities":[]}"#.utf8)
             .write(to: package.appendingPathComponent("manifest.json"))
         controller.select(package)
@@ -170,6 +204,6 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient and mixed compositor, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }
