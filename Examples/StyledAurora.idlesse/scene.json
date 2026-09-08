@@ -1,0 +1,8 @@
+{
+  "nodes": [
+    {"type":"gradient","name":"Background"},
+    {"type":"group","name":"Moonlight","transform":{"scale":0.7},
+     "style":{"mask":"ellipse","exposure":0.3,"saturation":0},
+     "children":[{"type":"gradient","name":"Inner Aurora"}]}
+  ]
+}

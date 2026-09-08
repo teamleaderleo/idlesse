@@ -234,6 +234,16 @@ enum WallpaperSmoke {
         precondition(groupedMetal.updateScene(SceneDescriptor(title: "Hidden", nodes: [groupNode])))
         let groupHiddenFrame = try groupedMetal.renderProbe()
         precondition(stride(from: 0, to: groupHiddenFrame.count, by: 4).allSatisfy { groupHiddenFrame[$0] == 0 })
+        groupNode.visible = true
+        groupNode.transform = .identity
+        groupNode.style = .init(mask: .ellipse, exposure: -1, saturation: 0)
+        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Styled", nodes: [groupNode])))
+        let styledPixels = try groupedMetal.renderProbe()
+        precondition(styledPixels[0] == 0 && styledPixels[1] == 0 && styledPixels[2] == 0, "Ellipse mask must clear corners")
+        precondition(styledPixels[groupCenter] > 20 && styledPixels[groupCenter] < 60)
+        precondition(abs(Int(styledPixels[groupCenter]) - Int(styledPixels[groupCenter + 1])) <= 1 &&
+                     abs(Int(styledPixels[groupCenter]) - Int(styledPixels[groupCenter + 2])) <= 1, "Zero saturation should produce gray")
+        precondition(groupedMetal.intermediateTextureBytes <= retainedGroupBytes * 2, "Color and mask use only the existing two-frame group target allowance")
         groupedMetal.releaseResources()
         precondition(groupedMetal.intermediateTextureBytes == 0)
         let nestedGroup = SceneNode(content: .group([SceneNode(content: .group([
@@ -374,6 +384,14 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, isolated/nested groups and bounded target allocation, mixed compositor, grouped video live edits, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        let styledPackage = folder.appendingPathComponent("styled.idlesse")
+        try ScenePackageWriter.write(SceneDescriptor(title: "Styled image", nodes: [
+            SceneNode(style: .init(mask: .ellipse), content: .image(imageURL))]), to: styledPackage)
+        controller.select(styledPackage)
+        wait { controller.isRunning || !errors.isEmpty }
+        precondition(errors.isEmpty && controller.surfaces.allSatisfy { $0.window.contentView is MTKView },
+            "Styled desktop scenes must choose Metal automatically")
+        controller.stop()
+        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, isolated/nested groups, masks/color, automatic Metal selection and bounded target allocation, mixed compositor, grouped video live edits, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }

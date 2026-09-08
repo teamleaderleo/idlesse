@@ -1,62 +1,107 @@
 import AppKit
 
-/// Editing commands work on scene metadata; the host approves each replacement first.
+/// Selection indexes the document's preorder traversal, never a visible table row.
 final class SceneEditorController {
     let document: SceneDocument
     var selection = 0
     var commit: (([SceneNode], Int, String) -> Bool)?
+    var onError: ((String) -> Void)?
     init(document: SceneDocument) { self.document = document }
+    var selectedNode: SceneNode? {
+        let nodes = document.scene.allNodes
+        return nodes.indices.contains(selection) ? nodes[selection] : nil
+    }
+    var siblings: [SceneNode] { selectedNode.flatMap { SceneTree.siblings(of: $0.id, in: document.scene.nodes) } ?? [] }
+    @discardableResult private func edit(_ index: Int, name: String, _ body: (inout [SceneNode], Int) -> UUID) -> Bool {
+        let all = document.scene.allNodes
+        guard all.indices.contains(index) else { return false }
+        var roots = document.scene.nodes
+        var selectedID = all[index].id
+        guard SceneTree.edit(selectedID, in: &roots, { nodes, offset in selectedID = body(&nodes, offset) }) else { return false }
+        let next = roots.flatMap { $0.descendants }.firstIndex { $0.id == selectedID } ?? 0
+        return commit?(roots, next, name) ?? false
+    }
+    func replaceSelected(_ node: SceneNode, name: String) {
+        edit(selection, name: name) { nodes, index in nodes[index] = node; return node.id }
+    }
     func transform(_ transform: SceneNode.Transform, action: String) {
-        guard document.scene.nodes.indices.contains(selection), !document.scene.nodes[selection].locked else { return }
-        var nodes = document.scene.nodes
-        nodes[selection].transform = transform
-        _ = commit?(nodes, selection, action)
+        guard var node = selectedNode, !node.locked else { return }
+        node.transform = transform
+        replaceSelected(node, name: action)
     }
     func nudge(x: Double, y: Double) {
-        guard document.scene.nodes.indices.contains(selection), !document.scene.nodes[selection].locked else { return }
-        let t = document.scene.nodes[selection].transform
+        guard let node = selectedNode, !node.locked else { return }
+        let t = node.transform
         transform(.init(x: min(2, max(-2, (t.x ?? 0) + x)), y: min(2, max(-2, (t.y ?? 0) + y)),
                         scale: t.scale, rotation: t.rotation), action: "Nudge Layer")
     }
+    @discardableResult func add(_ node: SceneNode) -> Bool {
+        edit(selection, name: "Add Layer") { nodes, index in
+            if nodes[index].kind == .group { nodes[index].content = .group(nodes[index].children + [node]) }
+            else { nodes.insert(node, at: index + 1) }
+            return node.id
+        }
+    }
     func duplicate() {
-        guard document.scene.nodes.count < SceneBudget.maxNodes, document.scene.nodes.indices.contains(selection) else { return }
-        var nodes = document.scene.nodes
-        var copy = nodes[selection].duplicated()
-        copy.name = copy.displayName + " Copy"
-        nodes.insert(copy, at: selection + 1)
-        _ = commit?(nodes, selection + 1, "Duplicate Layer")
+        edit(selection, name: "Duplicate Layer") { nodes, index in
+            var copy = nodes[index].duplicated(); copy.name = copy.displayName + " Copy"
+            nodes.insert(copy, at: index + 1); return copy.id
+        }
     }
     func groupWithNext() {
-        var nodes = document.scene.nodes
-        guard nodes.indices.contains(selection), nodes.indices.contains(selection + 1) else { return }
-        let group = SceneNode(name: "Group", content: .group(Array(nodes[selection...selection + 1])))
-        nodes.replaceSubrange(selection...selection + 1, with: [group])
-        _ = commit?(nodes, selection, "Group Layers")
+        edit(selection, name: "Group Layers") { nodes, index in
+            guard nodes.indices.contains(index + 1) else { return nodes[index].id }
+            let group = SceneNode(name: "Group", content: .group(Array(nodes[index...index + 1])))
+            nodes.replaceSubrange(index...index + 1, with: [group]); return group.id
+        }
+    }
+    func ungroup() {
+        guard let group = selectedNode, group.kind == .group else { return }
+        // Removing an isolated translucent or transformed canvas cannot generally
+        // preserve its clipping/overlap appearance as independent child layers.
+        let t = group.transform
+        guard group.style == .plain, group.opacity == 1, (t.x ?? 0) == 0, (t.y ?? 0) == 0,
+              (t.scale ?? 1) == 1, (t.rotation ?? 0) == 0 else {
+            onError?("Reset the group's transform, opacity and appearance before ungrouping to preserve its appearance.")
+            return
+        }
+        edit(selection, name: "Ungroup Layers") { nodes, index in
+            let children = group.children.map { child -> SceneNode in
+                var child = child; child.visible = group.visible && child.visible; child.locked = group.locked || child.locked; return child
+            }
+            nodes.replaceSubrange(index...index, with: children); return children[0].id
+        }
+    }
+    func reorder(_ source: Int, _ destination: Int) {
+        let all = document.scene.allNodes
+        guard all.indices.contains(source), all.indices.contains(destination) else { return }
+        let target = all[destination].id
+        guard SceneTree.siblings(of: all[source].id, in: document.scene.nodes)?.contains(where: { $0.id == target }) == true else {
+            onError?("Reorder layers within the same group."); return
+        }
+        edit(source, name: "Reorder Layer") { nodes, index in
+            let destination = nodes.firstIndex { $0.id == target }!
+            let node = nodes.remove(at: index); nodes.insert(node, at: destination); return node.id
+        }
+    }
+    func reorderAdjacent() {
+        guard let selectedNode, let index = siblings.firstIndex(where: { $0.id == selectedNode.id }), siblings.count > 1 else { return }
+        let next = siblings[index == 0 ? 1 : index - 1].id
+        if let destination = document.scene.allNodes.firstIndex(where: { $0.id == next }) { reorder(selection, destination) }
     }
     func toggleVisibility(_ index: Int) {
-        guard document.scene.nodes.indices.contains(index) else { return }
-        var nodes = document.scene.nodes
-        nodes[index].visible.toggle()
-        _ = commit?(nodes, index, nodes[index].visible ? "Show Layer" : "Hide Layer")
+        edit(index, name: "Toggle Layer Visibility") { nodes, offset in nodes[offset].visible.toggle(); return nodes[offset].id }
     }
     func toggleLock(_ index: Int) {
-        guard document.scene.nodes.indices.contains(index) else { return }
-        var nodes = document.scene.nodes
-        nodes[index].locked.toggle()
-        _ = commit?(nodes, index, nodes[index].locked ? "Lock Layer" : "Unlock Layer")
+        edit(index, name: "Toggle Layer Lock") { nodes, offset in nodes[offset].locked.toggle(); return nodes[offset].id }
     }
     func remove() {
-        guard document.scene.nodes.count > 1, document.scene.nodes.indices.contains(selection) else { return }
-        var nodes = document.scene.nodes
-        nodes.remove(at: selection)
-        _ = commit?(nodes, max(0, selection - 1), "Delete Layer")
+        guard siblings.count > 1 else { return }
+        edit(selection, name: "Delete Layer") { nodes, index in nodes.remove(at: index); return nodes[max(0, index - 1)].id }
     }
     func rename(_ name: String) {
         let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
-        guard !name.isEmpty, document.scene.nodes.indices.contains(selection) else { return }
-        var nodes = document.scene.nodes
-        guard nodes[selection].displayName != name else { return }
-        nodes[selection].name = name
-        _ = commit?(nodes, selection, "Rename Layer")
+        guard var node = selectedNode, !name.isEmpty, node.displayName != name else { return }
+        node.name = name; replaceSelected(node, name: "Rename Layer")
     }
 }

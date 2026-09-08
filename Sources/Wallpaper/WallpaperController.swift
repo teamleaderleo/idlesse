@@ -28,7 +28,7 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" {
+        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
         } else {
@@ -148,7 +148,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         panel.prompt = "Use Wallpaper"
         panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie, UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
         panel.treatsFilePackagesAsDirectories = false
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = selectedURL?.deletingLastPathComponent()
         chooser = panel

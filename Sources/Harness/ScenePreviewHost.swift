@@ -10,7 +10,7 @@ final class ScenePreviewHost {
     var measurementResult: String?
     func prepare(scene: SceneDescriptor, bounds: NSRect, scale: CGFloat, metal: Bool,
                  onError: @escaping (String) -> Void) throws -> SceneRenderer {
-        if metal {
+        if metal || scene.requiresMetal {
             return try MetalSceneRenderer(playable: scene, bounds: bounds, scale: scale, clock: clock, onError: onError)
         }
         return try LayeredSceneRenderer(playable: scene, bounds: bounds, scale: scale, clock: clock, onError: onError)
