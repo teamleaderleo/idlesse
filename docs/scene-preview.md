@@ -53,7 +53,7 @@ ordered add/multiply stacks can be edited in the package JSON.
 A styled scene automatically uses Metal
 in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the
-Standard fallback. There is no timeline or arbitrary effect graph yet.
+Standard fallback. There is no arbitrary effect graph yet.
 
 ## Scene transport
 
@@ -66,7 +66,7 @@ start; seeking at or beyond the end wraps into the interval.
 Transport controls affect gradients and time-based bindings. Video players retain
 their own position and speed; this is not frame-accurate video scrubbing. Settings
 belong to the preview session, survive scene edits, and are not exported or sent
-to the desktop. There is no keyframe timeline yet.
+to the desktop. Saved playback is available separately through Playback….
 
 ## Documents and saving
 
@@ -194,4 +194,16 @@ Select a layer and choose **Keyframes…**, select a property and interpolation,
 
 The sheet loads an existing track and interpolation when its property is selected. Applying edits preserves that track's scale, offset and modifiers; replacing a non-track binding starts a plain track. Remove Track restores the static property and supports Undo.
 
-The timeline beneath the canvas shows time, a scrubber and selected-layer key markers. Scrubbing pauses and redraws Metal motion immediately. Its range ends at the last scene key (eight seconds for scenes without tracks). Loop Range starts a preview loop over that range; Time… adjusts or disables it. Opening a different scene resets time/rate/loop; same-scene hot reload preserves transport. The status readout shares the existing one-second performance tick and stops updating while the host is suspended. Choose a property in the timeline track picker to see only its keys. Drag a diamond to change its time within the visible range; release commits one Undo action. Keys stop before their neighbours and retain their values/interpolation/modifiers. Click a key then use Left/Right to nudge by 0.1 seconds (Shift: one second); Escape cancels an unfinished drag. For extending the visible range, edit the endpoint time in Keyframes…. A drag previews the diamond only and updates scene motion on release. Video clock synchronization remains unfinished.
+The timeline beneath the canvas shows time, a scrubber and selected-layer key markers. Scrubbing pauses and redraws Metal motion immediately. Its range uses authored duration, otherwise the last scene key (eight seconds without tracks). Loop Range starts a preview loop over that range; Time… adjusts or disables it. Opening a different scene applies authored playback; same-scene hot reload preserves transport unless authored playback changed. The status readout shares the existing one-second performance tick and stops updating while the host is suspended. Choose a property in the timeline track picker to see only its keys. Drag a key to change time and value; release commits one Undo action. Keys stop before their neighbours and retain interpolation/modifiers. Click a key then use Left/Right to nudge by 0.1 seconds (Shift: one second); Escape cancels an unfinished drag. For extending the visible range, edit the endpoint time in Keyframes…. A drag previews the curve and updates scene motion on release. Video clock synchronization remains unfinished.
+
+
+### Authored playback (V11)
+
+**Playback…** saves duration (0.01–86400 seconds), mode (Once, Loop, Ping-pong), and speed (0.1–4×) as document data, with Undo/Redo. Save/Save As writes `timeline: {"duration": 6, "mode": "loop", "rate": 1}` into scene.json and selects manifest version 11. Remove restores unbounded scene time. Earlier packages remain unchanged.
+
+Studio and desktop apply authored playback on selection. A changed authored timeline restarts at zero; unchanged hot reload preserves the clock. Pause/resume preserves ping-pong direction. Time… and Loop Range remain temporary preview overrides; editing layers preserves those overrides, while changing authored playback or opening another scene replaces them. Scrubbing seeks the authored clock without removing its mode. The visible timeline uses authored duration when present. Videos remain independent. Keyframed Aurora now demonstrates a saved six-second loop.
+
+
+### Curve editing
+
+The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. Clipboard operations, timeline zoom, smoothing and video transport are still pending.
