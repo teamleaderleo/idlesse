@@ -13,6 +13,7 @@ final class IdlesseView: ScreenSaverView {
 
     private var displayTimer: Timer?
     private var fadeTimer: Timer?
+    private var libraryRefreshTimer: Timer?
     private var fadeStartedAt: TimeInterval = 0
     private var currentURL: URL?
     private var nextURL: URL?
@@ -82,6 +83,10 @@ final class IdlesseView: ScreenSaverView {
         canvas.backdropColor = preferences.backgroundColor
         canvas.message = library.lastError
 
+        if running {
+            scheduleLibraryRefresh()
+        }
+
         guard let first = library.next(excluding: nil) else {
             canvas.message = library.lastError ?? "Choose a folder in Options…"
             return
@@ -124,6 +129,45 @@ final class IdlesseView: ScreenSaverView {
         }
         displayTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func scheduleLibraryRefresh() {
+        libraryRefreshTimer?.invalidate()
+
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            self?.refreshLibrary()
+        }
+        libraryRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func refreshLibrary() {
+        guard running else { return }
+        guard library.refreshIfChanged(currentURL: currentURL) else { return }
+
+        if library.count == 0 {
+            displayTimer?.invalidate()
+            fadeTimer?.invalidate()
+            displayTimer = nil
+            fadeTimer = nil
+            currentURL = nil
+            nextURL = nil
+            canvas.currentImage = nil
+            canvas.nextImage = nil
+            canvas.transitionProgress = 0
+            canvas.message = library.lastError
+            return
+        }
+
+        canvas.message = nil
+
+        // If the saver had been sitting on an empty folder, begin as soon as an image
+        // appears. Otherwise keep the currently rendered image until its normal timer ends.
+        if canvas.currentImage == nil, let first = library.next(excluding: nil) {
+            currentURL = first.url
+            canvas.currentImage = first.image
+            scheduleNextImage()
+        }
     }
 
     private func beginTransition() {
@@ -190,7 +234,9 @@ final class IdlesseView: ScreenSaverView {
     private func stopTimers() {
         displayTimer?.invalidate()
         fadeTimer?.invalidate()
+        libraryRefreshTimer?.invalidate()
         displayTimer = nil
         fadeTimer = nil
+        libraryRefreshTimer = nil
     }
 }

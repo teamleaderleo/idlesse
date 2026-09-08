@@ -28,6 +28,28 @@ enum IdlesseMultiDisplayMode: String, CaseIterable {
     }
 }
 
+enum IdlessePlaybackOrder: String, CaseIterable {
+    case random
+    case nameAscending
+    case nameDescending
+    case createdOldest
+    case createdNewest
+    case modifiedOldest
+    case modifiedNewest
+
+    var title: String {
+        switch self {
+        case .random: return "Random"
+        case .nameAscending: return "Name (A–Z)"
+        case .nameDescending: return "Name (Z–A)"
+        case .createdOldest: return "Date created (oldest first)"
+        case .createdNewest: return "Date created (newest first)"
+        case .modifiedOldest: return "Date modified (oldest first)"
+        case .modifiedNewest: return "Date modified (newest first)"
+        }
+    }
+}
+
 final class IdlessePreferences {
     static let moduleIdentifier = "com.teamleaderleo.idlesse"
     static let shared = IdlessePreferences()
@@ -40,7 +62,8 @@ final class IdlessePreferences {
         static let scalingMode = "scalingMode"
         static let backgroundColor = "backgroundColor"
         static let multiDisplayMode = "multiDisplayMode"
-        static let shuffle = "shuffle"
+        static let playbackOrder = "playbackOrder"
+        static let shuffle = "shuffle" // legacy migration key
         static let includeSubfolders = "includeSubfolders"
     }
 
@@ -53,15 +76,26 @@ final class IdlessePreferences {
             defaults = .standard
         }
 
+        let hadPlaybackOrder = defaults.object(forKey: Key.playbackOrder) != nil
+        let legacyShuffle = (defaults.object(forKey: Key.shuffle) as? NSNumber)?.boolValue
+
         defaults.register(defaults: [
             Key.displayDuration: 300.0,
             Key.transitionDuration: 2.0,
             Key.scalingMode: IdlesseScalingMode.fit.rawValue,
             Key.backgroundColor: [0.0, 0.0, 0.0, 1.0],
             Key.multiDisplayMode: IdlesseMultiDisplayMode.same.rawValue,
-            Key.shuffle: true,
+            Key.playbackOrder: IdlessePlaybackOrder.random.rawValue,
             Key.includeSubfolders: true,
         ])
+
+        // Preserve the old Random order checkbox when upgrading an existing prototype.
+        if !hadPlaybackOrder, let legacyShuffle {
+            defaults.set(
+                legacyShuffle ? IdlessePlaybackOrder.random.rawValue : IdlessePlaybackOrder.nameAscending.rawValue,
+                forKey: Key.playbackOrder
+            )
+        }
     }
 
     var folderDisplayPath: String? {
@@ -124,9 +158,15 @@ final class IdlessePreferences {
         set { defaults.set(newValue.rawValue, forKey: Key.multiDisplayMode) }
     }
 
-    var shuffle: Bool {
-        get { defaults.bool(forKey: Key.shuffle) }
-        set { defaults.set(newValue, forKey: Key.shuffle) }
+    var playbackOrder: IdlessePlaybackOrder {
+        get {
+            guard let raw = defaults.string(forKey: Key.playbackOrder),
+                  let order = IdlessePlaybackOrder(rawValue: raw) else {
+                return .random
+            }
+            return order
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.playbackOrder) }
     }
 
     var includeSubfolders: Bool {
