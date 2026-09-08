@@ -205,7 +205,7 @@ final class ConfigureSheetController: NSObject {
         if let parent = window.sheetParent {
             parent.endSheet(window)
         } else {
-            NSApp.endSheet(window)
+            window.orderOut(nil)
         }
     }
 
