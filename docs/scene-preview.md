@@ -23,16 +23,21 @@ color parity remain separate compositor promotion gates.
 
 Select a layer in the right inspector and edit X/Y, scale, rotation, or opacity.
 Press Return to apply. Reset Changes restores the scene loaded before the first edit.
-Edits rebuild the renderer, so videos restart; continuous dragging is not implemented.
+Add an image/video or a gradient with the layer controls (two layers maximum).
+New layers start centered at 60% scale. Bring Forward / Send Backward changes drawing
+order while keeping the same layer selected. Remove keeps at least one layer.
+Drag anywhere in the canvas to move the selected layer’s outline; release commits
+its position. The outline previews the move without rebuilding players on each mouse
+event. Edits rebuild the renderer, so videos restart once when the edit is applied.
+Scale and rotation remain numeric controls; there are no resize/rotate handles yet.
 Unsaved drafts suspend package watching and disable Use on Desktop. Opening another
 scene or closing asks before discarding edits.
 
 Save a Copy exports a new v2 package with its media, validates it, and opens that copy.
 Existing destinations are never replaced. Source files stay untouched. Media copies
 can consume additional disk space; this is not a cloud/offloading workflow. Export
-runs away from the main thread and removes staging files on failure. The editor
-currently changes existing nodes only: adding, deleting, reordering and drag handles
-are still to come.
+runs away from the main thread and removes staging files on failure. Imported media access is retained for the draft and released when it is no longer
+needed. Export preserves layer order and transforms.
 
 ## Frame rate
 

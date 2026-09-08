@@ -63,10 +63,16 @@ import Foundation
         catch is SceneError {}
         let mediaExport = root.deletingLastPathComponent().appendingPathComponent("media-\(UUID().uuidString).idlesse")
         defer { try? FileManager.default.removeItem(at: mediaExport) }
-        try ScenePackageWriter.write(result, to: mediaExport)
+        var foreground = result.nodes[0]
+        foreground.opacity = 0.4
+        foreground.transform = .init(x: 0.2, y: -0.1, scale: 0.6, rotation: 15)
+        let composition = SceneDescriptor(title: "Layers", nodes: [gradient.nodes[0], foreground])
+        try ScenePackageWriter.write(composition, to: mediaExport)
         let mediaRoundTrip = try await source.resolve(mediaExport)
-        precondition(mediaRoundTrip.nodes[0].assetURL!.path.hasPrefix(mediaExport.path + "/assets/"))
-        let copiedBytes = try Data(contentsOf: mediaRoundTrip.nodes[0].assetURL!)
+        precondition(mediaRoundTrip.nodes[1].assetURL!.path.hasPrefix(mediaExport.path + "/assets/"))
+        precondition(mediaRoundTrip.nodes.count == 2 && mediaRoundTrip.nodes[0].kind == .gradient)
+        precondition(mediaRoundTrip.nodes[1].opacity == 0.4 && mediaRoundTrip.nodes[1].transform.x == 0.2)
+        let copiedBytes = try Data(contentsOf: mediaRoundTrip.nodes[1].assetURL!)
         precondition(copiedBytes == Data())
         let invalidExport = root.deletingLastPathComponent().appendingPathComponent("invalid-\(UUID().uuidString).idlesse")
         do {
