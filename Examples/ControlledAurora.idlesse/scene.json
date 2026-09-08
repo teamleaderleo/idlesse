@@ -1,0 +1,11 @@
+{
+  "nodes": [{"id":"7F2A0000-0000-4000-8000-000000000001","type":"gradient","name":"Aurora"}],
+  "parameters": {
+    "vignette": {"name":"Edge Darkness","default":0.7,"min":0,"max":1},
+    "exposure": {"name":"Brightness","default":0,"min":-2,"max":2}
+  },
+  "bindings": [
+    {"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000001","property":"style.vignette"},"parameter":"vignette","scale":1,"offset":0},
+    {"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000001","property":"style.exposure"},"parameter":"exposure","scale":1,"offset":0}
+  ]
+}

@@ -248,8 +248,10 @@ enum WallpaperSmoke {
         groupNode.style = .plain
         precondition(groupedMetal.updateScene(SceneDescriptor(title: "Plain", nodes: [groupNode])))
         let plainVignettePixels = try groupedMetal.renderProbe()
-        groupNode.style.vignette = 1
-        precondition(groupedMetal.updateScene(SceneDescriptor(title: "Vignette", nodes: [groupNode])))
+        let vignetteControl = SceneDescriptor(title: "Vignette", nodes: [groupNode],
+            parameters: ["edges": .init(name: "Edges", value: 1, min: 0, max: 1)],
+            bindings: [.init(target: .init(nodeID: groupNode.id, property: .vignette), parameter: "edges")])
+        precondition(vignetteControl.requiresMetal && groupedMetal.updateScene(vignetteControl))
         let vignettePixels = try groupedMetal.renderProbe()
         precondition(abs(Int(vignettePixels[groupCenter]) - Int(plainVignettePixels[groupCenter])) <= 1,
                      "Vignette must leave the center unchanged")
@@ -348,6 +350,12 @@ enum WallpaperSmoke {
         metalGroupVideo.setPaused(false)
         wait { _ = try? metalGroupVideo.renderProbe(); return metalGroupVideo.diagnostics.loopCount >= 1 && standardGroupVideo.diagnostics.loopCount >= 1 }
         let groupVideoLoops = metalGroupVideo.diagnostics.loopCount
+        let standardLoops = standardGroupVideo.diagnostics.loopCount
+        let controlledVideo = SceneDescriptor(title: "Controlled video", nodes: [videoGroup],
+            parameters: ["opacity": .init(name: "Opacity", value: 0.6, min: 0, max: 1)],
+            bindings: [.init(target: .init(nodeID: videoGroup.id, property: .opacity), parameter: "opacity")])
+        precondition(standardGroupVideo.updateScene(controlledVideo) && metalGroupVideo.updateScene(controlledVideo))
+        precondition(standardGroupVideo.diagnostics.loopCount >= standardLoops && metalGroupVideo.diagnostics.loopCount >= groupVideoLoops)
         videoGroup.opacity = 0.4
         videoGroup.transform = .init(x: 0.1, y: 0, scale: 0.8, rotation: 10)
         let updatedGroupVideo = SceneDescriptor(title: "Moved video", nodes: [videoGroup])

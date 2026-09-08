@@ -42,7 +42,10 @@ reparenting yet.
 **Appearance…** adds an ellipse mask, exposure (−2…2 stops), saturation (0…2),
 and a vignette strength slider (0…1). Apply commits one undoable live renderer edit.
 Vignette darkens the edges without changing alpha or the center, and costs no extra
-render pass or texture. All scenes now save as v6 with persistent layer IDs.
+render pass or texture. Scenes save as v6 with persistent layer IDs, or v7 with controls.
+**Bind…** links a selected layer property to a numeric control; **Controls…** adjusts
+the generated sliders. Apply preserves playback and supports Undo. See
+[the control format and current limits](scenes.md#numeric-controls-and-bindings-version-7).
 A styled scene automatically uses Metal
 in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the

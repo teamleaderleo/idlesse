@@ -113,6 +113,7 @@ build_app() {
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
     "$ROOT/Sources/Harness/ScenePreviewHost.swift" \
+    "$ROOT/Sources/Harness/SceneParameterControls.swift" \
     "$ROOT/Sources/Harness/SceneLayerList.swift" \
     "$ROOT/Sources/Harness/SceneCanvasInteraction.swift" \
     "$ROOT/Sources/Harness/SceneEditorController.swift" \

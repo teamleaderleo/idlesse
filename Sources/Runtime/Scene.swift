@@ -5,16 +5,64 @@ struct SceneDescriptor: Sendable {
     enum Kind: String, Codable, Sendable { case image, video, gradient, group }
     let title: String
     let nodes: [SceneNode]
+    var parameters: [String: SceneParameter] = [:]
+    var bindings: [SceneParameterBinding] = []
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
-    var requiresMetal: Bool { allNodes.contains { $0.style != .plain } }
+    var requiresMetal: Bool { allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool { nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode]) { self.title = title; self.nodes = nodes }
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = []) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings
+    }
+    func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
+        let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
+        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) })
+    }
+    func evaluated() throws -> SceneDescriptor {
+        guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
+        for (id, parameter) in parameters {
+            guard !id.isEmpty, id.utf8.count <= 64, !parameter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parameter.name.count <= 80,
+                  [parameter.value, parameter.min, parameter.max].allSatisfy({ $0.isFinite }),
+                  (parameter.max - parameter.min).isFinite,
+                  parameter.min < parameter.max, (parameter.min...parameter.max).contains(parameter.value) else {
+                throw SceneError.invalid("Parameters need a name, finite limits, and a default within their range.")
+            }
+        }
+        var result = nodes
+        var targets = Set<String>()
+        for binding in bindings {
+            guard let parameter = parameters[binding.parameter], binding.scale.isFinite, binding.offset.isFinite,
+                  targets.insert(binding.target.nodeID.uuidString + binding.target.property.rawValue).inserted else {
+                throw SceneError.invalid("Bindings need an existing parameter and a unique property target.")
+            }
+            let raw = parameter.value * binding.scale + binding.offset
+            guard raw.isFinite else { throw SceneError.invalid("The binding result is not finite.") }
+            let range = binding.target.property.range
+            try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
+        }
+        try SceneBudget.validate(result)
+        return SceneDescriptor(title: title, nodes: result)
+    }
+}
+
+struct SceneParameter: Codable, Sendable, Equatable {
+    var name: String
+    var value: Double
+    var min: Double
+    var max: Double
+    enum CodingKeys: String, CodingKey { case name, value = "default", min, max }
+}
+
+struct SceneParameterBinding: Codable, Sendable {
+    let target: ScenePropertyAddress
+    let parameter: String
+    var scale: Double = 1
+    var offset: Double = 0
 }
 
 struct SceneNode: Sendable {
@@ -89,6 +137,8 @@ struct LocalSceneSource: SceneSource {
         let capabilities: [String]
     }
     private struct Scene: Decodable {
+        let parameters: [String: SceneParameter]?
+        let bindings: [SceneParameterBinding]?
         let layers: [Node]?
         let nodes: [Node]?
         struct Node: Decodable {
@@ -151,7 +201,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...6).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...7).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -194,7 +244,12 @@ struct LocalSceneSource: SceneSource {
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
-        return SceneDescriptor(title: manifest.title, nodes: nodes)
+        guard manifest.version >= 7 || (scene.parameters == nil && scene.bindings == nil) else {
+            throw SceneError.invalid("Parameters and bindings require scene version 7.")
+        }
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [])
+        _ = try result.evaluated()
+        return result
     }
 }
 
@@ -284,6 +339,7 @@ enum ScenePackageWriter {
     }
     static func write(_ scene: SceneDescriptor, to destination: URL, replacing expected: Revision? = nil) throws {
         try SceneBudget.validate(scene.nodes)
+        _ = try scene.evaluated()
         let files = FileManager.default
         guard destination.isFileURL, destination.pathExtension.lowercased() == "idlesse",
               expected != nil || !files.fileExists(atPath: destination.path) else {
@@ -331,8 +387,14 @@ enum ScenePackageWriter {
             return json
         }
         let nodes = try scene.nodes.map(encode)
-        for (name, json) in [("manifest.json", ["version": 6, "title": scene.title, "capabilities": []] as [String: Any]),
-                             ("scene.json", ["nodes": nodes])] {
+        var contents: [String: Any] = ["nodes": nodes]
+        let controlled = !scene.parameters.isEmpty || !scene.bindings.isEmpty
+        if controlled {
+            contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
+            contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
+        }
+        for (name, json) in [("manifest.json", ["version": controlled ? 7 : 6, "title": scene.title, "capabilities": []] as [String: Any]),
+                             ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
         }

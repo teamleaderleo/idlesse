@@ -11,6 +11,7 @@ final class WallpaperSurface {
     let window: NSWindow
     private let renderer: SceneRenderer
     var diagnostics: RendererDiagnostics { renderer.diagnostics }
+    func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {
         window = DesktopWindow(contentRect: screen.frame, styleMask: .borderless,
@@ -366,6 +367,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
         if let lastReloadError { menu.addItem(withTitle: "Edit not applied: " + lastReloadError, action: nil, keyEquivalent: "") }
         if let selectedURL { menu.addItem(withTitle: selectedURL.lastPathComponent, action: nil, keyEquivalent: "") }
+        if let playable, !playable.parameters.isEmpty {
+            let controls = addItem(menu, "Scene Controls…", #selector(editControls))
+            controls.isEnabled = !isLoading
+        }
         menu.addItem(.separator())
         addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
@@ -397,6 +402,25 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc private func showPreview() { onShowPreview?() }
+    @objc private func editControls() {
+        guard let original = playable, !isLoading else { return }
+        SceneParameterControls.present(scene: original, window: nil) { [weak self] parameters in
+            guard let self, self.playable?.parameters == original.parameters, !self.isLoading,
+                  self.playable?.allNodes.map(\.id) == original.allNodes.map(\.id) else { return }
+            var next = original
+            next.parameters = parameters
+            do { _ = try next.evaluated() } catch { self.showError(error.localizedDescription); return }
+            for surface in self.surfaces {
+                guard surface.updateScene(next) else {
+                    self.surfaces.forEach { _ = $0.updateScene(original) }
+                    self.showError("The scene controls could not be applied. The previous values were restored.")
+                    return
+                }
+            }
+            self.playable = next
+            self.updateMenu()
+        }
+    }
     @objc private func quit() { onStop = nil; stop(); NSApp.terminate(nil) }
 
     private func showError(_ message: String) {

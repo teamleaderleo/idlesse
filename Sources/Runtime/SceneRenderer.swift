@@ -202,6 +202,7 @@ final class LayeredSceneRenderer: SceneRenderer {
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void, imagePixels: Int? = nil) throws {
         guard !playable.requiresMetal else { throw SceneError.invalid("Masks and color effects require the Metal renderer.") }
+        let playable = try playable.evaluated()
         try SceneBudget.validate(playable.nodes)
         let imagePixels = imagePixels ?? SceneBudget.imagePixels(playable.nodes)
         nodes = playable.nodes
@@ -242,6 +243,7 @@ final class LayeredSceneRenderer: SceneRenderer {
         } catch { releaseResources(); throw error }
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
+        guard !scene.requiresMetal, let scene = try? scene.evaluated() else { return false }
         guard state != .disposed, !scene.requiresMetal, let order = sceneResourceOrder(from: nodes, to: scene.nodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
         // The recursive resource check above preflights every subtree before mutation.

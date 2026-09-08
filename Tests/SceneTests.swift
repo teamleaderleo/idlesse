@@ -147,6 +147,40 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: groupedPackage) }
         try ScenePackageWriter.write(SceneDescriptor(title: "Grouped", nodes: [group]), to: groupedPackage)
         let grouped = try await source.resolve(groupedPackage)
+        var controlled = SceneDescriptor(title: "Controls", nodes: [group],
+            parameters: ["amount": .init(name: "Amount", value: 0.4, min: 0, max: 1)],
+            bindings: [.init(target: .init(nodeID: firstNode.id, property: .opacity), parameter: "amount", scale: 2, offset: 0.1)])
+        let evaluated = try controlled.evaluated()
+        precondition(evaluated.allNodes[1].opacity == 0.9 && controlled.allNodes[1].opacity == firstNode.opacity)
+        controlled.parameters["amount"]?.value = 1
+        let clamped = try controlled.evaluated()
+        precondition(clamped.allNodes[1].opacity == 1)
+        try ScenePackageWriter.write(controlled, to: groupedPackage, replacing: ScenePackageWriter.revision(of: groupedPackage))
+        let controlsLoaded = try await source.resolve(groupedPackage)
+        precondition(controlsLoaded.parameters == controlled.parameters && controlsLoaded.bindings[0].target == controlled.bindings[0].target)
+        let retained = controlled.replacingNodes([group])
+        precondition(retained.bindings.count == 1 && retained.parameters == controlled.parameters)
+        precondition(controlled.replacingNodes([SceneNode(content: .gradient)]).bindings.isEmpty)
+        for invalid in 0..<9 {
+            var bad = controlled
+            switch invalid {
+            case 0: bad.parameters["amount"]?.value = .nan
+            case 1: bad.parameters["amount"]?.min = 1
+            case 2: bad.bindings.append(bad.bindings[0])
+            case 3: bad.parameters = [:]
+            case 4: bad.bindings[0] = .init(target: .init(nodeID: UUID(), property: .opacity), parameter: "amount")
+            case 5: bad.bindings[0].scale = .infinity
+            case 6: bad.parameters = Dictionary(uniqueKeysWithValues: (0..<17).map { ("p\($0)", SceneParameter(name: "Control", value: 0, min: 0, max: 1)) })
+            case 7: bad.parameters["amount"]?.name = " "
+            default: bad.parameters["amount"]?.min = -Double.greatestFiniteMagnitude; bad.parameters["amount"]?.max = Double.greatestFiniteMagnitude
+            }
+            do { _ = try bad.evaluated(); fatalError("Accepted invalid controls") } catch is SceneError {}
+        }
+        try Data(#"{"version":6,"title":"Old","capabilities":[]}"#.utf8).write(to: groupedPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(groupedPackage); fatalError("Accepted controls in v6") } catch is SceneError {}
+        try Data(#"{"version":7,"title":"Controls","capabilities":[]}"#.utf8).write(to: groupedPackage.appendingPathComponent("manifest.json"))
+        try ScenePackageWriter.write(SceneDescriptor(title: "Grouped", nodes: [group]), to: groupedPackage,
+                                    replacing: ScenePackageWriter.revision(of: groupedPackage))
         precondition(grouped.allNodes.map(\.id) == group.descendants.map(\.id))
         let reloaded = try await source.resolve(groupedPackage)
         precondition(reloaded.allNodes.map(\.id) == grouped.allNodes.map(\.id))
