@@ -23,43 +23,12 @@ final class ConfigureSheetController: NSObject {
     init(preferences: IdlessePreferences, onSave: @escaping () -> Void) {
         self.preferences = preferences
         self.onSave = onSave
-
-        let usesTahoePanel: Bool
-        if #available(macOS 26.0, *) {
-            usesTahoePanel = ProcessInfo.processInfo.processName
-                .lowercased()
-                .contains("legacyscreensaver")
-        } else {
-            usesTahoePanel = false
-        }
-
-        if usesTahoePanel {
-            let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
-                styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            panel.isFloatingPanel = true
-            panel.becomesKeyOnlyIfNeeded = false
-            panel.hidesOnDeactivate = false
-            panel.level = .floating
-            panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
-            panel.isMovableByWindowBackground = true
-            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            panel.standardWindowButton(.zoomButton)?.isHidden = true
-            self.window = panel
-        } else {
-            self.window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
-                styleMask: [.titled, .closable],
-                backing: .buffered,
-                defer: false
-            )
-        }
-
+        self.window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
         super.init()
 
         window.title = "Idlesse Settings"
