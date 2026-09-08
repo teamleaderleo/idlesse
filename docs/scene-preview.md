@@ -255,3 +255,19 @@ The visible interval is bounded by the scene duration and zooms down to 0.1 seco
 (or the whole duration for shorter scenes). A duration change constrains the interval.
 The curve samples only the visible interval with the same bounded sample count.
 The playhead marker uses Studio's existing status updates; no extra render timer.
+
+### Audio response
+
+Choose **Samples → Audio Aurora**, then enable **Audio Response** in the inspector.
+macOS may ask for System Audio Recording permission. The level display shows incoming
+level/bass/mid/treble percentages. **Controls…** adjusts the sample's sensitivity.
+Audio is disabled by default for newly opened scenes and is never enabled by recovery.
+
+**Bind…** now includes Audio Level, Bass, Mid and Treble. Use scale, modifiers and
+smoothing as with other signals. The desktop menu has its own Audio Response toggle.
+Capture is shared across displays/hosts and released when no active host needs it.
+
+`--smoke-audio <wav-path>` is a separate, explicit native integration check: it plays
+the supplied fixture quietly for five seconds, checks nonzero levels and shared-client/
+pause teardown, then stops capture. Ordinary automated tests use synthetic samples and
+do not request audio permission.

@@ -79,6 +79,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private var playable: SceneDescriptor?
     private var selectedIsAnimated: Bool { playable?.animated ?? false }
     private var clock = SceneClock()
+    private var audioSession: SceneAudioSession?
     private var watcher: SceneWatcher?
     private(set) var lastReloadError: String?
     private(set) var revision = 0
@@ -148,8 +149,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         panel.message = "One image or muted looping video, on every display. Stop any time from the Idlesse menu."
         panel.prompt = "Use Wallpaper"
         panel.allowedContentTypes = [.directory, .jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie, UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
-        panel.treatsFilePackagesAsDirectories = false
+        panel.treatsFilePackagesAsDirectories = true
         panel.canChooseDirectories = true
+        panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = selectedURL?.deletingLastPathComponent()
         chooser = panel
@@ -216,6 +218,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 if !reuseClock {
                     try candidateClock.configure(timeline: playable.timeline)
                     candidateClock.pointerEnabled = reloading && self.clock.pointerEnabled
+                    candidateClock.audioEnabled = reloading && self.clock.audioEnabled && playable.usesAudio
                 }
                 let replacement = self.suspended ? [] :
                     try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
@@ -226,6 +229,15 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.playable = playable
                 adopted = true
                 if !reloading { self.pausedByUser = false }
+                if !reuseClock {
+                    self.audioSession = nil
+                    self.audioSession = SceneAudioSession(clock: candidateClock) { [weak self] message in
+                        self?.onError?(message)
+                        self?.lastReloadError = message
+                        self?.updateMenu()
+                    }
+                }
+                if !playable.usesAudio { candidateClock.audioEnabled = false }
                 self.clock = candidateClock
                 self.clock.setPaused(self.suspended || self.shouldPause)
                 self.lastReloadError = nil
@@ -381,6 +393,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             pointer.state = clock.pointerEnabled ? .on : .off
             pointer.isEnabled = !isLoading
         }
+        if playable?.usesAudio == true {
+            let audio = addItem(menu, "Enable Audio Response", #selector(toggleAudio))
+            audio.state = clock.audioEnabled ? .on : .off
+            audio.isEnabled = !isLoading
+        }
         menu.addItem(.separator())
         addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
@@ -412,6 +429,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc private func showPreview() { onShowPreview?() }
+    @objc private func toggleAudio() {
+        guard let playable, playable.usesAudio, !isLoading else { return }
+        clock.audioEnabled.toggle()
+        surfaces.forEach { _ = $0.updateScene(playable) }
+        updateMenu()
+    }
     @objc private func togglePointer() {
         guard let playable, !isLoading else { return }
         clock.pointerEnabled.toggle()

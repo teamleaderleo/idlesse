@@ -13,6 +13,9 @@ final class SceneClock {
     private(set) var isPaused = true
     /// Explicit host opt-in, never granted by a package manifest.
     var pointerEnabled = false
+    var audioEnabled = false { didSet { audioActivityChanged?(audioEnabled && !isPaused) } }
+    var audioActivityChanged: ((Bool) -> Void)?
+    var audioLevels: () -> SceneAudioLevels = { SceneAudioLevels() }
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now
         anchor = now()
@@ -73,5 +76,6 @@ final class SceneClock {
         accumulated = phase
         anchor = now()
         isPaused = paused
+        audioActivityChanged?(audioEnabled && !paused)
     }
 }

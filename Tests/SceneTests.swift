@@ -439,6 +439,36 @@ import Foundation
         do { _ = try track.movingKey(at: 0, to: .nan); fatalError("Accepted NaN key time") } catch is SceneError {}
         track.keys[1].time = 1
         do { _ = try track.sample(at: 2); fatalError("Accepted duplicate key time") } catch is SceneError {}
-        print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
+        let audioNode = SceneNode(content: .gradient)
+        let audioScene = SceneDescriptor(title: "Audio", nodes: [audioNode], bindings: [
+            .init(target: .init(nodeID: audioNode.id, property: .opacity), scale: 2, offset: 0.1, signal: .audioLevel)
+        ])
+        var audioSignals = SceneSignals()
+        audioSignals.audio.level = 0.2
+        let audioEvaluated = try audioScene.evaluated(signals: audioSignals)
+        precondition(abs(audioEvaluated.nodes[0].opacity - 0.5) < 0.00001)
+        let audioPackage = root.appendingPathComponent("Audio.idlesse")
+        try ScenePackageWriter.write(audioScene, to: audioPackage)
+        let audioLoaded = try await source.resolve(audioPackage)
+        precondition(audioLoaded.usesAudio && audioLoaded.requiresMetal)
+        let shippedAudio = try await source.resolve(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Examples/AudioAurora.idlesse"))
+        precondition(shippedAudio.usesAudio && shippedAudio.parameters["gain"]?.value == 1)
+        let diagnosticPackage = root.appendingPathComponent("Diagnostic.idlesse")
+        try ScenePackageWriter.write(audioScene, to: diagnosticPackage)
+        let diagnosticJSON = diagnosticPackage.appendingPathComponent("scene.json")
+        var malformed = try JSONSerialization.jsonObject(with: Data(contentsOf: diagnosticJSON)) as! [String: Any]
+        malformed["parameters"] = ["gain": ["name": "Gain", "min": 0, "max": 1]]
+        try JSONSerialization.data(withJSONObject: malformed).write(to: diagnosticJSON)
+        do { _ = try await source.resolve(diagnosticPackage); fatalError("Accepted missing parameter default") }
+        catch { precondition(error.localizedDescription.contains("parameters.gain.default")) }
+        for manifestJSON in [
+            #"{"version":14,"title":"Audio","capabilities":[]}"#,
+            #"{"version":13,"title":"Audio","capabilities":["audio"]}"#,
+            #"{"version":14,"title":"Audio","capabilities":["audio","audio"]}"#
+        ] {
+            try Data(manifestJSON.utf8).write(to: audioPackage.appendingPathComponent("manifest.json"))
+            do { _ = try await source.resolve(audioPackage); fatalError("Accepted invalid audio capability") } catch is SceneError {}
+        }
+        print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }
