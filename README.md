@@ -167,6 +167,9 @@ offers the same controls for temporary adjustments without restarting playback.
 Try `Examples/ControlledAurora.idlesse` for adjustable brightness and edge darkness.
 Bindings also support elapsed time, sine waves, and opt-in pointer response. Try
 `Examples/BreathingAurora.idlesse` for a breathing vignette and gentle pointer tilt.
+V9 adds ordered add/multiply modifiers, including control-driven motion strength.
+Try `Examples/AdjustableAurora.idlesse`, or choose **Multiply result by control**
+in Bind to combine a signal with an existing control.
 
 ## Scene runtime
 

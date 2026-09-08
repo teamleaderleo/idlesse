@@ -264,6 +264,18 @@ enum WallpaperSmoke {
         let bright = try groupedMetal.renderProbe(signals: .init(time: 3))
         let dark = try groupedMetal.renderProbe(signals: .init(time: 1))
         precondition(dark[0] < bright[0] / 4, "Time signal must reach the actual compositor")
+        var modulated = breathing
+        modulated.parameters["strength"] = .init(name: "Strength", value: 0, min: 0, max: 1)
+        modulated.bindings[0].modifiers = [.init(operation: .multiply, parameter: "strength")]
+        precondition(groupedMetal.updateScene(modulated))
+        let disabledMotion = try groupedMetal.renderProbe(signals: .init(time: 1))
+        precondition(abs(Int(disabledMotion[0]) - Int(bright[0])) <= 1)
+        modulated.parameters["strength"]?.value = 1
+        precondition(groupedMetal.updateScene(modulated))
+        let enabledMotion = try groupedMetal.renderProbe(signals: .init(time: 1))
+        precondition(abs(Int(enabledMotion[0]) - Int(dark[0])) <= 1,
+                     "Driver control edits must reach the existing compositor")
+        precondition(groupedMetal.intermediateTextureBytes <= retainedGroupBytes * 2)
         let reactive = SceneDescriptor(title: "Pointer", nodes: [groupNode], bindings: [
             .init(target: .init(nodeID: groupNode.id, property: .vignette), scale: 0.5, offset: 0.5, signal: .pointerX)])
         precondition(groupedMetal.updateScene(reactive) && !groupedMetal.diagnostics.animated)
