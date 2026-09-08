@@ -18,6 +18,12 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let engine = NSPopUpButton()
     private let frameRate = NSPopUpButton()
     private let applyButton = NSButton(title: "Use on Desktop", target: nil, action: nil)
+    private let nodePicker = NSPopUpButton()
+    private var transformFields: [NSTextField] = []
+    private let saveCopyButton = NSButton(title: "Save a Copy…", target: nil, action: nil)
+    private var draft = false
+    private var saving = false
+    private var savedScene: SceneDescriptor?
     private var renderer: SceneRenderer?
     private var scene = SceneDescriptor(title: "Aurora", nodes: [SceneNode(content: .gradient)])
     private var selectedURL: URL?
@@ -34,12 +40,12 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
 
     init(apply: @escaping (URL) -> Void) {
         self.apply = apply
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
         window.title = "Idlesse · Scene Preview"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 900, height: 480)
+        window.minSize = NSSize(width: 1040, height: 480)
         window.delegate = self
         let workspace = NSWorkspace.shared.notificationCenter
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
@@ -89,6 +95,38 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         measureButton.toolTip = "Measure this preview for ten seconds without changing the scene. GPU time excludes display scheduling and other apps."
         let controls = NSStackView(views: [open, sample, pauseButton, engine, measureButton, applyButton])
         controls.spacing = 10
+        nodePicker.target = self
+        nodePicker.action = #selector(selectNode)
+        let inspector = NSStackView()
+        inspector.orientation = .vertical
+        inspector.alignment = .leading
+        inspector.spacing = 10
+        inspector.addArrangedSubview(NSTextField(labelWithString: "LAYERS"))
+        inspector.addArrangedSubview(nodePicker)
+        for (index, label) in ["X", "Y", "Scale", "Rotation °", "Opacity"].enumerated() {
+            let field = NSTextField(string: "")
+            field.tag = index
+            field.target = self
+            field.action = #selector(editTransform)
+            field.setAccessibilityLabel(label)
+            field.widthAnchor.constraint(equalToConstant: 76).isActive = true
+            transformFields.append(field)
+            let row = NSStackView(views: [NSTextField(labelWithString: label), field])
+            row.distribution = .equalSpacing
+            row.widthAnchor.constraint(equalToConstant: 160).isActive = true
+            inspector.addArrangedSubview(row)
+        }
+        saveCopyButton.target = self
+        saveCopyButton.action = #selector(saveCopy)
+        inspector.addArrangedSubview(saveCopyButton)
+        inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
+        let hint = NSTextField(wrappingLabelWithString: "Press Return to preview. Save creates a new package with its media.")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        inspector.addArrangedSubview(hint)
+        inspector.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(inspector)
         canvas.wantsLayer = true
         canvas.layer?.backgroundColor = NSColor.black.cgColor
         canvas.layer?.cornerRadius = 12
@@ -105,7 +143,10 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
             frameRate.centerYAnchor.constraint(equalTo: heading.centerYAnchor),
             canvas.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18),
             canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
-            canvas.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            canvas.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -18),
+            inspector.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            inspector.topAnchor.constraint(equalTo: canvas.topAnchor),
+            inspector.widthAnchor.constraint(equalToConstant: 160),
             canvas.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -18),
             controls.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
@@ -146,7 +187,96 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         updateFrameRate()
         titleLabel.stringValue = scene.title
         detailLabel.stringValue = "\(scene.nodes.count) layer\(scene.nodes.count == 1 ? "" : "s") · \(engine.indexOfSelectedItem == 1 ? "Experimental SDR preview" : "Standard preview")"
+        updateInspector()
         updatePlayback()
+    }
+    private func updateInspector() {
+        let selected = max(0, nodePicker.indexOfSelectedItem)
+        nodePicker.removeAllItems()
+        nodePicker.addItems(withTitles: scene.nodes.enumerated().map { "\($0.offset + 1). \($0.element.assetURL?.lastPathComponent ?? "Gradient")" })
+        nodePicker.selectItem(at: min(selected, scene.nodes.count - 1))
+        selectNode()
+        applyButton.isEnabled = selectedURL != nil && !draft && !saving
+        saveCopyButton.isEnabled = !saving
+        window.isDocumentEdited = draft
+    }
+    @objc private func selectNode() {
+        guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
+        let node = scene.nodes[nodePicker.indexOfSelectedItem]
+        let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
+                      node.transform.rotation ?? 0, node.opacity]
+        for (field, value) in zip(transformFields, values) { field.stringValue = String(format: "%.3f", value) }
+    }
+    @objc private func editTransform() {
+        guard !saving, scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
+        let values = transformFields.compactMap { Double($0.stringValue) }
+        let ranges = [-2.0...2.0, -2.0...2.0, 0.05...4.0, -360.0...360.0, 0.0...1.0]
+        guard values.count == 5, zip(values, ranges).allSatisfy({ $0.isFinite && $1.contains($0) }) else {
+            detailLabel.stringValue = "Use X/Y −2…2, scale 0.05…4, rotation −360…360, opacity 0…1."
+            selectNode()
+            return
+        }
+        let previous = scene
+        let previousRenderer = renderer
+        var nodes = scene.nodes
+        nodes[nodePicker.indexOfSelectedItem].transform = .init(x: values[0], y: values[1], scale: values[2], rotation: values[3])
+        nodes[nodePicker.indexOfSelectedItem].opacity = values[4]
+        scene = SceneDescriptor(title: scene.title, nodes: nodes)
+        rebuild()
+        guard renderer !== previousRenderer else { scene = previous; selectNode(); return }
+        if savedScene == nil { savedScene = previous }
+        cancelLoading()
+        watcher = nil
+        draft = true
+        updateInspector()
+        detailLabel.stringValue = "Unsaved preview · Save a Copy to keep changes"
+    }
+    @objc private func resetChanges() {
+        guard !saving, let savedScene else { return }
+        scene = savedScene
+        self.savedScene = nil
+        draft = false
+        rebuild()
+        watchPackage()
+    }
+    private func mayDiscard() -> Bool {
+        guard !saving else { return false }
+        guard draft else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Discard unsaved preview changes?"
+        alert.informativeText = "Save a Copy first if you want to keep this scene."
+        alert.addButton(withTitle: "Keep Editing")
+        alert.addButton(withTitle: "Discard")
+        guard alert.runModal() == .alertSecondButtonReturn else { return false }
+        resetChanges()
+        return true
+    }
+    @objc private func saveCopy() {
+        guard !saving else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(scene.title) Copy.idlesse"
+        panel.allowedContentTypes = [UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.saving = true
+            self.updateInspector()
+            self.detailLabel.stringValue = "Saving scene and media…"
+            let snapshot = self.scene
+            Task { @MainActor [weak self] in
+                do {
+                    try await Task.detached(priority: .userInitiated) { try ScenePackageWriter.write(snapshot, to: url) }.value
+                    guard let self else { return }
+                    self.saving = false
+                    self.draft = false
+                    self.savedScene = nil
+                    self.load(url)
+                } catch {
+                    self?.saving = false
+                    self?.updateInspector()
+                    self?.detailLabel.stringValue = error.localizedDescription
+                }
+            }
+        }
     }
     @objc private func changeFrameRate() {
         cancelMeasurement()
@@ -236,11 +366,14 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         if renderer === previous { engine.selectItem(at: engine.indexOfSelectedItem == 1 ? 0 : 1) }
     }
     @objc private func useOnDesktop() {
-        guard let selectedURL else { return }
+        guard !draft, !saving, let selectedURL else { return }
         window.close()
         apply(selectedURL)
     }
     @objc private func showSample() {
+        guard mayDiscard() else { return }
+        draft = false
+        savedScene = nil
         cancelLoading()
         watcher = nil
         renderer?.releaseResources()
@@ -253,6 +386,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         rebuild()
     }
     @objc private func choose() {
+        guard mayDiscard() else { return }
         let panel = NSOpenPanel()
         panel.title = "Preview a scene"
         panel.prompt = "Preview"
@@ -296,6 +430,9 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
                 self.scopedURL?.stopAccessingSecurityScopedResource()
                 self.scopedURL = accessed ? url : nil
                 adopted = true
+                self.draft = false
+                self.savedScene = nil
+                self.updateInspector()
                 self.selectedURL = url
                 self.applyButton.isEnabled = true
                 self.loadTask = nil
@@ -309,7 +446,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     }
     private func watchPackage() {
         watcher = nil
-        guard let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
+        guard !draft, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
         watcher = SceneWatcher(package: url, assets: scene.nodes.compactMap { $0.assetURL }) { [weak self] in
             self?.load(url)
         }
@@ -318,6 +455,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     func windowDidChangeBackingProperties(_ notification: Notification) { rebuild() }
     func windowDidMiniaturize(_ notification: Notification) { updatePlayback() }
     func windowDidDeminiaturize(_ notification: Notification) { updatePlayback() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { mayDiscard() }
     func windowWillClose(_ notification: Notification) {
         cancelLoading()
         cancelMeasurement()

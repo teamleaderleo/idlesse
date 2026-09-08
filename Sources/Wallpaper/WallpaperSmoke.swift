@@ -185,6 +185,16 @@ enum WallpaperSmoke {
         let changedMixedFrame = try metalScene.renderProbe()
         precondition(changedMixedFrame != mixedFrame)
         metalScene.releaseResources()
+        let standardTransform = try LayeredSceneRenderer(playable: SceneDescriptor(title: "Centered", nodes: [
+            SceneNode(content: .gradient, transform: .init(x: 0, y: 0, scale: 0.7, rotation: 0))]),
+            bounds: NSRect(x: 0, y: 0, width: 100, height: 80), scale: 1, clock: sceneClock) { errors.append($0) }
+        let transformHost = NSView(frame: standardTransform.view.frame)
+        transformHost.addSubview(standardTransform.view)
+        transformHost.layoutSubtreeIfNeeded()
+        let layerTransform = standardTransform.view.subviews[0].layer!.sublayerTransform
+        precondition(abs(layerTransform.m11 - 0.7) < 0.001)
+        precondition(abs(layerTransform.m41 - 15) < 0.001 && abs(layerTransform.m42 - 12) < 0.001)
+        standardTransform.releaseResources()
         let metalVideo = try MetalSceneRenderer(playable: SceneDescriptor(title: "video", assetURL: videoURL, kind: .video),
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
         metalVideo.setPaused(false)
