@@ -101,7 +101,7 @@ struct LocalSceneSource: SceneSource {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    private static func read(_ url: URL) throws -> SceneDescriptor {
+    fileprivate static func read(_ url: URL) throws -> SceneDescriptor {
         try Task.checkCancellation()
         guard url.isFileURL else { throw SceneError.invalid("Download this scene before opening it.") }
         if url.pathExtension.lowercased() != "idlesse" {
@@ -142,5 +142,40 @@ struct LocalSceneSource: SceneSource {
             return SceneNode(content: content, opacity: opacity, transform: transform)
         }
         return SceneDescriptor(title: manifest.title, nodes: nodes)
+    }
+}
+
+/// Writes a self-contained copy, leaving the source package and its assets untouched.
+enum ScenePackageWriter {
+    static func write(_ scene: SceneDescriptor, to destination: URL) throws {
+        let files = FileManager.default
+        guard destination.isFileURL, destination.pathExtension.lowercased() == "idlesse",
+              !files.fileExists(atPath: destination.path) else {
+            throw SceneError.invalid("Choose a new .idlesse package name; existing files are never replaced.")
+        }
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(".idlesse-\(UUID().uuidString).idlesse")
+        try files.createDirectory(at: staging.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: staging) }
+        var nodes: [[String: Any]] = []
+        for (index, node) in scene.nodes.enumerated() {
+            try Task.checkCancellation()
+            var json: [String: Any] = ["type": node.kind.rawValue, "opacity": node.opacity,
+                "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
+                              "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
+            if let source = node.assetURL {
+                let relative = "assets/\(index).\(source.pathExtension.lowercased())"
+                try files.copyItem(at: source, to: staging.appendingPathComponent(relative))
+                json["asset"] = relative
+            }
+            nodes.append(json)
+        }
+        for (name, json) in [("manifest.json", ["version": 2, "title": scene.title, "capabilities": []] as [String: Any]),
+                             ("scene.json", ["nodes": nodes])] {
+            try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+                .write(to: staging.appendingPathComponent(name), options: .atomic)
+        }
+        try Task.checkCancellation()
+        _ = try LocalSceneSource.read(staging)
+        try files.moveItem(at: staging, to: destination)
     }
 }

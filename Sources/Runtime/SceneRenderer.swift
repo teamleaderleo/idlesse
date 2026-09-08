@@ -219,11 +219,13 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let t = node.transform
                 let factor = t.scale ?? 1
                 // Normalized translation; rotation is degrees around the node center.
-                var transform = CATransform3DMakeTranslation((t.x ?? 0) * bounds.width,
-                                                            (t.y ?? 0) * bounds.height, 0)
+                var transform = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,
+                                                            (0.5 + (t.y ?? 0)) * bounds.height, 0)
                 transform = CATransform3DRotate(transform, (t.rotation ?? 0) * .pi / 180, 0, 0, 1)
                 transform = CATransform3DScale(transform, factor, factor, 1)
-                container.layer?.transform = transform
+                transform = CATransform3DTranslate(transform, -bounds.width / 2, -bounds.height / 2, 0)
+                // AppKit owns the backing layer transform and may reset it on attachment.
+                container.layer?.sublayerTransform = transform
                 children.append(child)
             }
         } catch { releaseResources(); throw error }

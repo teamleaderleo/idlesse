@@ -54,6 +54,26 @@ import Foundation
         try Data(repeating: 32, count: 65_537).write(to: manifest)
         do { _ = try await source.resolve(root); fatalError("Accepted oversized manifest") }
         catch is SceneError {}
+        let exported = root.deletingLastPathComponent().appendingPathComponent("copy-\(UUID().uuidString).idlesse")
+        defer { try? FileManager.default.removeItem(at: exported) }
+        try ScenePackageWriter.write(gradient, to: exported)
+        let roundTrip = try await source.resolve(exported)
+        precondition(roundTrip.nodes[0].transform.scale == 0.8 && roundTrip.nodes[0].kind == .gradient)
+        do { try ScenePackageWriter.write(gradient, to: exported); fatalError("Replaced existing package") }
+        catch is SceneError {}
+        let mediaExport = root.deletingLastPathComponent().appendingPathComponent("media-\(UUID().uuidString).idlesse")
+        defer { try? FileManager.default.removeItem(at: mediaExport) }
+        try ScenePackageWriter.write(result, to: mediaExport)
+        let mediaRoundTrip = try await source.resolve(mediaExport)
+        precondition(mediaRoundTrip.nodes[0].assetURL!.path.hasPrefix(mediaExport.path + "/assets/"))
+        let copiedBytes = try Data(contentsOf: mediaRoundTrip.nodes[0].assetURL!)
+        precondition(copiedBytes == Data())
+        let invalidExport = root.deletingLastPathComponent().appendingPathComponent("invalid-\(UUID().uuidString).idlesse")
+        do {
+            try ScenePackageWriter.write(SceneDescriptor(title: "Empty", nodes: []), to: invalidExport)
+            fatalError("Exported invalid scene")
+        } catch is SceneError {}
+        precondition(!FileManager.default.fileExists(atPath: invalidExport.path))
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
     }
 }

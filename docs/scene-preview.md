@@ -17,8 +17,22 @@ the desktop. A built-in Aurora scene makes it usable with no downloads.
 Verified with native UI: open/close/reopen, standard and Metal Aurora rendering,
 Jane Trust video, Evelyn Illustration 4K video in Metal, and the pause control.
 Build, decoder/scene tests and wallpaper/GPU smoke tests pass. Energy and native-size
-color parity remain separate compositor promotion gates. This is a preview workbench,
-not yet a layer editor.
+color parity remain separate compositor promotion gates.
+
+## First editing controls
+
+Select a layer in the right inspector and edit X/Y, scale, rotation, or opacity.
+Press Return to apply. Reset Changes restores the scene loaded before the first edit.
+Edits rebuild the renderer, so videos restart; continuous dragging is not implemented.
+Unsaved drafts suspend package watching and disable Use on Desktop. Opening another
+scene or closing asks before discarding edits.
+
+Save a Copy exports a new v2 package with its media, validates it, and opens that copy.
+Existing destinations are never replaced. Source files stay untouched. Media copies
+can consume additional disk space; this is not a cloud/offloading workflow. Export
+runs away from the main thread and removes staging files on failure. The editor
+currently changes existing nodes only: adding, deleting, reordering and drag handles
+are still to come.
 
 ## Frame rate
 
