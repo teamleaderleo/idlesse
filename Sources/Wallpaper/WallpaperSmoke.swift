@@ -4,7 +4,30 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
-        ScenePreviewController.smokeTestResetRecovery()
+        let document = SceneDocument()
+        var allowUndo = true
+        document.prepareRestore = { _ in allowUndo }
+        for index in 1...40 {
+            let before = SceneDocument.Snapshot(scene: document.scene, selected: 0, draft: document.draft)
+            document.scene = SceneDescriptor(title: "Edit \(index)", nodes: [SceneNode(content: .gradient)])
+            document.draft = true
+            document.record(before, name: "Move Layer")
+        }
+        precondition(document.undoTargets.count == 32 && document.undoManager.undoActionName == "Move Layer")
+        allowUndo = false
+        document.undoManager.undo()
+        precondition(document.scene.title == "Edit 40" && document.undoTargets.count == 32 && !document.undoManager.canRedo)
+        allowUndo = true
+        for _ in 0..<32 { document.undoManager.undo() }
+        precondition(document.scene.title == "Edit 8" && !document.undoManager.canUndo)
+        for _ in 0..<32 { document.undoManager.redo() }
+        precondition(document.scene.title == "Edit 40" && !document.undoManager.canRedo)
+        document.undoManager.undo()
+        let branch = SceneDocument.Snapshot(scene: document.scene, selected: 0, draft: true)
+        document.scene = SceneDescriptor(title: "Branch", nodes: [SceneNode(content: .gradient)])
+        document.record(branch, name: "Rename Layer")
+        precondition(!document.undoManager.canRedo && document.redoTargets.isEmpty)
+        StudioWindowController.smokeTestResetRecovery()
         let counter = PresentedFrameCounter()
         counter.record(presentedTime: 0)
         counter.record(presentedTime: .nan)

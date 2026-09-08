@@ -155,6 +155,12 @@ with a menu-bar Stop control. This is separate from the screensaver and leaves
 your saved macOS wallpaper intact. See [wallpaper mode](docs/wallpaper-prototype.md)
 for controls, measured resource use, verification and current limitations.
 
+## Studio
+
+**Studio…** (⌘O) opens the scene editor: layers, canvas movement/resize/rotation,
+native Undo/Redo, and Save/Save As for `.idlesse` documents. It keeps editing separate
+from the running desktop. See [Studio controls and saving](docs/scene-preview.md).
+
 ## Scene runtime
 
 The desktop host now resolves `.idlesse` scene packages asynchronously and plays
