@@ -47,12 +47,12 @@ final class ImageLibrary {
         let folder: URL
         do {
             guard let resolved = try preferences.resolveFolder() else {
-                lastError = "Choose a folder in Options…"
+                lastError = "Choose a folder in Idlesse Settings."
                 return
             }
             folder = resolved
         } catch {
-            lastError = "Idlesse could not reopen the selected folder. Choose it again in Options…"
+            lastError = "Idlesse could not reopen the selected folder. Choose it again in Idlesse Settings."
             return
         }
 
@@ -62,7 +62,7 @@ final class ImageLibrary {
         do {
             imageEntries = try scanFolder(folder)
         } catch {
-            lastError = "Idlesse could not read \(folder.lastPathComponent). Choose the folder again in Options…"
+            lastError = "Idlesse could not read \(folder.lastPathComponent). Choose the folder again in Idlesse Settings."
             return
         }
 
