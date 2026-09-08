@@ -16,13 +16,14 @@ as a document. `Examples/Aurora.idlesse` is a template; supply its video asset.
 One or two ordered image/video layers are supported, drawn back to front. Each
 layer accepts optional `opacity` from 0 to 1 (default 1). Transparent image
 foregrounds preserve the content beneath them. Layers currently fill the display;
-transforms, masks and blend modes beyond normal alpha composition are not implemented. Image assets use JPG/JPEG, PNG or
+For transforms and the new gradient node, see [scene format v2](creative-runtime.md).
+Masks and blend modes beyond normal alpha composition are not implemented. Image assets use JPG/JPEG, PNG or
 HEIC; video assets use MP4/MOV. Paths are relative to the package and must resolve
 inside it. Each JSON document is limited to 64 KiB. Unknown versions and requested
 capabilities fail explicitly. Preview art can be included but is not consumed yet.
 No network access, scripts, signals or effects are implemented.
 
-The desktop path is now LocalSceneSource → Playable → SceneRenderer →
+The desktop path is now LocalSceneSource → SceneDescriptor → SceneRenderer →
 WallpaperSurface. Resolution runs off the main thread, returns metadata only,
 and checks cancellation before adoption. StaticImageRenderer retains the bounded
 ImageIO path; VideoRenderer owns native muted looping playback. The host retains
@@ -47,4 +48,4 @@ limit; two images can therefore retain up to roughly 128 MB of decoded pixels
 per display, excluding framework allocations. Each video layer has its own
 native player. Layered scenes are not promised the memory cost of a single image.
 Static layers do not introduce a continuous rendering timer. Pause reaches every
-video; Stop releases every child renderer. No Metal compositor is introduced yet.
+video; Stop releases every child renderer. The v2 gradient has its own Metal renderer; image/video composition still uses AppKit.

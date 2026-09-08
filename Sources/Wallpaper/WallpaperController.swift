@@ -10,10 +10,9 @@ private final class DesktopWindow: NSWindow {
 final class WallpaperSurface {
     let window: NSWindow
     private let renderer: SceneRenderer
-    var player: AVQueuePlayer? { renderer.player }
-    var completedLoops: Int { renderer.completedLoops }
+    var diagnostics: RendererDiagnostics { renderer.diagnostics }
 
-    init(screen: NSScreen, playable: Playable, onError: @escaping (String) -> Void) throws {
+    init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {
         window = DesktopWindow(contentRect: screen.frame, styleMask: .borderless,
             backing: .buffered, defer: false)
         window.setFrame(screen.frame, display: false)
@@ -29,13 +28,8 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if playable.layers.count > 1 {
-            renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds, scale: screen.backingScaleFactor, onError: onError)
-        } else if playable.kind == .video {
-            renderer = VideoRenderer(playable: playable, bounds: bounds, onError: onError)
-        } else {
-            renderer = try StaticImageRenderer(playable: playable, bounds: bounds, scale: screen.backingScaleFactor)
-        }
+        renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds,
+            scale: screen.backingScaleFactor, clock: clock, onError: onError)
         window.contentView = renderer.view
     }
 
@@ -71,8 +65,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var surfaces: [WallpaperSurface] = []
     private(set) var selectedURL: URL?
     private(set) var pausedByUser = false
-    private var playable: Playable?
-    private var selectedIsVideo: Bool { playable?.kind == .video }
+    private var playable: SceneDescriptor?
+    private var selectedIsAnimated: Bool { playable?.animated ?? false }
+    private var clock = SceneClock()
+    private var watcher: SceneWatcher?
+    private(set) var lastReloadError: String?
+    private(set) var revision = 0
+    var sceneTime: TimeInterval { clock.time }
     private let source: SceneSource = LocalSceneSource()
     private var scopeStarted = false
     private var asleep = false
@@ -108,6 +107,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         observe(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.setSessionInactive(true) }
         observe(workspace, NSWorkspace.sessionDidBecomeActiveNotification) { $0.setSessionInactive(false) }
         observe(.default, Notification.Name.NSProcessInfoPowerStateDidChange) { controller in
+            controller.clock.setPaused(controller.suspended || controller.shouldPause)
             controller.surfaces.forEach { $0.setPaused(controller.shouldPause) }
             controller.updateMenu()
         }
@@ -164,7 +164,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    func select(_ url: URL) {
+    func select(_ url: URL, reloading: Bool = false) {
+        if !reloading { watcher = nil }
         generation += 1
         let request = generation
         loadTask?.cancel()
@@ -184,8 +185,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             do {
                 let playable = try await self.source.resolve(url)
-                for layer in playable.layers where layer.kind == .video {
-                    let asset = AVURLAsset(url: layer.assetURL)
+                for node in playable.nodes where node.kind == .video {
+                    guard let assetURL = node.assetURL else { continue }
+                    let asset = AVURLAsset(url: assetURL)
                     let playable = try await asset.load(.isPlayable)
                     let duration = try await asset.load(.duration)
                     let tracks = try await asset.loadTracks(withMediaType: .video)
@@ -195,16 +197,23 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 guard !Task.isCancelled, request == self.generation else { return }
                 // Build before replacing the old wallpaper, so a bad file leaves it intact.
+                let candidateClock = reloading ? self.clock : SceneClock()
                 let replacement = self.suspended ? [] :
-                    try self.makeSurfaces(playable: playable, request: request)
+                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
                 self.releaseSurfaces()
                 if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
                 self.selectedURL = url
                 self.scopeStarted = access
                 self.playable = playable
                 adopted = true
-                self.pausedByUser = false
+                if !reloading { self.pausedByUser = false }
+                self.clock = candidateClock
+                self.clock.setPaused(self.suspended || self.shouldPause)
+                self.lastReloadError = nil
+                self.revision += 1
+                self.watch(url: url, scene: playable)
                 self.surfaces = replacement
+                replacement.forEach { $0.setPaused(self.shouldPause) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows { replacement.forEach { $0.show(paused: self.shouldPause) } }
                 self.ensureStatusItem()
@@ -212,19 +221,36 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
-                self.showError(error.localizedDescription)
+                if reloading {
+                    self.lastReloadError = error.localizedDescription
+                    self.updateMenu()
+                } else {
+                    if let previousURL = self.selectedURL, let previousScene = self.playable {
+                        self.watch(url: previousURL, scene: previousScene)
+                    }
+                    self.showError(error.localizedDescription)
+                }
             }
         }
     }
 
-    private func makeSurfaces(playable: Playable, request: Int) throws -> [WallpaperSurface] {
+    private func watch(url: URL, scene: SceneDescriptor) {
+        watcher = nil
+        guard url.pathExtension.lowercased() == "idlesse" else { return }
+        watcher = SceneWatcher(package: url, assets: scene.nodes.compactMap { $0.assetURL }) { [weak self] in
+            guard let self, self.selectedURL == url else { return }
+            self.select(url, reloading: true)
+        }
+    }
+
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int) throws -> [WallpaperSurface] {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         do {
             for screen in NSScreen.screens {
                 let surface = try autoreleasepool {
-                    try WallpaperSurface(screen: screen, playable: playable) { [weak self] message in
+                    try WallpaperSurface(screen: screen, playable: playable, clock: clock) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
                         self.stop()
@@ -245,7 +271,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         // Release first on display changes to avoid temporarily doubling players.
         releaseSurfaces()
         do {
-            surfaces = try makeSurfaces(playable: playable, request: generation)
+            surfaces = try makeSurfaces(playable: playable, clock: clock, request: generation)
+            surfaces.forEach { $0.setPaused(shouldPause) }
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
             stop()
@@ -257,6 +284,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     func setSystemAsleep(_ value: Bool) {
         guard systemAsleep != value else { return }
         systemAsleep = value
+        clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
         updateMenu()
     }
@@ -264,6 +292,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     func setAsleep(_ value: Bool) {
         guard asleep != value else { return }
         asleep = value
+        clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
         updateMenu()
     }
@@ -271,18 +300,23 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     func setSessionInactive(_ value: Bool) {
         guard sessionInactive != value else { return }
         sessionInactive = value
+        clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
         updateMenu()
     }
 
     @objc func togglePause() {
         pausedByUser.toggle()
+        clock.setPaused(suspended || shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
         updateMenu()
     }
 
     @objc func stop() {
         let wasActive = isRunning || isLoading
+        watcher = nil
+        lastReloadError = nil
+        clock.setPaused(true)
         generation += 1
         loadTask?.cancel()
         loadTask = nil
@@ -315,13 +349,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func updateMenu() {
         let menu = NSMenu()
         let state = isLoading ? "Opening wallpaper…" : selectedURL == nil ? "Wallpaper stopped" :
-            (suspended ? "Waiting for your display" : (shouldPause && selectedIsVideo ? "Video paused" : "Wallpaper running"))
+            (suspended ? "Waiting for your display" : (shouldPause && selectedIsAnimated ? "Scene paused" : "Wallpaper running"))
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
+        if let lastReloadError { menu.addItem(withTitle: "Edit not applied: " + lastReloadError, action: nil, keyEquivalent: "") }
         if let selectedURL { menu.addItem(withTitle: selectedURL.lastPathComponent, action: nil, keyEquivalent: "") }
         menu.addItem(.separator())
         addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
-        let pause = addItem(menu, pausedByUser ? "Resume Video" : "Pause Video", #selector(togglePause))
-        pause.isEnabled = isRunning && selectedIsVideo
+        let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
+        pause.isEnabled = isRunning && selectedIsAnimated
         let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
         stop.isEnabled = isRunning || isLoading
         menu.addItem(.separator())
@@ -341,8 +376,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(togglePause) {
-            item.title = pausedByUser ? "Resume Video" : "Pause Video"
-            return isRunning && selectedIsVideo
+            item.title = pausedByUser ? "Resume Scene" : "Pause Scene"
+            return isRunning && selectedIsAnimated
         }
         if item.action == #selector(stop) { return isRunning || isLoading }
         return true

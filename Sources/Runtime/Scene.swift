@@ -1,26 +1,42 @@
 import Foundation
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
-struct Playable: Sendable {
-    enum Kind: String, Codable, Sendable { case image, video }
-    struct Layer: Sendable {
-        let assetURL: URL
-        let kind: Kind
-        let opacity: Double
-    }
+struct SceneDescriptor: Sendable {
+    enum Kind: String, Codable, Sendable { case image, video, gradient }
     let title: String
-    let layers: [Layer]
-    var assetURL: URL { layers[0].assetURL }
-    var kind: Kind { layers.contains { $0.kind == .video } ? .video : .image }
+    let nodes: [SceneNode]
+    var assetURL: URL? { nodes.first?.assetURL }
+    var kind: Kind { nodes.first?.kind ?? .image }
+    var animated: Bool { nodes.contains { $0.kind != .image } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
-        self.layers = [Layer(assetURL: assetURL, kind: kind, opacity: 1)]
+        self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, layers: [Layer]) { self.title = title; self.layers = layers }
+    init(title: String, nodes: [SceneNode]) { self.title = title; self.nodes = nodes }
+}
+
+struct SceneNode: Sendable {
+    enum Content: Sendable { case image(URL), video(URL), gradient }
+    struct Transform: Decodable, Sendable {
+        let x: Double?
+        let y: Double?
+        let scale: Double?
+        let rotation: Double?
+        static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
+    }
+    let content: Content
+    var opacity: Double = 1
+    var transform: Transform = .identity
+    var kind: SceneDescriptor.Kind {
+        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient }
+    }
+    var assetURL: URL? {
+        switch content { case .image(let url), .video(let url): return url; case .gradient: return nil }
+    }
 }
 
 protocol SceneSource {
-    func resolve(_ url: URL) async throws -> Playable
+    func resolve(_ url: URL) async throws -> SceneDescriptor
 }
 
 enum SceneError: LocalizedError {
@@ -37,15 +53,17 @@ struct LocalSceneSource: SceneSource {
         let capabilities: [String]
     }
     private struct Scene: Decodable {
-        let layers: [Layer]
-        struct Layer: Decodable {
-            let type: Playable.Kind
-            let asset: String
+        let layers: [Node]?
+        let nodes: [Node]?
+        struct Node: Decodable {
+            let type: SceneDescriptor.Kind
+            let asset: String?
             let opacity: Double?
+            let transform: SceneNode.Transform?
         }
     }
 
-    func resolve(_ url: URL) async throws -> Playable {
+    func resolve(_ url: URL) async throws -> SceneDescriptor {
         let task = Task.detached(priority: .userInitiated) { try Self.read(url) }
         return try await withTaskCancellationHandler(operation: {
             let result = try await task.value
@@ -54,7 +72,7 @@ struct LocalSceneSource: SceneSource {
         }, onCancel: { task.cancel() })
     }
 
-    private static func kind(_ url: URL) throws -> Playable.Kind {
+    private static func kind(_ url: URL) throws -> SceneDescriptor.Kind {
         switch url.pathExtension.lowercased() {
         case "jpg", "jpeg", "png", "heic": return .image
         case "mp4", "mov": return .video
@@ -83,32 +101,46 @@ struct LocalSceneSource: SceneSource {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    private static func read(_ url: URL) throws -> Playable {
+    private static func read(_ url: URL) throws -> SceneDescriptor {
         try Task.checkCancellation()
         guard url.isFileURL else { throw SceneError.invalid("Download this scene before opening it.") }
         if url.pathExtension.lowercased() != "idlesse" {
-            return Playable(title: url.deletingPathExtension().lastPathComponent, assetURL: url, kind: try kind(url))
+            return SceneDescriptor(title: url.deletingPathExtension().lastPathComponent, assetURL: url, kind: try kind(url))
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard manifest.version == 1 else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...2).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
-        guard (1...2).contains(scene.layers.count) else {
-            throw SceneError.invalid("Scenes support one or two layers.")
+        guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
+              let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
+              (1...2).contains(descriptions.count) else {
+            throw SceneError.invalid("Use one or two layers in v1, or nodes in v2.")
         }
-        let layers = try scene.layers.map { layer -> Playable.Layer in
-            let opacity = layer.opacity ?? 1
-            guard opacity.isFinite, (0...1).contains(opacity) else {
-                throw SceneError.invalid("Layer opacity must be between zero and one.")
+        let nodes = try descriptions.map { node -> SceneNode in
+            let opacity = node.opacity ?? 1
+            let transform = node.transform ?? .identity
+            guard opacity.isFinite, (0...1).contains(opacity),
+                  [transform.x ?? 0, transform.y ?? 0, transform.rotation ?? 0, transform.scale ?? 1].allSatisfy({ $0.isFinite }),
+                  abs(transform.x ?? 0) <= 2, abs(transform.y ?? 0) <= 2,
+                  (0.05...4).contains(transform.scale ?? 1), abs(transform.rotation ?? 0) <= 360 else {
+                throw SceneError.invalid("Invalid opacity or transform; use finite values within the scene limits.")
             }
-            let asset = try contained(layer.asset, in: root)
-            guard try kind(asset) == layer.type else { throw SceneError.invalid("The asset does not match its layer type.") }
-            guard try asset.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
-                throw SceneError.invalid("The scene asset is not a regular file.")
+            let content: SceneNode.Content
+            if node.type == .gradient {
+                guard manifest.version == 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
+                content = .gradient
+            } else {
+                guard let path = node.asset else { throw SceneError.invalid("Media nodes need an asset.") }
+                let asset = try contained(path, in: root)
+                guard try kind(asset) == node.type else { throw SceneError.invalid("The asset does not match its node type.") }
+                guard try asset.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                    throw SceneError.invalid("The scene asset is not a regular file.")
+                }
+                content = node.type == .video ? .video(asset) : .image(asset)
             }
-            return Playable.Layer(assetURL: asset, kind: layer.type, opacity: opacity)
+            return SceneNode(content: content, opacity: opacity, transform: transform)
         }
-        return Playable(title: manifest.title, layers: layers)
+        return SceneDescriptor(title: manifest.title, nodes: nodes)
     }
 }

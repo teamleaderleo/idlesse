@@ -19,10 +19,31 @@ import Foundation
         precondition(result.kind == .image && result.title == "Example")
         try Data(#"{"layers":[{"type":"image","asset":"picture.png"},{"type":"image","asset":"picture.png","opacity":0.3}]}"#.utf8).write(to: scene)
         let layered = try await source.resolve(root)
-        precondition(layered.layers.count == 2 && layered.layers[1].opacity == 0.3)
+        precondition(layered.nodes.count == 2 && layered.nodes[1].opacity == 0.3)
         try Data(#"{"layers":[{"type":"image","asset":"picture.png","opacity":2}]}"#.utf8).write(to: scene)
         do { _ = try await source.resolve(root); fatalError("Accepted invalid opacity") }
         catch is SceneError {}
+        try Data(#"{"version":2,"title":"Aurora","capabilities":[]}"#.utf8).write(to: manifest)
+        try Data(#"{"nodes":[{"type":"gradient","transform":{"x":0.1,"scale":0.8,"rotation":15}}]}"#.utf8).write(to: scene)
+        let gradient = try await source.resolve(root)
+        precondition(gradient.nodes[0].kind == .gradient && gradient.nodes[0].assetURL == nil)
+        precondition(gradient.nodes[0].transform.scale == 0.8)
+        try Data(#"{"nodes":[{"type":"gradient","transform":{"scale":0}}]}"#.utf8).write(to: scene)
+        do { _ = try await source.resolve(root); fatalError("Accepted zero scale") }
+        catch is SceneError {}
+        var instant = 10.0
+        let clock = SceneClock(now: { instant })
+        precondition(clock.time == 0)
+        clock.setPaused(false)
+        instant = 12
+        precondition(clock.time == 2)
+        clock.setPaused(true)
+        instant = 100
+        precondition(clock.time == 2)
+        clock.setPaused(false)
+        instant = 101
+        precondition(clock.time == 3)
+        try Data(#"{"version":1,"title":"Example","capabilities":[]}"#.utf8).write(to: manifest)
         // Resolution is metadata-only; decoding this empty fixture belongs to the renderer.
         for path in ["../outside.png", "/tmp/outside.png", "https://example.com/picture.png"] {
             try setScene(path)
