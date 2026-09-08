@@ -2,6 +2,32 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
+extension ScenePreviewController {
+    /// Exercises recovery without opening a window or touching user media.
+    static func smokeTestResetRecovery() {
+        let editor = ScenePreviewController { _ in }
+        editor.window.contentView?.layoutSubtreeIfNeeded()
+        editor.rebuild()
+        precondition(editor.renderer != nil)
+        let original = editor.scene
+        precondition(editor.applyEdit([SceneNode(content: .gradient), SceneNode(content: .gradient)], selected: 1))
+        let running = editor.renderer
+        editor.savedScene = SceneDescriptor(title: "Missing source", nodes: [
+            SceneNode(content: .image(URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(UUID().uuidString + ".png")))
+        ])
+        precondition(!editor.restoreSavedScene())
+        precondition(editor.renderer === running && editor.draft)
+        precondition(editor.scene.nodes.count == 2 && editor.nodePicker.indexOfSelectedItem == 1)
+        precondition(editor.undoEdits.count == 1 && editor.savedScene != nil)
+        editor.savedScene = original
+        precondition(editor.restoreSavedScene())
+        precondition(!editor.draft && editor.savedScene == nil && editor.undoEdits.isEmpty)
+        precondition(editor.scene.nodes.count == 1 && editor.renderer !== running)
+        editor.renderer?.releaseResources()
+    }
+}
+
 /// A small scene workbench. Previewing never changes the running desktop scene.
 final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let window: NSWindow
@@ -393,14 +419,30 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         importedScopes.removeAll()
     }
     @objc private func resetChanges() {
-        guard !saving, let savedScene else { return }
+        _ = restoreSavedScene()
+    }
+    private func restoreSavedScene() -> Bool {
+        guard !saving else { return false }
+        guard let savedScene else { return true }
+        let previous = scene
+        let selected = nodePicker.indexOfSelectedItem
+        let previousRenderer = renderer
         scene = savedScene
+        rebuild()
+        guard renderer !== previousRenderer else {
+            scene = previous
+            updateInspector()
+            nodePicker.selectItem(at: selected)
+            selectNode()
+            return false
+        }
         self.savedScene = nil
         clearEditHistory()
         releaseImportedScopes()
         draft = false
-        rebuild()
+        updateInspector()
         watchPackage()
+        return true
     }
     func mayQuit() -> Bool {
         mayDiscard(resetting: false)
@@ -421,8 +463,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: "Discard")
         guard alert.runModal() == .alertSecondButtonReturn else { return false }
         // Quitting does not need to decode the original scene again.
-        if resetting { resetChanges() }
-        return true
+        return !resetting || restoreSavedScene()
     }
     @objc private func saveCopy() {
         guard !saving else { return }
