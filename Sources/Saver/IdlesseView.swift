@@ -10,7 +10,7 @@ final class IdlesseView: ScreenSaverView {
 
     // Tahoe may create several ScreenSaverView instances while the Wallpaper pane
     // is open. Keep the settings controller process-wide so every Options click
-    // resolves to the same window instead of creating duplicates.
+    // resolves to the same long-lived window instead of creating duplicates.
     private static var nextInstanceID = 0
 
     private static let diagnosticURL = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -63,14 +63,20 @@ final class IdlesseView: ScreenSaverView {
         Self.configureController.reload()
         let settingsWindow = Self.configureController.window
 
-        // The Tahoe diagnostic log proves that the Options button does call this
-        // getter, but System Settings then fails to attach/present the returned
-        // window. Preserve the normal ScreenSaver API, give the host a brief chance
-        // to attach the sheet, and self-present the exact same window only if it
-        // remains unattached.
-        if #available(macOS 26.0, *),
-           ProcessInfo.processInfo.processName.lowercased().contains("legacyscreensaver") {
-            scheduleTahoeConfigureSheetPresentation(settingsWindow)
+        // On the current Tahoe build, System Settings does call configureSheet and
+        // attaches the returned window. Keep presentation entirely native. A delayed
+        // diagnostic check records what the host did without changing window state.
+        if #available(macOS 26.0, *) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak settingsWindow] in
+                guard let self, let settingsWindow else { return }
+                if settingsWindow.sheetParent != nil {
+                    self.diagnostic("configureSheet attached by host")
+                } else if settingsWindow.isVisible {
+                    self.diagnostic("configureSheet visible without sheetParent")
+                } else {
+                    self.diagnostic("configureSheet returned but still hidden")
+                }
+            }
         }
 
         return settingsWindow
@@ -130,49 +136,6 @@ final class IdlesseView: ScreenSaverView {
             self.preferences.reloadFromDisk()
             if self.running {
                 self.restartSlideshow()
-            }
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private func scheduleTahoeConfigureSheetPresentation(_ settingsWindow: NSWindow) {
-        diagnostic("configureSheet fallback scheduled")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
-            guard let self else { return }
-
-            // If Tahoe ever starts attaching the returned window correctly, leave
-            // the native presentation completely alone.
-            if settingsWindow.sheetParent != nil {
-                self.diagnostic("configureSheet attached by host")
-                return
-            }
-
-            if settingsWindow.isVisible {
-                self.diagnostic("configureSheet already visible")
-                settingsWindow.makeKeyAndOrderFront(nil)
-                settingsWindow.orderFrontRegardless()
-                return
-            }
-
-            self.diagnostic("configureSheet unattached; self-presenting")
-
-            // The configuration window lives in legacyScreenSaver, while the
-            // Wallpaper screen-saver chooser is owned by System Settings. A normal
-            // floating window can remain behind that chooser. Put this user-requested
-            // window above the screen-saver level and activate its process so the
-            // Options click produces a visible, key settings window.
-            settingsWindow.level = NSWindow.Level(
-                rawValue: NSWindow.Level.screenSaver.rawValue + 20
-            )
-            settingsWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            settingsWindow.center()
-            NSApp.activate(ignoringOtherApps: true)
-            settingsWindow.makeKeyAndOrderFront(nil)
-            settingsWindow.orderFrontRegardless()
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
-                self?.diagnostic("configureSheet self-presented")
             }
         }
     }
