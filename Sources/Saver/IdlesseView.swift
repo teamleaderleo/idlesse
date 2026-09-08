@@ -13,6 +13,23 @@ final class IdlesseView: ScreenSaverView {
     // resolves to the same long-lived window instead of creating duplicates.
     private static var nextInstanceID = 0
 
+    // System Settings expects a non-nil configureSheet result. Returning nil after
+    // the first click can make later Options clicks stop asking us for configuration.
+    // Tahoe gets this harmless, persistent proxy while Idlesse shows the real panel.
+    private static let tahoeConfigureProxy: NSWindow = {
+        let proxy = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 2, height: 2),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        proxy.isReleasedWhenClosed = false
+        proxy.isOpaque = false
+        proxy.backgroundColor = .clear
+        proxy.alphaValue = 0
+        return proxy
+    }()
+
     private static let diagnosticURL = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("idlesse-diag.log")
 
@@ -65,13 +82,31 @@ final class IdlesseView: ScreenSaverView {
 
         if #available(macOS 26.0, *),
            ProcessInfo.processInfo.processName.lowercased().contains("legacyscreensaver") {
-            // Tahoe calls this getter when the user clicks Options, but the host can
-            // attach the returned window to a tiny hidden helper window instead of
-            // the visible Wallpaper UI. Treat this getter as the user's click signal,
-            // present our one real settings window ourselves, and return nil so the
-            // host has nothing else to attach invisibly.
+            let proxy = Self.tahoeConfigureProxy
+
+            // Clear any stale hidden attachment from the prior Options click before
+            // handing the same proxy back to System Settings again.
+            if let parent = proxy.sheetParent {
+                parent.endSheet(proxy)
+                diagnostic("Options proxy detached before reuse")
+            }
+
             presentTahoeSettings(settingsWindow)
-            return nil
+
+            // Tahoe currently attaches configure sheets to a tiny hidden helper
+            // window. Let it satisfy that bookkeeping, then immediately release the
+            // invisible proxy so the next Options click can start cleanly.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self, weak proxy] in
+                guard let self, let proxy else { return }
+                if let parent = proxy.sheetParent {
+                    self.diagnostic("Options proxy attached; ending hidden sheet")
+                    parent.endSheet(proxy)
+                } else {
+                    self.diagnostic("Options proxy was not attached")
+                }
+            }
+
+            return proxy
         }
 
         return settingsWindow
@@ -137,33 +172,34 @@ final class IdlesseView: ScreenSaverView {
 
     @available(macOS 26.0, *)
     private func presentTahoeSettings(_ settingsWindow: NSWindow) {
-        diagnostic("Options click: scheduling visible Settings")
+        diagnostic("Options click: scheduling Settings panel")
 
-        DispatchQueue.main.async { [weak self, weak settingsWindow] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak settingsWindow] in
             guard let self, let settingsWindow else { return }
 
-            // An older attempt may have left this window attached as a sheet to one
-            // of Tahoe's hidden helper windows. Detach it before making it standalone.
+            // An older build may have left the real settings window attached to one
+            // of Tahoe's hidden helper windows. Make it standalone again first.
             if let parent = settingsWindow.sheetParent {
                 parent.endSheet(settingsWindow)
             }
 
             Self.configureController.reload()
-            settingsWindow.level = NSWindow.Level(
-                rawValue: NSWindow.Level.screenSaver.rawValue + 100
-            )
-            settingsWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            settingsWindow.hidesOnDeactivate = false
-            settingsWindow.center()
 
-            // This process is an app extension host rather than System Settings
-            // itself, so use both activation and unconditional ordering. The window
-            // exists only because the user explicitly clicked Options.
-            NSApp.activate(ignoringOtherApps: true)
+            // Use an ordinary native floating panel instead of a screen-saver-level
+            // window. NSPanel's nonactivating behavior lets it sit naturally beside
+            // System Settings without pretending to be its in-process sheet.
+            settingsWindow.level = .floating
+            settingsWindow.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            settingsWindow.hidesOnDeactivate = false
+
+            if !settingsWindow.isVisible {
+                settingsWindow.center()
+            }
+
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
 
-            self.diagnostic("Options click: Settings ordered front")
+            self.diagnostic("Options click: Settings panel ordered front")
         }
     }
 
