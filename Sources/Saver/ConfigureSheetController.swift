@@ -256,11 +256,13 @@ final class ConfigureSheetController: NSObject {
     }
 
     private func dismiss() {
-        if let parent = window.sheetParent {
-            parent.endSheet(window)
-        } else {
-            window.orderOut(nil)
+        // ScreenSaverView's configureSheet contract says the controller must end
+        // the document-modal session through NSApplication. Do that exact thing when
+        // System Settings is running us as a sheet, then order the reusable window out.
+        if window.sheetParent != nil {
+            NSApp.endSheet(window)
         }
+        window.orderOut(nil)
     }
 
     private func setFolderPath(_ path: String?) {
