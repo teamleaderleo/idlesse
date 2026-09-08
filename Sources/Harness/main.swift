@@ -8,6 +8,14 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
     private var pendingSceneURL: URL?
+    private lazy var scenePreview = ScenePreviewController { [weak self] url in self?.wallpaper.select(url) }
+    @objc private func showScenePreview() {
+        saverView?.stopAnimation()
+        window?.orderOut(nil)
+        scenePreview.onClose = { [weak self] in self?.showPreview() }
+        scenePreview.show()
+    }
+
 
     private lazy var settingsController = ConfigureSheetController(preferences: IdlessePreferences.shared) { [weak self] in
         self?.saverView?.reloadFromPreferences()
@@ -56,7 +64,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
         let wallpaperButton = NSButton(title: "Wallpaper…", target: wallpaper, action: #selector(WallpaperController.chooseWallpaper))
         wallpaperButton.bezelStyle = .rounded
-        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton])
+        let sceneButton = NSButton(title: "Scene Preview…", target: self, action: #selector(showScenePreview))
+        sceneButton.bezelStyle = .rounded
+        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton])
         controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         for button in [pauseButton!, nextButton, revealButton, settingsButton!] {
@@ -71,7 +81,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             controls.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
             controls.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -12),
         ])
-        window.minSize = NSSize(width: 720, height: 360)
+        window.minSize = NSSize(width: 900, height: 360)
 
         window.makeKeyAndOrderFront(nil)
         saverView.startAnimation()
@@ -102,8 +112,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func windowDidMiniaturize(_ notification: Notification) { saverView?.stopAnimation() }
     func windowDidDeminiaturize(_ notification: Notification) { saverView?.startAnimation() }
     func windowWillClose(_ notification: Notification) { saverView?.stopAnimation() }
-    func applicationDidHide(_ notification: Notification) { saverView?.stopAnimation() }
+    func applicationDidHide(_ notification: Notification) { saverView?.stopAnimation(); scenePreview.applicationVisibilityChanged() }
     func applicationDidUnhide(_ notification: Notification) {
+        scenePreview.applicationVisibilityChanged()
         if window.isVisible && !window.isMiniaturized { saverView?.startAnimation() }
     }
 
@@ -197,6 +208,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let show = NSMenuItem(title: "Show Preview", action: #selector(showPreview), keyEquivalent: "")
         show.target = self
         wallpaperMenu.addItem(show)
+        let scenePreviewItem = NSMenuItem(title: "Scene Preview…", action: #selector(showScenePreview), keyEquivalent: "o")
+        scenePreviewItem.target = self
+        wallpaperMenu.addItem(scenePreviewItem)
         NSApp.mainMenu = mainMenu
     }
 }
