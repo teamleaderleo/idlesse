@@ -83,6 +83,16 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
+
+if CommandLine.arguments.contains("--smoke-options") {
+    // Instantiate and lay out the options UI without entering the app event loop.
+    // This catches Auto Layout exceptions that compilation alone cannot detect.
+    let controller = ConfigureSheetController(preferences: IdlessePreferences.shared) {}
+    controller.window.contentView?.layoutSubtreeIfNeeded()
+    print("Idlesse options UI smoke test passed")
+    exit(EXIT_SUCCESS)
+}
+
 let delegate = PreviewAppDelegate()
 app.delegate = delegate
 app.run()
