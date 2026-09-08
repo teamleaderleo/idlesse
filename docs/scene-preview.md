@@ -192,4 +192,6 @@ in-flight exclusivity and bounded resizing; video tests verify live group edits.
 
 Select a layer and choose **Keyframes…**, select a property and interpolation, then enter comma-separated `time:value` pairs such as `0:-0.3, 3:0.3, 6:-0.3`. Apply replaces that property's existing driver and participates in native Undo. Save persists the track in a V10 package. Use Bind… → Remove Binding to restore the static property.
 
-This initial sheet authors a replacement track; it does not populate an existing track or offer graphical key dragging. The Time… controls provide seeking, speed, and preview looping. A graphical timeline and video clock synchronization remain unfinished.
+The sheet loads an existing track and interpolation when its property is selected. Applying edits preserves that track's scale, offset and modifiers; replacing a non-track binding starts a plain track. Remove Track restores the static property and supports Undo.
+
+The timeline beneath the canvas shows time, a scrubber and selected-layer key markers. Scrubbing pauses and redraws Metal motion immediately. Its range ends at the last scene key (eight seconds for scenes without tracks). Loop Range starts a preview loop over that range; Time… adjusts or disables it. Opening a different scene resets time/rate/loop; same-scene hot reload preserves transport. The status readout shares the existing one-second performance tick and stops updating while the host is suspended. Key markers are read-only; graphical key dragging and video clock synchronization remain unfinished.

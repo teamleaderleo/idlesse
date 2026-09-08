@@ -112,6 +112,7 @@ build_app() {
     "$ROOT/Sources/Runtime/MetalSceneRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
+    "$ROOT/Sources/Harness/SceneTimelineView.swift" \
     "$ROOT/Sources/Harness/ScenePreviewHost.swift" \
     "$ROOT/Sources/Harness/SceneParameterControls.swift" \
     "$ROOT/Sources/Harness/SceneLayerList.swift" \
