@@ -15,11 +15,11 @@ final class IdlesseView: ScreenSaverView {
     private var fadeTimer: Timer?
     private var libraryRefreshTimer: Timer?
     private var settingsObserver: NSObjectProtocol?
+    private var tahoeSettingsWorkItem: DispatchWorkItem?
     private var fadeStartedAt: TimeInterval = 0
     private var currentURL: URL?
     private var nextURL: URL?
     private var running = false
-    private var didScheduleTahoeSettingsPresentation = false
 
     override init(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)!
@@ -33,16 +33,6 @@ final class IdlesseView: ScreenSaverView {
 
     override var hasConfigureSheet: Bool {
         NSLog("Idlesse: hasConfigureSheet requested")
-
-        // Tahoe currently draws the Options button for legacy `.saver` bundles but
-        // can fail to call configureSheet when that button is pressed. This getter is
-        // still queried by the host to decide whether the button should exist, so on
-        // Tahoe we use it to schedule a settings window from inside legacyScreenSaver.
-        // The size/frontmost-app checks keep this out of full-screen activation.
-        if #available(macOS 26.0, *) {
-            scheduleTahoeSettingsPresentation()
-        }
-
         return true
     }
 
@@ -54,6 +44,15 @@ final class IdlesseView: ScreenSaverView {
 
     override func startAnimation() {
         super.startAnimation()
+
+        // On Tahoe, System Settings reliably starts the selected saver's preview
+        // but may never call configureSheet when its Options button is pressed.
+        // Present the same settings window from this reliable lifecycle hook while
+        // System Settings is frontmost. Real full-screen activations are unaffected.
+        if #available(macOS 26.0, *) {
+            scheduleTahoeSettingsFromRunningPreview()
+        }
+
         guard !running else { return }
         running = true
         restartSlideshow()
@@ -72,6 +71,7 @@ final class IdlesseView: ScreenSaverView {
     }
 
     deinit {
+        tahoeSettingsWorkItem?.cancel()
         stopTimers()
         library.stopAccess()
         if let settingsObserver {
@@ -99,36 +99,42 @@ final class IdlesseView: ScreenSaverView {
     }
 
     @available(macOS 26.0, *)
-    private func scheduleTahoeSettingsPresentation() {
-        guard !didScheduleTahoeSettingsPresentation else { return }
-        didScheduleTahoeSettingsPresentation = true
+    private func scheduleTahoeSettingsFromRunningPreview() {
+        guard ProcessInfo.processInfo.processName.lowercased().contains("legacyscreensaver") else {
+            return
+        }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
+        tahoeSettingsWorkItem?.cancel()
+
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
 
-            // The Wallpaper pane's selected-saver preview is small. A real screen
-            // saver window is screen-sized, so never surface settings there.
-            let size = self.bounds.size
-            guard size.width > 120,
-                  size.height > 80,
-                  size.width < 900,
-                  size.height < 700 else {
+            // System Settings being frontmost is the reliable distinction between
+            // its selected-saver preview and an actual full-screen saver session.
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.systempreferences" else {
                 return
             }
 
-            let frontmost = NSWorkspace.shared.frontmostApplication
-            let isSystemSettings = frontmost?.bundleIdentifier == "com.apple.systempreferences"
-                || frontmost?.localizedName == "System Settings"
-            guard isSystemSettings else { return }
-
-            NSLog("Idlesse: presenting Tahoe settings fallback from legacyScreenSaver")
-            self.configureController.reload()
             let settingsWindow = self.configureController.window
-            settingsWindow.level = .floating
+            guard !settingsWindow.isVisible else { return }
+
+            NSLog("Idlesse: presenting Settings from Tahoe startAnimation fallback")
+            self.configureController.reload()
+
+            // A normal floating window can sit behind legacyScreenSaver. Put the
+            // settings window one level above the screen-saver window, matching the
+            // working first-run-panel pattern used by Tahoe-compatible savers.
+            settingsWindow.level = NSWindow.Level(
+                rawValue: NSWindow.Level.screenSaver.rawValue + 1
+            )
+            settingsWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             settingsWindow.center()
             settingsWindow.makeKeyAndOrderFront(nil)
             settingsWindow.orderFrontRegardless()
         }
+
+        tahoeSettingsWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     private func restartSlideshow() {
