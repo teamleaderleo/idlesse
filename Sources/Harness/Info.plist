@@ -22,6 +22,8 @@
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Idlesse uses Photos only when you choose to connect a photo library or album for display.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

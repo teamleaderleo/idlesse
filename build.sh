@@ -15,6 +15,7 @@ SHARED_SOURCES=(
   "$ROOT/Sources/Shared/Preferences.swift"
   "$ROOT/Sources/Shared/ImageLibrary.swift"
   "$ROOT/Sources/Shared/ImageCanvasView.swift"
+  "$ROOT/Sources/Shared/PhotosProbe.swift"
 )
 
 SAVER_SOURCES=(
@@ -45,6 +46,7 @@ compile_saver_arch() {
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
     -framework AppKit \
+    -framework Photos \
     -framework ScreenSaver \
     -framework UniformTypeIdentifiers \
     -o "$output"
@@ -96,6 +98,7 @@ build_preview() {
     "${SAVER_SOURCES[@]}" \
     "$ROOT/Sources/Harness/main.swift" \
     -framework AppKit \
+    -framework Photos \
     -framework ScreenSaver \
     -framework UniformTypeIdentifiers \
     -o "$PREVIEW_APP/Contents/MacOS/IdlessePreview"
@@ -116,8 +119,6 @@ case "${1:-all}" in
     ;;
   run)
     build_preview
-    # `open` will otherwise reactivate an already-running preview even though the
-    # bundle on disk was rebuilt, which makes source changes look like they did nothing.
     pkill -x IdlessePreview 2>/dev/null || true
     sleep 0.2
     open "$PREVIEW_APP"

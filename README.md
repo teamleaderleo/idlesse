@@ -13,6 +13,7 @@ Current prototype features:
 - fit, fill, or show at actual size
 - choose the background color used around fitted images
 - show the same sequence on every display or offset the sequence per display
+- PhotoKit permission/album-visibility probe in Options
 - configure everything from the screen saver Options sheet
 
 ## Current status
@@ -69,10 +70,12 @@ The real compatibility test is always the installed `.saver` inside the system s
 
 ## Photos source
 
-Photo library / album support is the next isolated slice. Apple PhotoKit provides album discovery through `PHAssetCollection`, asset fetching through `PHAsset`, and image delivery through `PHImageManager`. It requires explicit Photos authorization and a photo-library usage description. Because assets can live in iCloud, this source needs an asynchronous image-provider path instead of pretending Photos assets are ordinary local files. See `docs/photos-source.md`.
+Options now includes a small PhotoKit probe. **Connect Photos…** requests read access only in response to the user clicking it; after authorization, Idlesse reports how many album collections PhotoKit can see. This does not yet use those albums as a slideshow source—the probe exists to verify Photos permission behavior in both the standalone preview and the macOS 26 screen-saver host before the slideshow engine is refactored for asynchronous PhotoKit image delivery.
+
+See `docs/photos-source.md`.
 
 ## Product direction
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next parity work: Photos library / album sources and deeper multi-display testing on macOS 26.
+Next parity work: confirm PhotoKit access in the installed saver, then make Photos albums first-class slideshow sources with preloading.

@@ -7,6 +7,8 @@ final class ConfigureSheetController: NSObject {
     private let onSave: () -> Void
 
     private let folderPathLabel = NSTextField(labelWithString: "No folder selected")
+    private let photosStatusLabel = NSTextField(labelWithString: "Not connected")
+    private let photosButton = NSButton(title: "Connect Photos…", target: nil, action: nil)
     private let durationField = NSTextField(string: "5")
     private let durationUnitPopup = NSPopUpButton()
     private let transitionField = NSTextField(string: "2")
@@ -22,7 +24,7 @@ final class ConfigureSheetController: NSObject {
         self.preferences = preferences
         self.onSave = onSave
         self.window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 485),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -38,6 +40,7 @@ final class ConfigureSheetController: NSObject {
     func reload() {
         pendingFolderURL = nil
         setFolderPath(preferences.folderDisplayPath)
+        refreshPhotosStatus()
 
         let seconds = preferences.displayDuration
         if seconds >= 3600 {
@@ -94,6 +97,16 @@ final class ConfigureSheetController: NSObject {
         folderControls.addArrangedSubview(folderPathLabel)
         folderControls.addArrangedSubview(chooseButton)
         root.addArrangedSubview(makeRow(label: "Image folder", control: folderControls))
+
+        photosStatusLabel.textColor = .secondaryLabelColor
+        photosStatusLabel.lineBreakMode = .byTruncatingTail
+        photosStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        photosButton.target = self
+        photosButton.action = #selector(connectPhotos)
+        let photosControls = NSStackView(views: [photosStatusLabel, photosButton])
+        photosControls.orientation = .horizontal
+        photosControls.spacing = 8
+        root.addArrangedSubview(makeRow(label: "Photos", control: photosControls))
 
         durationUnitPopup.addItems(withTitles: ["Seconds", "Minutes", "Hours"])
         durationField.alignment = .right
@@ -172,6 +185,22 @@ final class ConfigureSheetController: NSObject {
             self?.pendingFolderURL = url
             self?.setFolderPath(url.path)
         }
+    }
+
+    @objc private func connectPhotos() {
+        photosButton.isEnabled = false
+        photosStatusLabel.stringValue = "Requesting access…"
+
+        PhotosProbe.shared.requestAccess { [weak self] in
+            self?.refreshPhotosStatus()
+        }
+    }
+
+    private func refreshPhotosStatus() {
+        photosStatusLabel.stringValue = PhotosProbe.shared.statusText
+        photosStatusLabel.toolTip = PhotosProbe.shared.statusText
+        photosButton.title = PhotosProbe.shared.actionTitle
+        photosButton.isEnabled = PhotosProbe.shared.actionEnabled
     }
 
     @objc private func save() {
