@@ -9,10 +9,11 @@ CONFIG="${CONFIG:-debug}"
 ARCHS="${ARCHS:-arm64 x86_64}"
 
 SAVER="$BUILD/Idlesse.saver"
-PREVIEW_APP="$BUILD/Idlesse Preview.app"
+APP="$BUILD/Idlesse.app"
 
 SHARED_SOURCES=(
   "$ROOT/Sources/Shared/Preferences.swift"
+  "$ROOT/Sources/Shared/SettingsFile.swift"
   "$ROOT/Sources/Shared/ImageLibrary.swift"
   "$ROOT/Sources/Shared/ImageCanvasView.swift"
   "$ROOT/Sources/Shared/PhotosProbe.swift"
@@ -82,18 +83,18 @@ build_saver() {
   file "$SAVER/Contents/MacOS/Idlesse"
 }
 
-build_preview() {
+build_app() {
   local arch="$(uname -m)"
-  log "Building preview harness for $arch"
-  rm -rf "$PREVIEW_APP"
-  mkdir -p "$PREVIEW_APP/Contents/MacOS" "$PREVIEW_APP/Contents/Resources"
+  log "Building Idlesse.app for $arch"
+  rm -rf "$APP"
+  mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
   xcrun swiftc \
     -sdk "$SDK" \
     -target "$arch-apple-macosx$MIN_MACOS" \
     -swift-version 5 \
     "${SWIFT_OPT[@]}" \
-    -module-name IdlessePreview \
+    -module-name IdlesseApp \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
     "$ROOT/Sources/Harness/main.swift" \
@@ -101,46 +102,52 @@ build_preview() {
     -framework Photos \
     -framework ScreenSaver \
     -framework UniformTypeIdentifiers \
-    -o "$PREVIEW_APP/Contents/MacOS/IdlessePreview"
+    -o "$APP/Contents/MacOS/Idlesse"
 
-  cp "$ROOT/Sources/Harness/Info.plist" "$PREVIEW_APP/Contents/Info.plist"
-  chmod +x "$PREVIEW_APP/Contents/MacOS/IdlessePreview"
-  codesign --force --sign - "$PREVIEW_APP" >/dev/null
+  cp "$ROOT/Sources/Harness/Info.plist" "$APP/Contents/Info.plist"
+  chmod +x "$APP/Contents/MacOS/Idlesse"
+  codesign --force --sign - "$APP" >/dev/null
 
-  log "Preview ready: $PREVIEW_APP"
+  log "App ready: $APP"
 }
 
 case "${1:-all}" in
   saver)
     build_saver
     ;;
-  preview)
-    build_preview
+  app|preview)
+    build_app
     ;;
   run)
-    build_preview
-    pkill -x IdlessePreview 2>/dev/null || true
+    build_app
+    pkill -x Idlesse 2>/dev/null || true
     sleep 0.2
-    open "$PREVIEW_APP"
+    open "$APP"
     ;;
   install)
-    CONFIG=release "$0" saver
-    DEST="$HOME/Library/Screen Savers"
-    mkdir -p "$DEST"
-    rm -rf "$DEST/Idlesse.saver"
-    cp -R "$SAVER" "$DEST/Idlesse.saver"
+    CONFIG=release "$0" all
+
+    SAVER_DEST="$HOME/Library/Screen Savers"
+    APP_DEST="$HOME/Applications"
+    mkdir -p "$SAVER_DEST" "$APP_DEST"
+
+    rm -rf "$SAVER_DEST/Idlesse.saver" "$APP_DEST/Idlesse.app"
+    cp -R "$SAVER" "$SAVER_DEST/Idlesse.saver"
+    cp -R "$APP" "$APP_DEST/Idlesse.app"
+
     killall legacyScreenSaver 2>/dev/null || true
-    log "Installed to $DEST/Idlesse.saver"
-    log "macOS 26: System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse."
-    log "After selecting Idlesse, use Options at the top of the Screen Saver window."
-    open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension" 2>/dev/null || true
+
+    log "Installed screen saver: $SAVER_DEST/Idlesse.saver"
+    log "Installed settings app: $APP_DEST/Idlesse.app"
+    log "Configure Idlesse in the app. On macOS 26, System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse selects the saver."
+    open "$APP_DEST/Idlesse.app"
     ;;
   clean)
     rm -rf "$BUILD"
     log "Cleaned."
     ;;
   all|*)
-    build_preview
+    build_app
     build_saver
     ;;
 esac
