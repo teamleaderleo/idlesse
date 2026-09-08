@@ -207,3 +207,12 @@ Studio and desktop apply authored playback on selection. A changed authored time
 ### Curve editing
 
 The selected track has a compact curve display for hold, linear, and ease-in-out interpolation. Drag a key horizontally for time and vertically for its authored source value; one release makes one Undo step. The range fits the keys and stays fixed during a drag. The selected key shows exact time/value text. Shift snaps time to whole seconds, double-click empty curve space inserts a key sampled from the existing track, and Delete removes a selected key (at least one remains). Left/Right still nudge time. Edits preserve modifiers and keep the renderer alive. Curve values are source values before binding modifiers and final property clamping. Clipboard operations, timeline zoom, smoothing and video transport are still pending.
+
+
+### Signal smoothing (V12)
+
+Bind… includes Smoothing (0–5 seconds). Zero disables it. Positive values apply exponential smoothing to signal/keyframe output after scale, offset and modifiers, before the target's property clamp. Parameter-only drivers reject smoothing in this first implementation. The time constant is measured in real seconds (about 63% of a step after one time constant), independent of display refresh or scene speed. Adjustable Aurora demonstrates 0.18-second pointer smoothing.
+
+Only the duration is saved. Each Metal renderer owns bounded filter memory for its binding targets, with no extra timer. Loading, live scene edits, pause/resume and explicit transport changes reset filter history; normal authored looping retains it. Seeking therefore gives a deterministic fresh value instead of dragging old motion into the new position. This is exponential smoothing, not a spring simulation.
+
+Video transport remains separate work: AVPlayerLooper replicas must not have their playhead modified ([Apple documentation](https://developer.apple.com/documentation/avfoundation/avplayerlooper/loopingplayeritems)). Following scene transport needs independently managed video items, coalesced seeks, loop/rate handling, and lifecycle verification.

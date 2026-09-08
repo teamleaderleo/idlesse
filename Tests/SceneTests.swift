@@ -400,6 +400,26 @@ import Foundation
         precondition(timedLoaded.replacingNodes(timedLoaded.nodes).timeline == keyed.timeline)
         try Data(#"{"version":10,"title":"Old","capabilities":[]}"#.utf8).write(to: timedPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(timedPackage); fatalError("Accepted timeline in v10") } catch is SceneError {}
+        let filter = SceneBindingSmoother()
+        let filterTarget = keyed.bindings[0].target
+        filter.beginFrame(time: 0, revision: 0)
+        precondition(filter.sample(target: filterTarget, value: 0, duration: 0.18) == 0)
+        filter.beginFrame(time: 0.18, revision: 0)
+        let filtered = filter.sample(target: filterTarget, value: 1, duration: 0.18)
+        precondition(abs(filtered - (1 - exp(-1))) < 0.000001)
+        filter.beginFrame(time: 0.18, revision: 0)
+        precondition(filter.sample(target: filterTarget, value: 1, duration: 0.18) == filtered)
+        filter.beginFrame(time: 1, revision: 1)
+        precondition(filter.sample(target: filterTarget, value: -1, duration: 0.18) == -1)
+        keyed.bindings[0].smoothing = 0.18
+        let smoothPackage = root.appendingPathComponent("Smooth.idlesse")
+        try ScenePackageWriter.write(keyed, to: smoothPackage)
+        let smoothLoaded = try await source.resolve(smoothPackage)
+        precondition(smoothLoaded.bindings[0].smoothing == 0.18)
+        keyed.bindings[0].smoothing = .nan
+        do { _ = try keyed.evaluated(); fatalError("Accepted invalid smoothing") } catch is SceneError {}
+        try Data(#"{"version":11,"title":"Old","capabilities":[]}"#.utf8).write(to: smoothPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(smoothPackage); fatalError("Accepted smoothing in v11") } catch is SceneError {}
         let movedKey = try track.movingKey(at: 0, to: 2)
         precondition(movedKey.keys[0].time == 2 && movedKey.keys[0].value == track.keys[0].value)
         let blockedKey = try track.movingKey(at: 0, to: 10)

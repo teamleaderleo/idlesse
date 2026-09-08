@@ -1,1 +1,7 @@
-{"version":9,"title":"Adjustable Aurora","capabilities":["pointer"]}
+{
+  "version": 12,
+  "title": "Adjustable Aurora",
+  "capabilities": [
+    "pointer"
+  ]
+}
