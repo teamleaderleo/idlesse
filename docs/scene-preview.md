@@ -34,6 +34,8 @@ Unsaved drafts suspend package watching and disable Use on Desktop. Opening anot
 scene, closing the window, or quitting the app asks before discarding edits.
 Keep Editing cancels Quit and preserves the draft. Quit also waits for an active
 import or save to finish; retry it afterward.
+Reset Changes keeps the current preview, selection, and undo history if the original
+media cannot be loaded. Restore the source file and retry, or save the current draft.
 
 Save a Copy exports a new v2 package with its media, validates it, and opens that copy.
 Existing destinations are never replaced. Source files stay untouched. Media copies

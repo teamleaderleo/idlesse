@@ -4,6 +4,7 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        ScenePreviewController.smokeTestResetRecovery()
         let counter = PresentedFrameCounter()
         counter.record(presentedTime: 0)
         counter.record(presentedTime: .nan)
