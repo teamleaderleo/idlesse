@@ -386,6 +386,54 @@ enum WallpaperSmoke {
         metalVideo.releaseResources()
         precondition(metalVideo.diagnostics.activeResources == 0)
 
+        let followClock = SceneClock()
+        var following = liveVideoScene
+        following.timeline = .init(duration: 2, mode: .loop, videosFollowScene: true)
+        try followClock.configure(timeline: following.timeline)
+        let followVideo = try MetalSceneRenderer(playable: following,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: followClock) { errors.append($0) }
+        followVideo.setPaused(true)
+        try followClock.seek(to: 0.2)
+        var followPixels: [UInt8] = []
+        wait {
+            followPixels = (try? followVideo.renderProbe()) ?? []
+            return abs((followVideo.videoTransportPositions.first ?? -1) - 0.2) < 0.01 && Set(followPixels).count > 20
+        }
+        let firstFollowPixels = followPixels
+        try followClock.seek(to: 0.7)
+        followVideo.refreshSceneTime()
+        wait {
+            followPixels = (try? followVideo.renderProbe()) ?? []
+            return abs((followVideo.videoTransportPositions.first ?? -1) - 0.7) < 0.01 && followPixels != firstFollowPixels
+        }
+        try followClock.seek(to: 0.1)
+        followVideo.refreshSceneTime()
+        try followClock.seek(to: 1.8) // A newer seek wins; source video wraps at one second.
+        followVideo.refreshSceneTime()
+        wait {
+            _ = try? followVideo.renderProbe()
+            return abs((followVideo.videoTransportPositions.first ?? -1) - 0.8) < 0.01
+        }
+        try followClock.configure(time: 0.2, rate: 0.5, loop: nil)
+        followClock.setPaused(false)
+        followVideo.setPaused(false)
+        wait {
+            _ = try? followVideo.renderProbe()
+            let position = followVideo.videoTransportPositions.first ?? -1
+            return position > 0.3 && abs(position - followClock.time) < 0.15
+        }
+        wait {
+            _ = try? followVideo.renderProbe()
+            let position = followVideo.videoTransportPositions.first ?? -1
+            return followClock.time > 1.1 && position >= 0 && position < 0.5
+                && abs(position - followClock.time.truncatingRemainder(dividingBy: 1)) < 0.15
+        }
+        followClock.setPaused(true)
+        followVideo.setPaused(true)
+        precondition(followVideo.updateScene(following))
+        followVideo.releaseResources()
+        precondition(followVideo.diagnostics.activeResources == 0 && errors.isEmpty)
+
         var videoGroup = SceneNode(content: .group([SceneNode(content: .video(videoURL))]))
         let groupVideoScene = SceneDescriptor(title: "Grouped video", nodes: [videoGroup])
         let standardGroupVideo = try LayeredSceneRenderer(playable: groupVideoScene,

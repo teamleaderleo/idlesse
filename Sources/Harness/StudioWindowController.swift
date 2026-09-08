@@ -645,7 +645,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving, let node = editor.selectedNode, !node.locked else { return }
         let dialog = NSAlert()
         dialog.messageText = "Keyframes — " + node.displayName
-        dialog.informativeText = "Enter time:value pairs separated by commas (seconds). Replaces the selected property's binding. Use Time… to seek or loop; video remains independent."
+        dialog.informativeText = "Enter time:value pairs separated by commas (seconds). Replaces the selected property's binding. Use Time… to seek or loop; Playback… controls video following."
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Remove Track"); dialog.addButton(withTitle: "Cancel")
         let properties = ScenePropertyAddress.Property.allCases
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1025,10 +1025,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving else { return }
         let dialog = NSAlert()
         dialog.messageText = "Scene Playback"
-        dialog.informativeText = "Saved with the scene and used on the desktop. Controls motion and gradients; videos still play independently. Time… temporarily overrides playback in Studio."
+        dialog.informativeText = "Saved with the scene and used on the desktop. Video following supports Once and Loop with approximate synchronization. Time… temporarily overrides playback in Studio."
         dialog.addButton(withTitle: "Apply")
         dialog.addButton(withTitle: "Cancel")
         dialog.addButton(withTitle: "Remove")
+        let follow = NSButton(checkboxWithTitle: "Videos follow scene time (experimental)", target: nil, action: nil)
+        follow.state = scene.timeline?.videosFollowScene == true ? .on : .off
         let duration = NSTextField(string: String(scene.timeline?.duration ?? 8))
         let rate = NSTextField(string: String(scene.timeline?.rate ?? 1))
         let mode = NSPopUpButton()
@@ -1039,9 +1041,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         rate.setAccessibilityLabel("Authored playback speed")
         mode.setAccessibilityLabel("Authored playback mode")
         let fields = NSStackView(views: [NSTextField(labelWithString: "Duration (seconds)"), duration,
-            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, mode])
+            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, mode, follow])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 160)
+        fields.frame = NSRect(x: 0, y: 0, width: 340, height: 190)
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
             guard let self, response != .alertSecondButtonReturn else { return }
@@ -1052,7 +1054,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     guard let seconds = Double(duration.stringValue), let speed = Double(rate.stringValue) else {
                         throw SceneError.invalid("Enter numeric duration and speed values.")
                     }
-                    next.timeline = SceneTimeline(duration: seconds, mode: modes[mode.indexOfSelectedItem], rate: speed)
+                    next.timeline = SceneTimeline(duration: seconds, mode: modes[mode.indexOfSelectedItem], rate: speed, videosFollowScene: follow.state == .on)
                     try next.timeline?.validate()
                 }
                 guard next.timeline != self.scene.timeline else { return }
@@ -1066,7 +1068,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         }
         let dialog = NSAlert()
         dialog.messageText = "Scene Time"
-        dialog.informativeText = "Controls gradients and motion bindings. Videos keep their own playback speed and position. These preview settings are not saved in the package. Apply also redraws a paused scene."
+        dialog.informativeText = "Controls scene motion and videos opted into scene playback. Other videos stay independent. These preview overrides are not saved. Apply also redraws a paused scene."
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
         let position = NSTextField(string: String(format: "%.3f", clock.time))
         let rate = NSTextField(string: String(format: "%.2f", clock.playbackRate))
@@ -1101,7 +1103,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 try self.clock.configure(time: time, rate: speed, loop: range)
                 self.renderer?.refreshSceneTime()
                 self.updateTimeline()
-                self.detailLabel.stringValue = "Scene transport updated; video playback is independent."
+                self.detailLabel.stringValue = "Scene transport updated. Video following is configured in Playback…."
             } catch { self.detailLabel.stringValue = error.localizedDescription }
         }
     }

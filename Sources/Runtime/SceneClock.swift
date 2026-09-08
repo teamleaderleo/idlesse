@@ -19,6 +19,11 @@ final class SceneClock {
     }
     private var phase: TimeInterval { accumulated + (isPaused ? 0 : max(0, now() - anchor) * playbackRate) }
     var time: TimeInterval { wrapped(phase) }
+    var isAtEnd: Bool { authored?.mode == .once && phase >= (authored?.duration ?? 0) }
+    var effectiveRate: Double {
+        if isPaused || isAtEnd { return 0 }
+        return playbackRate
+    }
     func configure(timeline: SceneTimeline?) throws {
         try timeline?.validate()
         try configure(time: 0, rate: timeline?.rate ?? 1, loop: nil)

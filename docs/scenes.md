@@ -243,7 +243,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-Studio saves v6–v9 to preserve layer identities, controls, signals and modifiers.
+Studio chooses the lowest format version needed by the authored features.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR
@@ -267,4 +267,13 @@ A binding can use `keyframes` instead of `parameter` or `signal`. The track cont
 
 Tracks sample SceneClock time, hold endpoint values outside their range, then apply the binding scale/offset, ordered modifiers, and final property clamp. Ease-in-out uses smoothstep. No extra timer or GPU texture is allocated for tracks. Metal renders them; video playback remains independent.
 
-`Examples/KeyframedAurora.idlesse` rotates a gradient over six seconds. Studio Time… can seek it or loop 0–6 seconds; transport choices are preview-only and are not saved.
+`Examples/KeyframedAurora.idlesse` rotates a gradient over six seconds. The example now uses V11 authored playback to repeat its six-second animation on the desktop.
+
+
+## V11–V13 playback and smoothing
+
+V11 adds optional top-level `timeline`, for example `{"duration":6,"mode":"loop","rate":1}`. Modes are `once`, `loop`, `pingPong`; duration is 0.01–86400 seconds and rate is 0.1–4 (default 1). Omission preserves unbounded scene time. Playback… edits this document data; Time… is a temporary Studio override.
+
+V12 adds a binding `smoothing` time constant in real seconds, 0–5 (default 0/off), for signal/keyframe sources. Runtime exponential filtering follows modifiers and precedes property clamping. Filter history stays in the renderer and resets on explicit seek, scene edits, or pause/resume; no history is serialized.
+
+V13 adds `timeline.videosFollowScene` (default false). Enabled videos use independently managed items and approximately follow the scene playhead/rate. Short sources repeat; Once holds its endpoint. Follow mode supports Once and Loop, and rejects Ping-pong. Seeking is coalesced; running drift correction uses a 120 ms tolerance, not frame locking. Disabled videos retain their existing independent AVPlayerLooper path. See [Studio documentation](scene-preview.md) for authoring controls and limits.

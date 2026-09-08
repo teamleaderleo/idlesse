@@ -168,6 +168,8 @@ Try `Examples/ControlledAurora.idlesse` for adjustable brightness and edge darkn
 Bindings also support elapsed time, sine waves, and opt-in pointer response. Try
 `Examples/BreathingAurora.idlesse` for a breathing vignette and gentle pointer tilt.
 V9 adds ordered add/multiply modifiers, including control-driven motion strength.
+Studio also supports saved playback duration/modes, direct keyframe curve editing,
+signal smoothing, and opt-in experimental video scrubbing through the scene playhead.
 Try `Examples/AdjustableAurora.idlesse`, or choose **Multiply result by control**
 in Bind to combine a signal with an existing control.
 Studio's **Time…** control seeks, changes motion speed, and loops scene time in

@@ -13,12 +13,16 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var pixelBuffer: CVPixelBuffer?
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
+        var followsClock = false
+        var seekInFlight = false
+        var transportRevision: UInt64?
+        var lastCorrection: Double = -.infinity
         var statusObserver: NSKeyValueObservation?
         init(_ node: SceneNode) { self.node = node }
         func prepareOutputs() {
             // Replicas arrive asynchronously when the looper becomes ready.
             // Outputs are not copied from the template; configure each replica.
-            for replica in looper?.loopingPlayerItems ?? [] {
+            for replica in looper?.loopingPlayerItems ?? player?.items() ?? [] {
                 guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
                 let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -32,6 +36,20 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             player?.pause()
             looper?.disableLooping()
             player?.removeAllItems()
+        }
+    }
+    /// Completion handlers may outlive renderer teardown. Release wrappers before their cache.
+    private final class VideoFrameLifetime {
+        let cache: CVMetalTextureCache?
+        var wrappers: [CVMetalTexture]
+        var buffers: [CVPixelBuffer]
+        init(cache: CVMetalTextureCache?, wrappers: [CVMetalTexture], buffers: [CVPixelBuffer]) {
+            self.cache = cache; self.wrappers = wrappers; self.buffers = buffers
+        }
+        deinit {
+            wrappers.removeAll()
+            buffers.removeAll()
+            withExtendedLifetime(cache) {}
         }
     }
     // SIMD4 fields keep Swift/Metal layout identical (16-byte alignment).
@@ -57,6 +75,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private let bindingSmoother = SceneBindingSmoother()
     private let targets = GroupTexturePool()
     var intermediateTextureBytes: Int { targets.allocatedBytes }
+    var videoTransportPositions: [Double] { inputs.filter { $0.followsClock }.compactMap { $0.player?.currentTime().seconds } }
     private var visibleIDs: Set<UUID> {
         func visit(_ nodes: [SceneNode]) -> [UUID] {
             nodes.filter { $0.visible }.flatMap { [$0.id] + visit($0.children) }
@@ -136,15 +155,29 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 let player = AVQueuePlayer()
                 player.isMuted = true
                 player.preventsDisplaySleepDuringVideoPlayback = false
-                let looper = AVPlayerLooper(player: player, templateItem: item)
                 input.player = player
-                input.looper = looper
-                input.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak input] looper, _ in
-                    if looper.status == .ready {
-                        DispatchQueue.main.async { [weak input] in input?.prepareOutputs() }
+                input.followsClock = authored.timeline?.videosFollowScene == true
+                if input.followsClock {
+                    player.actionAtItemEnd = .pause
+                    player.insert(item, after: nil)
+                    input.prepareOutputs()
+                    input.statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self, weak input] item, _ in
+                        DispatchQueue.main.async { [weak self, weak input] in
+                            guard let self, input != nil, self.diagnostics.state != .disposed else { return }
+                            if item.status == .failed { onError(item.error?.localizedDescription ?? "Video transport failed.") }
+                            if item.status == .readyToPlay { self.needsFrame = true; self.metal.draw() }
+                        }
                     }
-                    if looper.status == .failed {
-                        DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
+                } else {
+                    let looper = AVPlayerLooper(player: player, templateItem: item)
+                    input.looper = looper
+                    input.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak input] looper, _ in
+                        if looper.status == .ready {
+                            DispatchQueue.main.async { [weak input] in input?.prepareOutputs() }
+                        }
+                        if looper.status == .failed {
+                            DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
+                        }
                     }
                 }
             case .gradient, .group: break
@@ -171,6 +204,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var changed = false
         let visible = visibleIDs
         for input in inputs where visible.contains(input.node.id) {
+            if input.followsClock { synchronizeVideo(input) }
             guard let player = input.player,
                   let output = player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first
             else { continue }
@@ -188,6 +222,34 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         diagnostics.loopCount = inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0
         return changed
+    }
+    private func synchronizeVideo(_ input: Input) {
+        guard let player = input.player, let item = player.currentItem, item.status == .readyToPlay else { return }
+        let duration = item.duration.seconds
+        guard duration.isFinite, duration > 0 else { return }
+        let wrapped = clock.time.truncatingRemainder(dividingBy: duration)
+        let target = clock.isAtEnd && wrapped < 0.000001 ? max(0, duration - 1.0 / 600) : wrapped
+        let rate = diagnostics.state == .running ? clock.effectiveRate : 0
+        let now = ProcessInfo.processInfo.systemUptime
+        let needsSeek = input.transportRevision != clock.revision ||
+            abs(player.currentTime().seconds - target) > (rate == 0 ? 0.002 : 0.12)
+        guard !input.seekInFlight else { return }
+        if needsSeek && (input.transportRevision != clock.revision || now - input.lastCorrection >= 0.1) {
+            input.seekInFlight = true; input.lastCorrection = now
+            let revision = clock.revision
+            player.pause()
+            player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak input] completed in
+                DispatchQueue.main.async { [weak self, weak input] in
+                    guard let self, let input, self.diagnostics.state != .disposed else { return }
+                    input.seekInFlight = false
+                    if completed { input.transportRevision = revision }
+                    self.needsFrame = true
+                    self.metal.draw()
+                }
+            }
+        } else if !needsSeek {
+            player.rate = Float(rate)
+        }
     }
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
         guard let pipeline, let device = metal.device else { return false }
@@ -229,18 +291,18 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         guard encodeNodes(roots, into: pass) else { targets.recycle(lease); return false }
         // Hold both the Core Video buffers and this frame's group targets through completion.
-        let wrappers = inputs.compactMap { $0.videoTexture }
-        let buffers = inputs.compactMap { $0.pixelBuffer }
+        let videoLifetime = VideoFrameLifetime(cache: cache, wrappers: inputs.compactMap { $0.videoTexture },
+                                               buffers: inputs.compactMap { $0.pixelBuffer })
         let targets = self.targets
         command.addCompletedHandler { _ in
-            withExtendedLifetime(wrappers) {}
-            withExtendedLifetime(buffers) {}
+            withExtendedLifetime(videoLifetime) {}
             targets.recycle(lease)
         }
         return true
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
         let authored = scene
+        guard (sourceScene?.timeline?.videosFollowScene == true) == (scene.timeline?.videosFollowScene == true) else { return false }
         guard let scene = try? scene.evaluated(signals: currentSignals()) else { return false }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
@@ -371,10 +433,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         needsFrame = true
         let visible = visibleIDs
         inputs.forEach { input in
-            if paused || !visible.contains(input.node.id) { input.player?.pause() } else { input.player?.play() }
+            if input.followsClock || paused || !visible.contains(input.node.id) { input.player?.pause() } else { input.player?.play() }
         }
         metal.isPaused = paused || !diagnostics.animated
-        if !diagnostics.animated { metal.draw() }
+        if !diagnostics.animated || inputs.contains(where: { $0.followsClock }) { metal.draw() }
     }
     func releaseResources() {
         metal.isPaused = true
