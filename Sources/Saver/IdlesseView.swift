@@ -39,6 +39,10 @@ final class IdlesseView: ScreenSaverView {
     private var fadeStartedAt: TimeInterval = 0
     private var currentURL: URL?
     private var nextURL: URL?
+    private let sceneSource: SceneSource = LocalSceneSource()
+    private var imageLoad: Task<Void, Never>?
+    private var imageGeneration = 0
+
     private var running = false
     private(set) var isPlaybackPaused = false
     var displayedFileURL: URL? { currentURL }
@@ -224,8 +228,6 @@ final class IdlesseView: ScreenSaverView {
         preferences.reloadFromDisk()
         guard running else { return }
 
-        let scale = window?.backingScaleFactor ?? 2
-        library.displayPixelSize = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
         library.playbackOffset = preferences.multiDisplayMode == .different ? currentDisplayIndex : 0
         // Drop the previous decoded images before scanning a potentially large folder.
         currentURL = nil
@@ -242,18 +244,7 @@ final class IdlesseView: ScreenSaverView {
             scheduleLibraryRefresh()
         }
 
-        guard let first = library.next(excluding: nil) else {
-            canvas.message = library.lastError ?? "Choose a folder in Idlesse Settings."
-            return
-        }
-
-        currentURL = first.url
-        canvas.currentImage = first.image
-        canvas.message = nil
-
-        if running {
-            scheduleNextImage()
-        }
+        loadNextImage(first: true)
     }
 
     private var currentDisplayIndex: Int {
@@ -301,6 +292,9 @@ final class IdlesseView: ScreenSaverView {
     private func refreshLibrary() {
         guard running else { return }
         guard library.refreshIfChanged(currentURL: currentURL) else { return }
+        imageGeneration += 1
+        imageLoad?.cancel()
+        imageLoad = nil
 
         if library.count == 0 {
             displayTimer?.invalidate()
@@ -318,29 +312,58 @@ final class IdlesseView: ScreenSaverView {
 
         canvas.message = nil
 
-        if canvas.currentImage == nil, let first = library.next(excluding: nil) {
-            currentURL = first.url
-            canvas.currentImage = first.image
-            scheduleNextImage()
-        }
+        if canvas.currentImage == nil { loadNextImage(first: true) }
+        else if fadeTimer == nil { scheduleNextImage() }
     }
 
     private func beginTransition() {
         guard running else { return }
+        loadNextImage(first: canvas.currentImage == nil)
+    }
 
-        guard let next = library.next(excluding: currentURL) else {
-            canvas.message = library.lastError
-            scheduleNextImage()
-            return
+    private func loadNextImage(first: Bool) {
+        guard running, imageLoad == nil else { return }
+        let generation = imageGeneration
+        let scale = window?.backingScaleFactor ?? 2
+        let target = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
+        let mode = preferences.scalingMode
+        let scope = library.accessURL
+        let limit = library.count
+        let requestedWhilePaused = isPlaybackPaused
+        imageLoad = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { if generation == self.imageGeneration { self.imageLoad = nil } }
+            for _ in 0..<limit {
+                guard !Task.isCancelled, generation == self.imageGeneration, self.running,
+                      let url = self.library.next(excluding: self.currentURL) else { return }
+                do {
+                    let playable = try await self.sceneSource.resolve(url)
+                    let image = try await ImagePreparation.shared.load(playable, target: target, mode: mode, scope: scope)
+                    guard !Task.isCancelled, generation == self.imageGeneration, self.running else { return }
+                    guard first || requestedWhilePaused || !self.isPlaybackPaused else { return }
+                    self.canvas.message = nil
+                    if first {
+                        self.currentURL = url
+                        self.canvas.currentImage = image
+                        self.scheduleNextImage()
+                    } else if url == self.currentURL {
+                        self.scheduleNextImage()
+                    } else {
+                        self.startTransition(url: url, image: image)
+                    }
+                    return
+                } catch is CancellationError { return }
+                catch { continue }
+            }
+            guard generation == self.imageGeneration, self.running else { return }
+            self.canvas.message = self.library.lastError ?? "No readable images in this folder."
+            self.scheduleNextImage()
         }
+    }
 
-        if next.url == currentURL {
-            scheduleNextImage()
-            return
-        }
-
-        nextURL = next.url
-        canvas.nextImage = next.image
+    private func startTransition(url: URL, image: NSImage) {
+        nextURL = url
+        canvas.nextImage = image
         canvas.transitionProgress = 0
 
         let duration = preferences.transitionDuration
@@ -387,6 +410,9 @@ final class IdlesseView: ScreenSaverView {
     }
 
     private func stopTimers() {
+        imageGeneration += 1
+        imageLoad?.cancel()
+        imageLoad = nil
         displayTimer?.invalidate()
         fadeTimer?.invalidate()
         libraryRefreshTimer?.invalidate()

@@ -15,6 +15,8 @@ APP="$BUILD/Idlesse.app"
 TAHOE_DIAG="$HOME/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/idlesse-diag.log"
 
 SHARED_SOURCES=(
+  "$ROOT/Sources/Runtime/Scene.swift"
+  "$ROOT/Sources/Runtime/ImagePreparation.swift"
   "$ROOT/Sources/Shared/Preferences.swift"
   "$ROOT/Sources/Shared/ImageLibrary.swift"
   "$ROOT/Sources/Shared/DisplayImageDecoder.swift"
@@ -101,7 +103,6 @@ build_app() {
     -framework AVFoundation \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
-    "$ROOT/Sources/Runtime/Scene.swift" \
     "$ROOT/Sources/Runtime/SceneRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \

@@ -25,7 +25,7 @@ final class ImageCanvasView: NSView {
         didSet { needsDisplay = true }
     }
 
-    override var isOpaque: Bool { true }
+    override var isOpaque: Bool { backdropColor.alphaComponent == 1 }
 
     override func draw(_ dirtyRect: NSRect) {
         backdropColor.setFill()

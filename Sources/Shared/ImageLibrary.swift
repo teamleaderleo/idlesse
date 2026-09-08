@@ -4,11 +4,6 @@ import ImageIO
 import UniformTypeIdentifiers
 
 final class ImageLibrary {
-    struct Item {
-        let url: URL
-        let image: NSImage
-    }
-
     private struct Entry: Equatable {
         let url: URL
         let creationDate: Date?
@@ -28,7 +23,7 @@ final class ImageLibrary {
     private var folderURL: URL?
     private var securityScopeStarted = false
 
-    var displayPixelSize = CGSize(width: 1920, height: 1080)
+    var accessURL: URL? { folderURL }
     var playbackOffset = 0
     private(set) var lastError: String?
 
@@ -93,29 +88,16 @@ final class ImageLibrary {
         }
     }
 
-    func next(excluding currentURL: URL?) -> Item? {
+    /// Advance the deck without opening or decoding the asset.
+    func next(excluding currentURL: URL?) -> URL? {
         guard !playbackOrder.isEmpty else { return nil }
-
-        var examined = 0
-        while examined < imageEntries.count {
-            if cursor >= playbackOrder.count {
-                cycle += 1
-                rebuildPlaybackOrder(avoiding: currentURL)
-            }
-
-            let url = playbackOrder[cursor]
-            cursor += 1
-            examined += 1
-
-            if let image = autoreleasepool(invoking: {
-                DisplayImageDecoder.load(url, target: displayPixelSize, mode: preferences.scalingMode)
-            }) {
-                return Item(url: url, image: image)
-            }
+        if cursor >= playbackOrder.count {
+            cycle += 1
+            rebuildPlaybackOrder(avoiding: currentURL)
         }
-
-        lastError = "Idlesse found image files, but macOS could not open them."
-        return nil
+        let url = playbackOrder[cursor]
+        cursor += 1
+        return url
     }
 
     func releaseContents() {
