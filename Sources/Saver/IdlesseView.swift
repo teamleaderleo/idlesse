@@ -172,6 +172,13 @@ final class IdlesseView: ScreenSaverView {
 
     private func refreshLibrary() {
         guard running else { return }
+
+        // Pick up changes saved in Idlesse.app while the saver is already running.
+        if preferences.reloadFromDisk() {
+            restartSlideshow()
+            return
+        }
+
         guard library.refreshIfChanged(currentURL: currentURL) else { return }
 
         if library.count == 0 {
