@@ -36,6 +36,11 @@ final class WallpaperSurface {
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
         }
         window.contentView = renderer.view
+        updateFrameRate()
+    }
+
+    func updateFrameRate() {
+        renderer.setPreferredFrameRate(SceneFrameRate.selected.requested(maximum: window.screen?.maximumFramesPerSecond ?? 60))
     }
 
     func show(paused: Bool) {
@@ -104,6 +109,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     override init() {
         super.init()
+        observe(.default, SceneFrameRate.changed) { controller in
+            controller.surfaces.forEach { $0.updateFrameRate() }
+        }
         let workspace = NSWorkspace.shared.notificationCenter
         observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.setAsleep(true) }
         observe(workspace, NSWorkspace.screensDidWakeNotification) { $0.setAsleep(false) }

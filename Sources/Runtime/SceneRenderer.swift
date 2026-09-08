@@ -1,6 +1,33 @@
 import AppKit
 import AVFoundation
 
+enum SceneFrameRate: Int, CaseIterable {
+    case automatic = 0, matchDisplay = -1, fps30 = 30, fps60 = 60, fps120 = 120, fps160 = 160
+    static let changed = Notification.Name("IdlesseSceneFrameRateChanged")
+    static var selected: SceneFrameRate {
+        get { SceneFrameRate(rawValue: UserDefaults.standard.integer(forKey: "sceneFrameRate")) ?? .automatic }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "sceneFrameRate")
+            NotificationCenter.default.post(name: changed, object: nil)
+        }
+    }
+    var title: String {
+        switch self {
+        case .automatic: return "Frame Rate: Auto"
+        case .matchDisplay: return "Match Display"
+        default: return "\(rawValue) fps"
+        }
+    }
+    func requested(maximum: Int) -> Int? {
+        let maximum = maximum > 0 ? maximum : 60
+        switch self {
+        case .automatic: return nil
+        case .matchDisplay: return maximum
+        default: return min(rawValue, maximum)
+        }
+    }
+}
+
 struct RendererDiagnostics {
     enum State { case ready, running, paused, disposed }
     var state: State
@@ -16,7 +43,13 @@ protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
     func setPaused(_ paused: Bool)
+    func setPreferredFrameRate(_ rate: Int?)
     func releaseResources()
+}
+
+extension SceneRenderer {
+    // AVPlayerLayer follows source playback; static images do not need a redraw loop.
+    func setPreferredFrameRate(_ rate: Int?) {}
 }
 
 private final class VideoWallpaperView: NSView {
@@ -143,6 +176,9 @@ final class LayeredSceneRenderer: SceneRenderer {
                 children.append(child)
             }
         } catch { releaseResources(); throw error }
+    }
+    func setPreferredFrameRate(_ rate: Int?) {
+        children.forEach { $0.setPreferredFrameRate(rate) }
     }
     func setPaused(_ paused: Bool) {
         guard state != .disposed else { return }

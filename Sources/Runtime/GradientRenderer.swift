@@ -110,6 +110,10 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return bytes
     }
 
+    func setPreferredFrameRate(_ rate: Int?) {
+        guard diagnostics.state != .disposed else { return }
+        metal.preferredFramesPerSecond = rate ?? 30
+    }
     func setPaused(_ paused: Bool) {
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
