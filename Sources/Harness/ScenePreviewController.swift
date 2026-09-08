@@ -12,6 +12,15 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     private let removeNodeButton = NSButton(title: "Remove", target: nil, action: nil)
     private let reorderButton = NSButton(title: "Bring Forward", target: nil, action: nil)
     private var importedScopes: [URL] = []
+    private struct EditSnapshot {
+        let scene: SceneDescriptor
+        let selected: Int
+        let draft: Bool
+    }
+    private var undoEdits: [EditSnapshot] = []
+    private var redoEdits: [EditSnapshot] = []
+    private let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    private let redoButton = NSButton(title: "Redo", target: nil, action: nil)
     private let titleLabel = NSTextField(labelWithString: "Aurora")
     private let performanceLabel = NSTextField(labelWithString: "")
     private var performanceTimer: Timer?
@@ -51,7 +60,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         super.init()
         window.title = "Idlesse · Scene Preview"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 1040, height: 640)
+        window.minSize = NSSize(width: 1040, height: 680)
         window.delegate = self
         let workspace = NSWorkspace.shared.notificationCenter
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
@@ -109,6 +118,11 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         inspector.spacing = 10
         inspector.addArrangedSubview(NSTextField(labelWithString: "LAYERS"))
         inspector.addArrangedSubview(nodePicker)
+        undoButton.target = self
+        undoButton.action = #selector(undoEdit)
+        redoButton.target = self
+        redoButton.action = #selector(redoEdit)
+        inspector.addArrangedSubview(NSStackView(views: [undoButton, redoButton]))
         for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(addGradient)),
                                   (reorderButton, #selector(reorderNode)), (removeNodeButton, #selector(removeNode))] {
             button.target = self
@@ -219,6 +233,8 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         removeNodeButton.isEnabled = !saving && scene.nodes.count > 1
         reorderButton.isEnabled = !saving && scene.nodes.count > 1
         dragOverlay.isEnabled = !saving
+        undoButton.isEnabled = !saving && !undoEdits.isEmpty
+        redoButton.isEnabled = !saving && !redoEdits.isEmpty
         window.isDocumentEdited = draft
     }
     @objc private func selectNode() {
@@ -247,25 +263,58 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     @discardableResult private func applyEdit(_ nodes: [SceneNode], selected: Int) -> Bool {
         guard !saving, (1...2).contains(nodes.count) else { return false }
         let previous = scene
+        let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
         scene = SceneDescriptor(title: scene.title, nodes: nodes)
         rebuild()
         guard renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
+        undoEdits.append(snapshot)
+        if undoEdits.count > 32 { undoEdits.removeFirst() }
+        redoEdits.removeAll()
         if savedScene == nil { savedScene = previous }
         cancelLoading()
         watcher = nil
         draft = true
         updateInspector()
-        let needed = Set(nodes.compactMap { $0.assetURL } + (savedScene?.nodes.compactMap { $0.assetURL } ?? []))
+        pruneImportedScopes()
+        nodePicker.selectItem(at: selected)
+        selectNode()
+        detailLabel.stringValue = "Unsaved preview · Save a Copy to keep changes"
+        return true
+    }
+    private func pruneImportedScopes() {
+        let scenes = [scene] + (savedScene.map { [$0] } ?? []) + (undoEdits + redoEdits).map { $0.scene }
+        let needed = Set(scenes.flatMap { $0.nodes.compactMap { $0.assetURL } })
         importedScopes.removeAll { url in
             guard !needed.contains(url) else { return false }
             url.stopAccessingSecurityScopedResource()
             return true
         }
-        nodePicker.selectItem(at: selected)
+    }
+    @objc private func undoEdit() { restoreEdit(undo: true) }
+    @objc private func redoEdit() { restoreEdit(undo: false) }
+    private func restoreEdit(undo: Bool) {
+        guard !saving, let target = undo ? undoEdits.last : redoEdits.last else { return }
+        let current = EditSnapshot(scene: scene, selected: nodePicker.indexOfSelectedItem, draft: draft)
+        let previousRenderer = renderer
+        scene = target.scene
+        rebuild()
+        guard renderer !== previousRenderer else { scene = current.scene; updateInspector(); return }
+        if undo { undoEdits.removeLast(); redoEdits.append(current) }
+        else { redoEdits.removeLast(); undoEdits.append(current) }
+        cancelLoading()
+        // Keep watching suspended while history exists, even at the initial scene.
+        watcher = nil
+        draft = target.draft
+        updateInspector()
+        nodePicker.selectItem(at: max(0, min(target.selected, scene.nodes.count - 1)))
         selectNode()
-        detailLabel.stringValue = "Unsaved preview · Save a Copy to keep changes"
-        return true
+        detailLabel.stringValue = draft ? "Unsaved preview · Save a Copy to keep changes" : "Original scene · Redo is available"
+        pruneImportedScopes()
+    }
+    private func clearEditHistory() {
+        undoEdits.removeAll()
+        redoEdits.removeAll()
     }
     private func moveNode(x: Double, y: Double) {
         guard scene.nodes.indices.contains(nodePicker.indexOfSelectedItem) else { return }
@@ -322,7 +371,10 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
                     var node = loaded.nodes[0]
                     node.transform = .init(x: 0, y: 0, scale: 0.6, rotation: 0)
                     if self.applyEdit(self.scene.nodes + [node], selected: self.scene.nodes.count) {
-                        if accessed { self.importedScopes.append(url); adopted = true }
+                        if accessed && !self.importedScopes.contains(url) {
+                            self.importedScopes.append(url)
+                            adopted = true
+                        }
                     }
                     self.loadTask = nil
                     self.updateInspector()
@@ -344,6 +396,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         guard !saving, let savedScene else { return }
         scene = savedScene
         self.savedScene = nil
+        clearEditHistory()
         releaseImportedScopes()
         draft = false
         rebuild()
@@ -484,6 +537,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
         guard mayDiscard() else { return }
         draft = false
         savedScene = nil
+        clearEditHistory()
         releaseImportedScopes()
         cancelLoading()
         watcher = nil
@@ -543,6 +597,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
                 self.scopedURL = accessed ? url : nil
                 adopted = true
                 self.draft = false
+                self.clearEditHistory()
                 self.savedScene = nil
                 self.updateInspector()
                 self.selectedURL = url
@@ -558,7 +613,7 @@ final class ScenePreviewController: NSObject, NSWindowDelegate {
     }
     private func watchPackage() {
         watcher = nil
-        guard !draft, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
+        guard !draft, undoEdits.isEmpty, redoEdits.isEmpty, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
         watcher = SceneWatcher(package: url, assets: scene.nodes.compactMap { $0.assetURL }) { [weak self] in
             self?.load(url)
         }
