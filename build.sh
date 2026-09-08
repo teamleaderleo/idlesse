@@ -101,9 +101,14 @@ build_app() {
     "${SWIFT_OPT[@]}" \
     -module-name IdlesseApp \
     -framework AVFoundation \
+    -framework MetalKit \
+    -framework Metal \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
     "$ROOT/Sources/Runtime/SceneRenderer.swift" \
+    "$ROOT/Sources/Runtime/SceneClock.swift" \
+    "$ROOT/Sources/Runtime/SceneWatcher.swift" \
+    "$ROOT/Sources/Runtime/GradientRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \

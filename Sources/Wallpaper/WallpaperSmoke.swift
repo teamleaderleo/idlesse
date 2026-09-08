@@ -39,7 +39,7 @@ enum WallpaperSmoke {
         for surface in controller.surfaces {
             precondition(!surface.window.canBecomeKey && !surface.window.canBecomeMain)
             precondition(surface.window.ignoresMouseEvents)
-            precondition(surface.player == nil)
+            precondition(surface.diagnostics.activeResources == 1 && !surface.diagnostics.animated)
             precondition(surface.window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow)))
         }
         controller.setAsleep(true)
@@ -88,10 +88,10 @@ enum WallpaperSmoke {
             .write(to: package.appendingPathComponent("scene.json"))
         controller.select(package)
         wait { !controller.isLoading }
-        precondition(errors.isEmpty && controller.selectedURL == package && controller.surfaces.first?.player != nil)
+        precondition(errors.isEmpty && controller.selectedURL == package && controller.surfaces.first?.diagnostics.animated == true)
         controller.setAsleep(true)
         controller.setAsleep(false)
-        precondition(controller.surfaces.first?.player != nil, "Package must survive display sleep")
+        precondition(controller.surfaces.first?.diagnostics.animated == true, "Package must survive display sleep")
 
         try FileManager.default.copyItem(at: imageURL, to: package.appendingPathComponent("assets/overlay.png"))
         try Data(#"{"layers":[{"type":"video","asset":"assets/loop.mp4"},{"type":"image","asset":"assets/overlay.png","opacity":0.25}]}"#.utf8)
@@ -100,35 +100,68 @@ enum WallpaperSmoke {
         wait { !controller.isLoading }
         precondition(errors.isEmpty)
         let composite = controller.surfaces[0].window.contentView!
-        precondition(composite.subviews.count == 2 && composite.subviews[1].alphaValue == 0.25)
+        precondition(composite.subviews.count == 2 && composite.subviews[1].subviews[0].alphaValue == 0.25)
         controller.togglePause()
-        precondition(controller.surfaces[0].player?.rate == 0)
+        precondition(controller.surfaces[0].diagnostics.state == .paused)
         controller.togglePause()
+
+        // A real filesystem event must apply an atomic edit without resetting pause.
+        controller.togglePause()
+        let beforeRevision = controller.revision
+        let beforeTime = controller.sceneTime
+        try Data(#"{"layers":[{"type":"video","asset":"assets/loop.mp4"},{"type":"image","asset":"assets/overlay.png","opacity":0.6}]}"#.utf8)
+            .write(to: package.appendingPathComponent("scene.json"), options: .atomic)
+        wait { controller.revision > beforeRevision }
+        precondition(controller.pausedByUser && controller.sceneTime == beforeTime)
+        precondition(controller.surfaces[0].diagnostics.state == .paused)
+        precondition(controller.surfaces[0].window.contentView!.subviews[1].subviews[0].alphaValue == 0.6)
+        let goodRevision = controller.revision
+        try Data("unfinished edit".utf8).write(to: package.appendingPathComponent("scene.json"), options: .atomic)
+        wait { controller.lastReloadError != nil }
+        precondition(controller.revision == goodRevision && !controller.surfaces.isEmpty)
+        try Data(#"{"layers":[{"type":"video","asset":"assets/loop.mp4"}]}"#.utf8)
+            .write(to: package.appendingPathComponent("scene.json"), options: .atomic)
+        wait { controller.revision > goodRevision }
+        precondition(controller.lastReloadError == nil && controller.pausedByUser)
+
+        var instant = 0.0
+        let sceneClock = SceneClock(now: { instant })
+        sceneClock.setPaused(false)
+        let gradient = try GradientRenderer(bounds: NSRect(x: 0, y: 0, width: 32, height: 32), clock: sceneClock) { errors.append($0) }
+        let frame = try gradient.renderProbe()
+        precondition(Set(frame).count > 16 && stride(from: 3, to: frame.count, by: 4).allSatisfy { frame[$0] == 255 })
+        instant = 10
+        let laterFrame = try gradient.renderProbe()
+        precondition(laterFrame != frame, "Scene time must animate actual GPU output")
+        gradient.setPaused(true)
+        precondition(gradient.diagnostics.state == .paused)
+        gradient.releaseResources()
+        precondition(gradient.diagnostics.activeResources == 0)
 
         try Data(#"{"version":99,"title":"Future scene","capabilities":[]}"#.utf8)
             .write(to: package.appendingPathComponent("manifest.json"))
         controller.select(package)
         wait { !controller.isLoading }
-        precondition(!errors.isEmpty && controller.surfaces.first?.player != nil,
+        precondition(!errors.isEmpty && controller.surfaces.first?.diagnostics.animated == true,
                      "Unsupported scene must preserve the current renderer")
         errors.removeAll()
         controller.stop()
 
         controller.select(videoURL)
-        wait { controller.surfaces.first?.player != nil || !errors.isEmpty }
+        wait { controller.surfaces.first?.diagnostics.animated == true || !errors.isEmpty }
         precondition(errors.isEmpty)
         let surface = controller.surfaces[0]
-        precondition(surface.player?.isMuted == true)
-        precondition(surface.player?.preventsDisplaySleepDuringVideoPlayback == false)
-        surface.player?.play()
-        wait(timeout: 60) { surface.completedLoops >= 1 || !errors.isEmpty }
+        precondition(surface.diagnostics.audioMuted)
+        precondition(surface.diagnostics.allowsDisplaySleep)
+        surface.setPaused(false)
+        wait(timeout: 60) { surface.diagnostics.loopCount >= 1 || !errors.isEmpty }
         precondition(errors.isEmpty)
         controller.togglePause()
-        precondition(surface.player?.rate == 0)
+        precondition(surface.diagnostics.state == .paused)
         controller.togglePause()
         controller.stop()
         precondition(controller.surfaces.isEmpty && !controller.isRunning)
-        precondition(surface.player == nil, "Stop must release the player, including externally retained surfaces")
+        precondition(surface.diagnostics.activeResources == 0, "Stop must release the player, including externally retained surfaces")
 
         // A pending async selection cannot recreate windows after Stop.
         controller.select(videoURL)
@@ -137,6 +170,6 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }

@@ -161,3 +161,9 @@ The desktop host now resolves `.idlesse` scene packages asynchronously and plays
 them through separate image and video renderers. See [scene format and current
 limits](docs/scenes.md). The screensaver now resolves its images through the shared async source and
 background image preparation. Desktop packages support two layers with opacity.
+
+Scene format v2 adds typed nodes, positioning, rotation, scale and a built-in
+animated Metal gradient. Open packages hot-reload on save, preserving the last
+working scene on invalid edits. See [the creative runtime](docs/creative-runtime.md)
+and the self-contained `Examples/Gradient.idlesse` example. The shared clock drives
+procedural time; independent video players are not yet synchronized to it.
