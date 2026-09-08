@@ -39,6 +39,17 @@ can consume additional disk space; this is not a cloud/offloading workflow. Expo
 runs away from the main thread and removes staging files on failure. Imported media access is retained for the draft and released when it is no longer
 needed. Export preserves layer order and transforms.
 
+## Undo and redo
+
+The inspector’s Undo and Redo buttons cover committed transform edits, dragging,
+adding/removing layers, and reordering. History retains at most 32 metadata snapshots,
+not decoded images or players. Selection and the unsaved marker are restored too.
+New edits clear the redo branch. Reset Changes and opening a new scene clear history.
+Package watching stays suspended while history exists so an external reload cannot
+silently replace it. Imported file access stays alive while a history entry needs it.
+Undo/redo rebuilds playback, so videos restart. Text-field undo is separate; these
+scene actions currently use the inspector buttons.
+
 ## Frame rate
 
 The top-right frame-rate control is saved for both preview and desktop scenes:
