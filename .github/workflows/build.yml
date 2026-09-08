@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swiftc --version
+
+      - name: Build preview and universal saver
+        run: ./build.sh
+
+      - name: Verify bundles
+        run: |
+          file "build/Idlesse.saver/Contents/MacOS/Idlesse"
+          plutil -lint "build/Idlesse.saver/Contents/Info.plist"
+          plutil -lint "build/Idlesse Preview.app/Contents/Info.plist"
+          codesign --verify --strict "build/Idlesse.saver"
+          codesign --verify --strict "build/Idlesse Preview.app"

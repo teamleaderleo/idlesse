@@ -10,10 +10,7 @@ final class ImageCanvasView: NSView {
     }
 
     var transitionProgress: CGFloat = 0 {
-        didSet {
-            transitionProgress = min(1, max(0, transitionProgress))
-            needsDisplay = true
-        }
+        didSet { needsDisplay = true }
     }
 
     var scalingMode: IdlesseScalingMode = .fit {
@@ -30,12 +27,14 @@ final class ImageCanvasView: NSView {
         NSColor.black.setFill()
         NSBezierPath(rect: bounds).fill()
 
+        let progress = min(1, max(0, transitionProgress))
+
         if let currentImage {
-            drawImage(currentImage, alpha: nextImage == nil ? 1 : 1 - transitionProgress)
+            drawImage(currentImage, alpha: nextImage == nil ? 1 : 1 - progress)
         }
 
         if let nextImage {
-            drawImage(nextImage, alpha: transitionProgress)
+            drawImage(nextImage, alpha: progress)
         }
 
         if currentImage == nil, let message {

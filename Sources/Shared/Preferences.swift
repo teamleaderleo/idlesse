@@ -32,7 +32,12 @@ final class IdlessePreferences {
     let defaults: UserDefaults
 
     private init() {
-        defaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) ?? .standard
+        if let saverDefaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) {
+            defaults = saverDefaults
+        } else {
+            defaults = .standard
+        }
+
         defaults.register(defaults: [
             Key.displayDuration: 300.0,
             Key.transitionDuration: 2.0,
