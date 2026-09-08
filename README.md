@@ -74,13 +74,19 @@ Go to:
 
 Scroll to **Other** and select **Idlesse**.
 
-Tahoe currently renders an **Options…** button for legacy third-party savers but can fail to call their `configureSheet` implementation. Idlesse keeps the standard configure-sheet API for older/fixed macOS versions.
+Tahoe renders the standard **Options…** button for Idlesse and, on the current tested build, does call Idlesse's `configureSheet` getter when that button is clicked. The host then fails to present the returned window.
 
-For current Tahoe development, the reliable hook is the selected saver's running preview: while System Settings is frontmost, Idlesse schedules the same **Idlesse Settings** window from `startAnimation()` inside `legacyScreenSaver`. The window is placed one level above the screen-saver host so it is not hidden behind the preview. A real full-screen saver activation does not trigger this fallback because System Settings is no longer frontmost.
+Idlesse keeps the standard configure-sheet API intact. On Tahoe, after `configureSheet` is called, Idlesse gives System Settings a brief chance to attach the returned window normally. If the window is still unattached, Idlesse presents that same process-wide **Idlesse Settings** window itself above the screen-saver chooser. This keeps configuration tied to the user's **Options…** click and avoids automatic or duplicate settings windows when merely selecting the saver.
 
-Choose the image folder in that Idlesse Settings window and press **Save**. Because the picker and bookmark creation happen inside `legacyScreenSaver`, the folder permission belongs to the process that actually needs to display the images.
+Choose the image folder in **Idlesse Settings** and press **Save**. Because the picker and bookmark creation happen inside `legacyScreenSaver`, the folder permission belongs to the process that actually needs to display the images.
 
-The Tahoe **Options…** button itself may remain inert until Apple fixes the host regression; selecting Idlesse is the current trigger for the in-host Settings window.
+For Tahoe diagnostics after one Options click:
+
+```sh
+./build.sh diagnose
+```
+
+The diagnostic log records `hasConfigureSheet`, `configureSheet`, preview lifecycle calls, process/window state, and whether Idlesse had to self-present the settings window.
 
 ## Playback behavior
 
@@ -102,4 +108,4 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next work: verify Tahoe's startAnimation Settings fallback and folder bookmark end to end, then continue Photos-source work and distribution hardening.
+Next work: verify the Tahoe Options-triggered self-presentation and folder bookmark end to end, then continue Photos-source work and distribution hardening.
