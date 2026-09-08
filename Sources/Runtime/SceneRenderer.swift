@@ -87,9 +87,11 @@ protocol SceneRenderer: AnyObject {
     func setPaused(_ paused: Bool)
     func setPreferredFrameRate(_ rate: Int?)
     func releaseResources()
+    func updateScene(_ scene: SceneDescriptor) -> Bool
 }
 
 extension SceneRenderer {
+    func updateScene(_ scene: SceneDescriptor) -> Bool { false }
     var presentedFrameCount: Int? { nil }
     var gpuTotals: (seconds: Double, frames: Int)? { nil }
     // AVPlayerLayer follows source playback; static images do not need a redraw loop.
@@ -179,6 +181,7 @@ final class VideoRenderer: SceneRenderer {
 final class LayeredSceneRenderer: SceneRenderer {
     let view: NSView
     private var children: [SceneRenderer] = []
+    private var nodes: [SceneNode] = []
     private var state: RendererDiagnostics.State = .ready
     var gpuTotals: (seconds: Double, frames: Int)? {
         children.count == 1 ? children.first?.gpuTotals : nil
@@ -198,6 +201,7 @@ final class LayeredSceneRenderer: SceneRenderer {
     }
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void) throws {
+        nodes = playable.nodes
         view = NSView(frame: bounds)
         view.wantsLayer = true
         view.layer?.masksToBounds = true
@@ -229,6 +233,29 @@ final class LayeredSceneRenderer: SceneRenderer {
                 children.append(child)
             }
         } catch { releaseResources(); throw error }
+    }
+    func updateScene(_ scene: SceneDescriptor) -> Bool {
+        guard state != .disposed, let order = sceneResourceOrder(from: nodes, to: scene.nodes) else { return false }
+        let containers = view.subviews
+        let reordered = order.map { containers[$0] }
+        children = order.map { children[$0] }
+        nodes = scene.nodes
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.subviews = reordered
+        let bounds = view.bounds
+        for (index, node) in nodes.enumerated() {
+            children[index].view.alphaValue = node.opacity
+            let t = node.transform
+            var matrix = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,
+                                                       (0.5 + (t.y ?? 0)) * bounds.height, 0)
+            matrix = CATransform3DRotate(matrix, (t.rotation ?? 0) * .pi / 180, 0, 0, 1)
+            matrix = CATransform3DScale(matrix, t.scale ?? 1, t.scale ?? 1, 1)
+            matrix = CATransform3DTranslate(matrix, -bounds.width / 2, -bounds.height / 2, 0)
+            reordered[index].layer?.sublayerTransform = matrix
+        }
+        CATransaction.commit()
+        return true
     }
     func setPreferredFrameRate(_ rate: Int?) {
         children.forEach { $0.setPreferredFrameRate(rate) }

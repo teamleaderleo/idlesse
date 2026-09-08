@@ -19,7 +19,7 @@ Names, X/Y, scale, rotation and opacity are editable in the inspector; Return co
 
 Use +/− or a trackpad pinch to zoom; scroll to pan. Fit restores the whole canvas.
 Canvas manipulation previews an outline and commits once on release. Committed edits
-rebuild playback, so videos restart. There are no timeline, group, mask or effect controls.
+preserve playback for transforms, opacity, names and ordering, including undo/redo. Canvas gestures preview these changes live and commit one undo action. Adding, removing or replacing content still rebuilds playback. There are no timeline, group, mask or effect controls.
 
 ## Documents and saving
 

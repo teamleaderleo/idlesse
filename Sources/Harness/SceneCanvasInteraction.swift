@@ -7,6 +7,7 @@ final class SceneDragOverlay: NSView {
     var selected = 0
     var isEnabled = true
     var onSelect: ((Int) -> Void)?
+    var onPreviewTransform: ((SceneNode.Transform) -> Void)?
     var onTransform: ((SceneNode.Transform, String) -> Void)?
     var onNudge: ((Double, Double) -> Void)?
     var onDelete: (() -> Void)?
@@ -98,6 +99,7 @@ final class SceneDragOverlay: NSView {
             degrees = degrees.truncatingRemainder(dividingBy: 360)
             transform = .init(x: initial.x, y: initial.y, scale: initial.scale, rotation: degrees)
         }
+        onPreviewTransform?(transform)
     }
     override func mouseUp(with event: NSEvent) {
         guard origin != nil else { return }

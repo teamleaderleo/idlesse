@@ -219,7 +219,19 @@ enum WallpaperSmoke {
         precondition(abs(layerTransform.m11 - 0.7) < 0.001)
         precondition(abs(layerTransform.m41 - 15) < 0.001 && abs(layerTransform.m42 - 12) < 0.001)
         standardTransform.releaseResources()
-        let metalVideo = try MetalSceneRenderer(playable: SceneDescriptor(title: "video", assetURL: videoURL, kind: .video),
+        let liveVideoScene = SceneDescriptor(title: "video", assetURL: videoURL, kind: .video)
+        let standardLive = try LayeredSceneRenderer(playable: liveVideoScene,
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let originalVideoView = standardLive.view.subviews[0].subviews[0]
+        var editedVideo = liveVideoScene.nodes
+        editedVideo[0].opacity = 0.4
+        editedVideo[0].transform = .init(x: 0.1, y: 0, scale: 0.8, rotation: 10)
+        precondition(standardLive.updateScene(SceneDescriptor(title: "edit", nodes: editedVideo)))
+        precondition(standardLive.view.subviews[0].subviews[0] === originalVideoView)
+        precondition(abs(originalVideoView.alphaValue - 0.4) < 0.001)
+        precondition(!standardLive.updateScene(SceneDescriptor(title: "replacement", nodes: [SceneNode(content: .gradient)])))
+        standardLive.releaseResources()
+        let metalVideo = try MetalSceneRenderer(playable: liveVideoScene,
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
         metalVideo.setPaused(false)
         var videoFrame: [UInt8] = []
@@ -237,6 +249,10 @@ enum WallpaperSmoke {
                 return next != first && Set(next).count > 20
             }
         }
+        let loopsBeforeEdit = metalVideo.diagnostics.loopCount
+        precondition(metalVideo.updateScene(SceneDescriptor(title: "edit", nodes: editedVideo)))
+        precondition(metalVideo.diagnostics.loopCount == loopsBeforeEdit)
+        wait { _ = try? metalVideo.renderProbe(); return metalVideo.diagnostics.loopCount > loopsBeforeEdit }
         metalVideo.setPaused(true)
         precondition(metalVideo.diagnostics.state == .paused)
         let pausedLoops = metalVideo.diagnostics.loopCount

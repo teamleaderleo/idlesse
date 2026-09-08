@@ -122,6 +122,11 @@ import Foundation
             fatalError("Exported invalid scene")
         } catch is SceneError {}
         precondition(!FileManager.default.fileExists(atPath: invalidExport.path))
+        let firstNode = SceneNode(content: .gradient)
+        let secondNode = SceneNode(content: .gradient)
+        precondition(sceneResourceOrder(from: [firstNode, secondNode], to: [secondNode, firstNode]) == [1, 0])
+        precondition(sceneResourceOrder(from: [firstNode, secondNode], to: [firstNode, firstNode]) == nil)
+        precondition(sceneResourceOrder(from: [firstNode], to: [secondNode]) == nil)
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest")
     }
 }

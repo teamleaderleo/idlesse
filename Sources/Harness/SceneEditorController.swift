@@ -22,6 +22,7 @@ final class SceneEditorController {
         guard document.scene.nodes.count < 2, document.scene.nodes.indices.contains(selection) else { return }
         var nodes = document.scene.nodes
         var copy = nodes[selection]
+        copy.id = UUID()
         copy.name = copy.displayName + " Copy"
         nodes.insert(copy, at: selection + 1)
         _ = commit?(nodes, selection + 1, "Duplicate Layer")
