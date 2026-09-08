@@ -1,5 +1,28 @@
 # Idlesse scenes
 
+## Composable drivers (version 9)
+
+V9 bindings retain the v7/v8 primary source and `scale`/`offset`, then apply up to
+eight ordered `modifiers`. Each modifier has `operation` (`multiply` or `add`)
+and exactly one operand: a numeric `value` or existing `parameter` ID. The final
+result is clamped to the target property range. Intermediate nonfinite results,
+missing parameters and excessive modifier counts are rejected.
+
+For example, pointer rotation with adjustable strength:
+
+```json
+{"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000009","property":"transform.rotation"},
+ "signal":"pointer.x","scale":3,"offset":0,
+ "modifiers":[{"operation":"multiply","parameter":"parallax"}]}
+```
+
+Older bindings have an empty modifier stack and keep their behavior. Modifier
+scenes require Metal. Studio's Bind sheet can multiply the result by an existing
+control; ordered stacks can also be authored in JSON. Controls continue to use
+the existing Controls panel. See `Examples/AdjustableAurora.idlesse` for breathing
+and parallax strengths. This initial driver vocabulary has no smoothing, tracks,
+remapping or scripting; it allocates no additional GPU textures or timers.
+
 ## Time and pointer signals (version 8)
 
 V8 adds four binding sources: `time` (elapsed scene seconds), `sine` (−1…1 over
@@ -81,7 +104,7 @@ parameters, expression trees, or keyframes in v7. V8 adds the signals described 
 
 ## Persistent identities (version 6)
 
-Studio saves v6 packages, v7 with controls, or v8 with signals. Every node, including groups and nested children, has an
+Studio saves v6 packages, v7 with controls, v8 with signals, or v9 with modifiers. Every node, including groups and nested children, has an
 `id` containing a UUID string. Missing, malformed, or duplicate IDs reject the
 package. Save and Save As preserve IDs; duplicating a layer assigns fresh IDs to
 its entire subtree. IDs are scoped to a scene, so separate copies may share IDs.
@@ -220,7 +243,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-Studio saves v6, v7 or v8 to preserve layer identities, controls and signals.
+Studio saves v6–v9 to preserve layer identities, controls, signals and modifiers.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR

@@ -162,6 +162,33 @@ import Foundation
         let pointerSample = try motion.evaluated(signals: .init(pointerX: -1))
         precondition(pointerSample.allNodes[1].opacity == 0 && motion.usesPointer && !motion.usesTime)
         precondition(!clock.pointerEnabled)
+        var driver = motion
+        driver.parameters["strength"] = .init(name: "Strength", value: 0.4, min: 0, max: 1)
+        driver.bindings[0].scale = 1
+        driver.bindings[0].offset = 0
+        driver.bindings[0].modifiers = [.init(operation: .multiply, parameter: "strength"), .init(operation: .add, value: 0.2)]
+        let driven = try driver.evaluated(signals: .init(pointerX: 0.5))
+        precondition(abs(driven.allNodes[1].opacity - 0.4) < 0.00001 && driver.requiresMetal)
+        driver.bindings[0].modifiers.reverse()
+        let reordered = try driver.evaluated(signals: .init(pointerX: 0.5))
+        precondition(abs(reordered.allNodes[1].opacity - 0.28) < 0.00001)
+        for modifiers: [SceneParameterBinding.Modifier] in [
+            [.init(operation: .multiply, parameter: "missing")],
+            [.init(operation: .add, parameter: "strength", value: 1)],
+            [.init(operation: .add)], [.init(operation: .add, value: .infinity)],
+            Array(repeating: .init(operation: .add, value: 0), count: 9)
+        ] {
+            var invalid = driver; invalid.bindings[0].modifiers = modifiers
+            do { _ = try invalid.evaluated(); fatalError("Accepted invalid modifier") } catch is SceneError {}
+        }
+        let driverPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: driverPackage) }
+        try ScenePackageWriter.write(driver, to: driverPackage)
+        let loadedDriver = try await source.resolve(driverPackage)
+        let driverRoundTrip = try loadedDriver.evaluated(signals: .init(pointerX: 0.5))
+        precondition(abs(driverRoundTrip.allNodes[1].opacity - 0.28) < 0.00001)
+        try Data(#"{"version":8,"title":"Old","capabilities":["pointer"]}"#.utf8).write(to: driverPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(driverPackage); fatalError("Accepted modifiers in v8") } catch is SceneError {}
         let motionPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
         defer { try? FileManager.default.removeItem(at: motionPackage) }
         try ScenePackageWriter.write(motion, to: motionPackage)

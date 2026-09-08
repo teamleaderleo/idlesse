@@ -43,10 +43,13 @@ reparenting yet.
 and a vignette strength slider (0…1). Apply commits one undoable live renderer edit.
 Vignette darkens the edges without changing alpha or the center, and costs no extra
 render pass or texture. Scenes save as v6 with persistent layer IDs, v7 with controls,
-or v8 with time/pointer signals.
+v8 with time/pointer signals, or v9 with ordered modifiers.
 **Bind…** links a selected layer property to a numeric control; **Controls…** adjusts
 the generated sliders. Apply preserves playback and supports Undo. See
 [the control format and current limits](scenes.md#numeric-controls-and-bindings-version-7).
+The Bind sheet can multiply its result by an existing control. It authors one
+multiplier; replacing a binding replaces its entire modifier stack. More elaborate
+ordered add/multiply stacks can be edited in the package JSON.
 A styled scene automatically uses Metal
 in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the

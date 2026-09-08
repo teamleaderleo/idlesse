@@ -581,12 +581,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let scale = NSTextField(string: "1")
         let offset = NSTextField(string: "0")
         let period = NSTextField(string: "8")
+        let multiplier = NSPopUpButton(frame: .zero, pullsDown: false)
+        multiplier.addItems(withTitles: ["None"] + keys.map { scene.parameters[$0]!.name })
+        multiplier.setAccessibilityLabel("Multiply by control")
         scale.setAccessibilityLabel("Binding scale"); offset.setAccessibilityLabel("Binding offset"); period.setAccessibilityLabel("Sine period in seconds")
         let fields = NSStackView(views: [property, parameter, name,
             NSTextField(labelWithString: "Scale"), scale, NSTextField(labelWithString: "Offset"), offset,
-            NSTextField(labelWithString: "Sine period (seconds)"), period])
+            NSTextField(labelWithString: "Sine period (seconds)"), period,
+            NSTextField(labelWithString: "Multiply result by control"), multiplier])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 260)
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 310)
         name.widthAnchor.constraint(equalToConstant: 280).isActive = true
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
@@ -594,7 +598,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                   self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
             var next = self.scene
             let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
-            let previousKeys = next.bindings.filter { $0.target == target }.map(\.parameter)
+            let previousKeys = next.bindings.filter { $0.target == target }.flatMap(\.referencedParameters)
             next.bindings.removeAll { $0.target == target }
             if response == .alertFirstButtonReturn {
                 let index = parameter.indexOfSelectedItem
@@ -610,9 +614,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     next.parameters[key] = SceneParameter(name: title, value: value,
                                                           min: target.property.range.lowerBound, max: target.property.range.upperBound)
                 }
-                next.bindings.append(SceneParameterBinding(target: target, parameter: key, scale: amount, offset: base, signal: signal, period: seconds))
+                let modifiers: [SceneParameterBinding.Modifier] = multiplier.indexOfSelectedItem > 0
+                    ? [.init(operation: .multiply, parameter: keys[multiplier.indexOfSelectedItem - 1])] : []
+                next.bindings.append(SceneParameterBinding(target: target, parameter: key, scale: amount, offset: base, signal: signal, period: seconds, modifiers: modifiers))
             }
-            for key in previousKeys where !next.bindings.contains(where: { $0.parameter == key }) {
+            for key in previousKeys where !next.bindings.contains(where: { $0.referencedParameters.contains(key) }) {
                 next.parameters.removeValue(forKey: key)
             }
             do { _ = try next.evaluated() } catch { self.detailLabel.stringValue = error.localizedDescription; return }
