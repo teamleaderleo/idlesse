@@ -29,7 +29,7 @@ final class SceneTimelineView: NSStackView {
         trackPicker.addItem(withTitle: "No keyframe tracks")
         trackPicker.target = self; trackPicker.action = #selector(selectTrack)
         trackPicker.setAccessibilityLabel("Timeline property track")
-        trackPicker.toolTip = "Drag keys to edit time and value. Double-click to add; Delete removes a selected key. Shift snaps time to whole seconds. Escape cancels."
+        trackPicker.toolTip = "Drag keys to edit time and value. Return edits exact values; arrows nudge time/value (Shift for larger steps). Double-click adds; Delete removes. ⌘C/⌘V copies and pastes a track."
         addArrangedSubview(trackPicker)
         markers.onMove = { [weak self] index, time in
             guard let self, let target = self.chosenTarget else { return }
@@ -90,7 +90,7 @@ final class SceneTimelineView: NSStackView {
     @objc private func loopRange() { onLoop?(slider.maxValue) }
 }
 
-private final class TimelineMarkers: NSView {
+private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
     var track: SceneKeyframeTrack? {
         didSet {
             if oldValue != track { draft = nil }
@@ -161,10 +161,58 @@ private final class TimelineMarkers: NSView {
         if draft != track { onEdit?(draft, "Move Keyframe") }
         window?.makeFirstResponder(self); needsDisplay = true
     }
+    @objc func copy(_ sender: Any?) {
+        if let track, let data = try? JSONEncoder().encode(track) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(data, forType: .init("app.idlesse.keyframe-track"))
+        }
+    }
+    @objc func paste(_ sender: Any?) {
+        guard editable else { return }
+            guard let data = NSPasteboard.general.data(forType: .init("app.idlesse.keyframe-track")), data.count <= 65_536,
+                  let next = try? JSONDecoder().decode(SceneKeyframeTrack.self, from: data),
+                  (try? next.sample(at: 0)) != nil else { NSSound.beep(); return }
+            selected = nil
+            onEdit?(next, "Paste Keyframe Track")
+    }
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return track != nil }
+        if item.action == #selector(paste(_:)) { return editable && NSPasteboard.general.availableType(from: [.init("app.idlesse.keyframe-track")]) != nil }
+        return false
+    }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelDrag(); return }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" { copy(nil); return }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" { paste(nil); return }
         guard editable, let selected, let track, track.keys.indices.contains(selected) else { super.keyDown(with: event); return }
-        if event.keyCode == 51 || event.keyCode == 117 {
+        if event.keyCode == 36 {
+            let alert = NSAlert()
+            alert.messageText = "Edit Keyframe"
+            alert.informativeText = "Time in seconds and source value, before binding modifiers."
+            let time = NSTextField(string: String(track.keys[selected].time))
+            let value = NSTextField(string: String(track.keys[selected].value))
+            time.setAccessibilityLabel("Keyframe time in seconds")
+            value.setAccessibilityLabel("Keyframe source value")
+            let fields = NSStackView(views: [NSTextField(labelWithString: "Time"), time, NSTextField(labelWithString: "Value"), value])
+            fields.orientation = .vertical; fields.alignment = .leading
+            fields.frame = NSRect(x: 0, y: 0, width: 260, height: 104)
+            time.widthAnchor.constraint(equalToConstant: 260).isActive = true
+            value.widthAnchor.constraint(equalToConstant: 260).isActive = true
+            alert.accessoryView = fields
+            alert.addButton(withTitle: "Apply"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard let seconds = Double(time.stringValue), let amount = Double(value.stringValue),
+                  seconds.isFinite, amount.isFinite, abs(amount) <= 1_000_000 else { NSSound.beep(); return }
+            var next = track
+            next.keys[selected] = .init(time: seconds, value: amount)
+            guard (try? next.sample(at: 0)) != nil else { NSSound.beep(); return }
+            if next != track { onEdit?(next, "Edit Keyframe") }
+        } else if event.keyCode == 125 || event.keyCode == 126 {
+            var next = track
+            let step = event.modifierFlags.contains(.shift) ? 1.0 : 0.01
+            next.keys[selected].value = min(1_000_000, max(-1_000_000, next.keys[selected].value + (event.keyCode == 126 ? step : -step)))
+            onEdit?(next, "Nudge Keyframe Value")
+        } else if event.keyCode == 51 || event.keyCode == 117 {
             guard track.keys.count > 1 else { NSSound.beep(); return }
             var next = track; next.keys.remove(at: selected)
             self.selected = nil; onEdit?(next, "Delete Keyframe")

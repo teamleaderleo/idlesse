@@ -350,12 +350,22 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         command.commit()
         needsFrame = false
         diagnostics.frameCount += 1
+        updateDrawScheduling()
     }
     func refreshSceneTime() {
         guard diagnostics.state != .disposed else { return }
         updateSignals(currentSignals())
         needsFrame = true
+        updateDrawScheduling()
         metal.draw()
+    }
+    private func updateDrawScheduling() {
+        // A completed once scene has no moving clock. Independent videos,
+        // pointer input and smoothing may still change its final composition.
+        let independentVideo = inputs.contains { visibleIDs.contains($0.node.id) && $0.node.kind == .video && !$0.followsClock }
+        let reactive = sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
+        let finished = clock.isAtEnd && !independentVideo && !reactive
+        metal.isPaused = diagnostics.state != .running || !diagnostics.animated || finished
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
@@ -435,7 +445,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         inputs.forEach { input in
             if input.followsClock || paused || !visible.contains(input.node.id) { input.player?.pause() } else { input.player?.play() }
         }
-        metal.isPaused = paused || !diagnostics.animated
+        updateDrawScheduling()
         if !diagnostics.animated || inputs.contains(where: { $0.followsClock }) { metal.draw() }
     }
     func releaseResources() {

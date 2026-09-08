@@ -466,6 +466,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
         ])
     }
+    private var checkedRecovery = false
     func show() {
         window.makeKeyAndOrderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -473,6 +474,31 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         watchPackage()
         updatePlayback()
         NSApp.activate(ignoringOtherApps: true)
+        guard !checkedRecovery else { return }
+        checkedRecovery = true
+        document.recoveryEnabled = true
+        document.recoveryError = { [weak self] in self?.detailLabel.stringValue = $0 }
+        do {
+            guard let recovery = try document.readRecovery() else { return }
+            let alert = NSAlert()
+            alert.messageText = "Recover unsaved Studio work?"
+            alert.informativeText = "\(recovery.scene.title) · \(recovery.edited.formatted())\nMedia stays in its existing location."
+            alert.addButton(withTitle: "Recover")
+            alert.addButton(withTitle: "Keep for Later")
+            alert.addButton(withTitle: "Discard Draft")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                if applyEdit(recovery.scene.nodes, selected: 0, name: "Recover Draft", controls: recovery.scene) {
+                    document.adoptRecovery()
+                    document.scheduleRecovery()
+                    document.sourceURL = nil
+                    document.revision = nil
+                    detailLabel.stringValue = "Recovered draft · Save As to keep it"
+                }
+            case .alertThirdButtonReturn: document.discardPendingRecovery()
+            default: break
+            }
+        } catch { detailLabel.stringValue = "Recovery draft preserved: \(error.localizedDescription)" }
     }
     @objc private func zoomIn() { viewport.setMagnification(min(4, viewport.magnification * 1.25), centeredAt: NSPoint(x: canvas.bounds.midX, y: canvas.bounds.midY)) }
     @objc private func zoomOut() { viewport.setMagnification(max(0.25, viewport.magnification / 1.25), centeredAt: NSPoint(x: canvas.bounds.midX, y: canvas.bounds.midY)) }
@@ -729,7 +755,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
         let keys = scene.parameters.keys.sorted()
         let signals: [SceneParameterBinding.Signal] = [.time, .sine, .pointerX, .pointerY]
-        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y"])
+        parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y", "Existing Keyframes"])
         parameter.setAccessibilityLabel("Control")
         let name = NSTextField(string: node.displayName + " Control")
         name.setAccessibilityLabel("New control name")
@@ -739,23 +765,45 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let smoothing = NSTextField(string: "0")
         smoothing.setAccessibilityLabel("Binding smoothing in seconds")
         let multiplier = NSPopUpButton(frame: .zero, pullsDown: false)
-        multiplier.addItems(withTitles: ["None"] + keys.map { scene.parameters[$0]!.name })
+        multiplier.addItems(withTitles: ["Keep existing modifiers", "None"] + keys.map { scene.parameters[$0]!.name })
         multiplier.setAccessibilityLabel("Multiply by control")
         scale.setAccessibilityLabel("Binding scale"); offset.setAccessibilityLabel("Binding offset"); period.setAccessibilityLabel("Sine period in seconds")
         let fields = NSStackView(views: [property, parameter, name,
             NSTextField(labelWithString: "Scale"), scale, NSTextField(labelWithString: "Offset"), offset,
             NSTextField(labelWithString: "Sine period (seconds)"), period,
             NSTextField(labelWithString: "Multiply result by control"), multiplier,
-            NSTextField(labelWithString: "Smoothing (0–5 seconds, signals only)"), smoothing])
+            NSTextField(labelWithString: "Smoothing (0–5 seconds, signals/keyframes)"), smoothing])
         fields.orientation = .vertical; fields.alignment = .leading
         fields.frame = NSRect(x: 0, y: 0, width: 300, height: 365)
         name.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        let selectionAction = StudioControlAction()
+        selectionAction.perform = { [weak self] in
+            guard let self else { return }
+            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let binding = self.scene.bindings.first { $0.target == target }
+            scale.stringValue = String(binding?.scale ?? 1)
+            offset.stringValue = String(binding?.offset ?? 0)
+            period.stringValue = String(binding?.period ?? 8)
+            smoothing.stringValue = String(binding?.smoothing ?? 0)
+            multiplier.selectItem(at: 0)
+            parameter.lastItem?.isEnabled = binding?.keyframes != nil
+            if binding?.keyframes != nil { parameter.selectItem(at: keys.count + 5) }
+            else if let signal = binding?.signal, let index = signals.firstIndex(of: signal) { parameter.selectItem(at: keys.count + 1 + index) }
+            else if let key = binding?.parameter, let index = keys.firstIndex(of: key) { parameter.selectItem(at: index + 1) }
+            else { parameter.selectItem(at: 0) }
+        }
+        property.target = selectionAction; property.action = #selector(StudioControlAction.changed)
+        if let existing = scene.bindings.first(where: { $0.target.nodeID == node.id }),
+           let index = properties.firstIndex(of: existing.target.property) { property.selectItem(at: index) }
+        selectionAction.perform()
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
+            _ = selectionAction
             guard let self, !self.saving, response != .alertThirdButtonReturn,
                   self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
             var next = self.scene
             let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let previous = next.bindings.first { $0.target == target }
             let previousKeys = next.bindings.filter { $0.target == target }.flatMap(\.referencedParameters)
             next.bindings.removeAll { $0.target == target }
             if response == .alertFirstButtonReturn {
@@ -763,8 +811,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 guard let amount = Double(scale.stringValue), let base = Double(offset.stringValue), let seconds = Double(period.stringValue), let damping = Double(smoothing.stringValue) else {
                     self.detailLabel.stringValue = "Use numeric scale, offset, period and smoothing values."; return
                 }
-                let signal = index > keys.count ? signals[index - keys.count - 1] : nil
-                let key = signal != nil ? "" : index == 0 ? UUID().uuidString : keys[index - 1]
+                let usesTrack = index == keys.count + 5
+                if usesTrack && previous?.keyframes == nil { self.detailLabel.stringValue = "Add keyframes with Keys… first."; return }
+                let signal = index > keys.count && !usesTrack ? signals[index - keys.count - 1] : nil
+                let key = signal != nil || usesTrack ? "" : index == 0 ? UUID().uuidString : keys[index - 1]
                 if index == 0 {
                     let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !title.isEmpty, title.count <= 80 else { self.detailLabel.stringValue = "Use a control name of 1–80 characters."; return }
@@ -772,9 +822,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     next.parameters[key] = SceneParameter(name: title, value: value,
                                                           min: target.property.range.lowerBound, max: target.property.range.upperBound)
                 }
-                let modifiers: [SceneParameterBinding.Modifier] = multiplier.indexOfSelectedItem > 0
-                    ? [.init(operation: .multiply, parameter: keys[multiplier.indexOfSelectedItem - 1])] : []
-                next.bindings.append(SceneParameterBinding(target: target, parameter: key, scale: amount, offset: base, signal: signal, period: seconds, modifiers: modifiers, smoothing: damping))
+                let modifiers: [SceneParameterBinding.Modifier] = multiplier.indexOfSelectedItem == 0 ? previous?.modifiers ?? []
+                    : multiplier.indexOfSelectedItem > 1 ? [.init(operation: .multiply, parameter: keys[multiplier.indexOfSelectedItem - 2])] : []
+                next.bindings.append(SceneParameterBinding(target: target, parameter: key, scale: amount, offset: base, signal: signal, period: seconds, modifiers: modifiers, keyframes: usesTrack ? previous?.keyframes : nil, smoothing: damping))
             }
             for key in previousKeys where !next.bindings.contains(where: { $0.referencedParameters.contains(key) }) {
                 next.parameters.removeValue(forKey: key)
@@ -919,7 +969,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: "Discard")
         guard alert.runModal() == .alertSecondButtonReturn else { return false }
         // Quitting does not need to decode the original scene again.
-        return !resetting || restoreSavedScene()
+        let discarded = !resetting || restoreSavedScene()
+        if discarded { document.clearRecovery() }
+        return discarded
     }
     var acceptsDocumentCommands: Bool { window.isVisible && !saving }
     private func commitFieldEdits() {
