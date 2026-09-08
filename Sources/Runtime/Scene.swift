@@ -10,8 +10,11 @@ struct SceneDescriptor: Sendable {
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
-    var requiresMetal: Bool { allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
-    var animated: Bool { nodes.contains { $0.animated } }
+    var usesSignals: Bool { bindings.contains { $0.signal != nil } }
+    var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
+    var usesTime: Bool { bindings.contains { $0.signal == .time || $0.signal == .sine } }
+    var requiresMetal: Bool { usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var animated: Bool { usesSignals || nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
@@ -23,29 +26,46 @@ struct SceneDescriptor: Sendable {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) })
     }
-    func evaluated() throws -> SceneDescriptor {
-        guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
-        for (id, parameter) in parameters {
-            guard !id.isEmpty, id.utf8.count <= 64, !parameter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parameter.name.count <= 80,
-                  [parameter.value, parameter.min, parameter.max].allSatisfy({ $0.isFinite }),
-                  (parameter.max - parameter.min).isFinite,
-                  parameter.min < parameter.max, (parameter.min...parameter.max).contains(parameter.value) else {
-                throw SceneError.invalid("Parameters need a name, finite limits, and a default within their range.")
+    func evaluated(signals: SceneSignals = .init(), validating: Bool = true) throws -> SceneDescriptor {
+        if validating {
+            guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
+            for (id, parameter) in parameters {
+                guard !id.isEmpty, id.utf8.count <= 64, !parameter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parameter.name.count <= 80,
+                      [parameter.value, parameter.min, parameter.max].allSatisfy({ $0.isFinite }),
+                      (parameter.max - parameter.min).isFinite,
+                      parameter.min < parameter.max, (parameter.min...parameter.max).contains(parameter.value) else {
+                    throw SceneError.invalid("Parameters need a name, finite limits, and a default within their range.")
+                }
             }
         }
         var result = nodes
         var targets = Set<String>()
         for binding in bindings {
-            guard let parameter = parameters[binding.parameter], binding.scale.isFinite, binding.offset.isFinite,
-                  targets.insert(binding.target.nodeID.uuidString + binding.target.property.rawValue).inserted else {
+            guard binding.scale.isFinite, binding.offset.isFinite,
+                  (!validating || targets.insert(binding.target.nodeID.uuidString + binding.target.property.rawValue).inserted) else {
                 throw SceneError.invalid("Bindings need an existing parameter and a unique property target.")
             }
-            let raw = parameter.value * binding.scale + binding.offset
+            let source: Double
+            if let signal = binding.signal {
+                guard binding.parameter.isEmpty, binding.period.isFinite, (0.1...86400).contains(binding.period) else {
+                    throw SceneError.invalid("Signal bindings need a period of 0.1–86400 seconds and no parameter source.")
+                }
+                switch signal {
+                case .time: source = signals.time
+                case .sine: source = sin(signals.time.truncatingRemainder(dividingBy: binding.period) / binding.period * 2 * .pi)
+                case .pointerX: source = signals.pointerX
+                case .pointerY: source = signals.pointerY
+                }
+            } else {
+                guard let parameter = parameters[binding.parameter] else { throw SceneError.invalid("The binding parameter does not exist.") }
+                source = parameter.value
+            }
+            let raw = source * binding.scale + binding.offset
             guard raw.isFinite else { throw SceneError.invalid("The binding result is not finite.") }
             let range = binding.target.property.range
             try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
         }
-        try SceneBudget.validate(result)
+        if validating { try SceneBudget.validate(result) }
         return SceneDescriptor(title: title, nodes: result)
     }
 }
@@ -59,10 +79,32 @@ struct SceneParameter: Codable, Sendable, Equatable {
 }
 
 struct SceneParameterBinding: Codable, Sendable {
+    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y" }
     let target: ScenePropertyAddress
-    let parameter: String
+    var parameter: String = ""
     var scale: Double = 1
     var offset: Double = 0
+    var signal: Signal? = nil
+    var period: Double = 8
+    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period }
+    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8) {
+        self.target = target; self.parameter = parameter; self.scale = scale; self.offset = offset; self.signal = signal; self.period = period
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        target = try values.decode(ScenePropertyAddress.self, forKey: .target)
+        parameter = try values.decodeIfPresent(String.self, forKey: .parameter) ?? ""
+        scale = try values.decode(Double.self, forKey: .scale)
+        offset = try values.decode(Double.self, forKey: .offset)
+        signal = try values.decodeIfPresent(Signal.self, forKey: .signal)
+        period = try values.decodeIfPresent(Double.self, forKey: .period) ?? 8
+    }
+}
+
+struct SceneSignals: Sendable {
+    var time: Double = 0
+    var pointerX: Double = 0
+    var pointerY: Double = 0
 }
 
 struct SceneNode: Sendable {
@@ -201,8 +243,8 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...7).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
-        guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
+        guard (1...8).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard manifest.capabilities.isEmpty || (manifest.version >= 8 && manifest.capabilities == ["pointer"]) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
@@ -248,6 +290,8 @@ struct LocalSceneSource: SceneSource {
             throw SceneError.invalid("Parameters and bindings require scene version 7.")
         }
         let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [])
+        guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
+        guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
         _ = try result.evaluated()
         return result
     }
@@ -393,7 +437,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": controlled ? 7 : 6, "title": scene.title, "capabilities": []] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": scene.usesPointer ? ["pointer"] : []] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

@@ -151,6 +151,30 @@ import Foundation
             parameters: ["amount": .init(name: "Amount", value: 0.4, min: 0, max: 1)],
             bindings: [.init(target: .init(nodeID: firstNode.id, property: .opacity), parameter: "amount", scale: 2, offset: 0.1)])
         let evaluated = try controlled.evaluated()
+        var motion = SceneDescriptor(title: "Motion", nodes: [group], bindings: [
+            .init(target: .init(nodeID: firstNode.id, property: .opacity), scale: 0.5, offset: 0.5, signal: .sine, period: 4)])
+        precondition(motion.usesTime && motion.requiresMetal && motion.animated && !motion.usesPointer)
+        for (time, expected) in [(0.0, 0.5), (1.0, 1.0), (3.0, 0.0), (5.0, 1.0)] {
+            let sample = try motion.evaluated(signals: .init(time: time))
+            precondition(abs(sample.allNodes[1].opacity - expected) < 0.00001)
+        }
+        motion.bindings[0].signal = .pointerX
+        let pointerSample = try motion.evaluated(signals: .init(pointerX: -1))
+        precondition(pointerSample.allNodes[1].opacity == 0 && motion.usesPointer && !motion.usesTime)
+        precondition(!clock.pointerEnabled)
+        let motionPackage = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".idlesse")
+        defer { try? FileManager.default.removeItem(at: motionPackage) }
+        try ScenePackageWriter.write(motion, to: motionPackage)
+        let loadedMotion = try await source.resolve(motionPackage)
+        precondition(loadedMotion.usesPointer && loadedMotion.bindings[0].signal == .pointerX)
+        try Data(#"{"version":8,"title":"Denied","capabilities":[]}"#.utf8).write(to: motionPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(motionPackage); fatalError("Accepted undeclared pointer") } catch is SceneError {}
+        try Data(#"{"version":7,"title":"Old","capabilities":[]}"#.utf8).write(to: motionPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(motionPackage); fatalError("Accepted signal in v7") } catch is SceneError {}
+        for invalid in [0.0, Double.nan, 86401] {
+            motion.bindings[0].period = invalid
+            do { _ = try motion.evaluated(); fatalError("Accepted invalid period") } catch is SceneError {}
+        }
         precondition(evaluated.allNodes[1].opacity == 0.9 && controlled.allNodes[1].opacity == firstNode.opacity)
         controlled.parameters["amount"]?.value = 1
         let clamped = try controlled.evaluated()

@@ -1,0 +1,7 @@
+{
+  "nodes": [{"id":"7F2A0000-0000-4000-8000-000000000008","type":"gradient","name":"Aurora","transform":{"scale":1.08}}],
+  "bindings": [
+    {"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000008","property":"style.vignette"},"signal":"sine","period":8,"scale":0.3,"offset":0.5},
+    {"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000008","property":"transform.rotation"},"signal":"pointer.x","scale":3,"offset":0}
+  ]
+}

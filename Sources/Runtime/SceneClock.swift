@@ -7,6 +7,8 @@ final class SceneClock {
     private var anchor: TimeInterval
     private var accumulated: TimeInterval = 0
     private(set) var isPaused = true
+    /// Explicit host opt-in, never granted by a package manifest.
+    var pointerEnabled = false
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now
         anchor = now()

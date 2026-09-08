@@ -371,6 +371,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             let controls = addItem(menu, "Scene Controls…", #selector(editControls))
             controls.isEnabled = !isLoading
         }
+        if playable?.usesPointer == true {
+            let pointer = addItem(menu, "Enable Pointer Response", #selector(togglePointer))
+            pointer.state = clock.pointerEnabled ? .on : .off
+            pointer.isEnabled = !isLoading
+        }
         menu.addItem(.separator())
         addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
@@ -402,6 +407,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc private func showPreview() { onShowPreview?() }
+    @objc private func togglePointer() {
+        guard let playable, !isLoading else { return }
+        clock.pointerEnabled.toggle()
+        surfaces.forEach { _ = $0.updateScene(playable) }
+        updateMenu()
+    }
     @objc private func editControls() {
         guard let original = playable, !isLoading else { return }
         SceneParameterControls.present(scene: original, window: nil) { [weak self] parameters in

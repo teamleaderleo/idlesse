@@ -1,5 +1,46 @@
 # Idlesse scenes
 
+## Time and pointer signals (version 8)
+
+V8 adds four binding sources: `time` (elapsed scene seconds), `sine` (−1…1 over
+`period` seconds, default 8), `pointer.x`, and `pointer.y`. Signal bindings omit
+`parameter` or leave it empty; combining a parameter and signal source is rejected.
+Scale/offset and property clamping work as in v7. Period must be finite and between
+0.1 and 86400 seconds. A sine binding with scale 0.3, offset 0.5 and period 8
+produces a smooth 0.2…0.8 cycle. Linear time eventually reaches the property's clamp;
+use sine for indefinite back-and-forth motion.
+
+```json
+{"target":{"nodeID":"7F2A0000-0000-4000-8000-000000000008","property":"style.vignette"},
+ "signal":"sine","period":8,"scale":0.3,"offset":0.5}
+```
+
+Pointer scenes must declare `"capabilities":["pointer"]` in the manifest. This is
+a request, not a grant: **Enable Pointer Response** is off by default in Studio
+and on the desktop. The switches grant access only for that host session/scene;
+opening a different scene resets the grant. Reloading the same scene preserves it.
+Disabling resets pointer inputs to zero. No click, key, event-monitor, audio, network,
+or accessibility access is used. All other capabilities remain rejected.
+
+Pointer X is −1 at the left and +1 at the right of the render surface; Y is −1 at
+the bottom and +1 at the top. Outside positions clamp to its edges. Each display
+uses its own viewport; Studio uses its preview canvas. A missing window yields
+center (0,0). This is not a global multi-display coordinate system.
+
+Signal scenes use Metal and the existing presentation loop, with no second timer.
+Time uses SceneClock and freezes during host pause/sleep/suspension; pointer sampling
+also stops while paused. Video keeps its existing AVPlayer clock. Evaluation updates
+metadata without replacing players or textures, and unchanged values can skip GPU
+submission. A still scene with only disabled pointer bindings remains event-driven.
+Binding validation runs when preparing/editing; frame evaluation skips the repeated
+whole-scene validation. Existing node, binding and GPU texture budgets still apply.
+
+Studio's **Bind…** includes signal sources, scale, offset and sine period fields.
+**Remove Binding** restores the static value. The canvas does not offer live handles
+for transform-bound nodes; use the binding controls. Try
+`Examples/BreathingAurora.idlesse`: breathing vignette plus optional pointer tilt.
+There is no smoothing, pointer velocity, audio, expression tree, or keyframe editor yet.
+
 ## Numeric controls and bindings (version 7)
 
 V7 adds up to 16 named numeric parameters and 64 bindings. See
@@ -24,7 +65,7 @@ Evaluation happens on preparation and edits, with no new polling or frame timer.
 Style bindings select Metal even when the current value is neutral.
 
 Studio's **Bind…** creates a control for the selected property or reuses an existing
-one with scale 1 and offset 0. Advanced scale/offset edits currently require JSON.
+one; the scale and offset fields default to 1 and 0 and can be edited in the dialog.
 **Controls…** generates sliders; Apply is undoable and saved as parameter defaults.
 The wallpaper menu's **Scene Controls…** changes active values without saving the
 package, restarting playback, or copying assets. Values survive suspend/resume but
@@ -36,11 +77,11 @@ a binding in Studio also removes its former parameter if no bindings use it.
 Bound transform fields show the static fallback disabled; transform-bound layers
 and their children use controls instead of canvas manipulation. Binding removal
 restores ordinary canvas editing. There are no time/pointer/audio signals, color
-parameters, expression trees, or keyframes yet.
+parameters, expression trees, or keyframes in v7. V8 adds the signals described above.
 
 ## Persistent identities (version 6)
 
-Studio saves v6 packages, or v7 when controls are present. Every node, including groups and nested children, has an
+Studio saves v6 packages, v7 with controls, or v8 with signals. Every node, including groups and nested children, has an
 `id` containing a UUID string. Missing, malformed, or duplicate IDs reject the
 package. Save and Save As preserve IDs; duplicating a layer assigns fresh IDs to
 its entire subtree. IDs are scoped to a scene, so separate copies may share IDs.
@@ -179,7 +220,7 @@ V4 adds optional `style` to any node, including a group:
 Omitted style is neutral. Within style, omitted mask means no mask, exposure defaults
 to zero and saturation to one. Exposure must be finite in −2…2 and saturation in
 0…2. Unknown mask names fail decoding. Styles in older format versions are rejected;
-Studio saves v6 or v7 to preserve layer identities and controls.
+Studio saves v6, v7 or v8 to preserve layer identities, controls and signals.
 
 The ellipse fits the node's local canvas. Its edge is antialiased in the Metal
 fragment shader. Color adjustment uses Rec.709 luma weights on the current SDR
