@@ -128,8 +128,11 @@ final class ConfigureSheetController: NSObject {
         let buttons = NSStackView(views: [buttonSpacer, cancelButton, saveButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        buttons.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+
+        // Add the row before constraining it to `root`. Activating a constraint between
+        // views with no common ancestor throws an Auto Layout exception on macOS 26.
         root.addArrangedSubview(buttons)
+        buttons.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
     }
 
     private func makeRow(label: String, control: NSView) -> NSStackView {
