@@ -129,8 +129,9 @@ seconds, with timer tolerance for coalescing wakeups.
 Run `bash test.sh` for generated-image decoder checks and `CONFIG=release ./build.sh`
 for optimized bundles. This is not yet a measured whole-process comparison against
 Apple's saver: the host, windows and graphics compositor have additional costs.
-Large-library directory scans and image decoding still run synchronously; moving
-those off the UI thread is a remaining performance task.
+Large-library directory scans still run synchronously. Screensaver image decoding
+now runs serially off the UI thread through the shared scene source and image
+preparation path; desktop image preparation remains synchronous.
 
 ## Preview controls and timing presets
 
@@ -158,4 +159,5 @@ for controls, measured resource use, verification and current limitations.
 
 The desktop host now resolves `.idlesse` scene packages asynchronously and plays
 them through separate image and video renderers. See [scene format and current
-limits](docs/scenes.md). The screensaver remains a separate client awaiting migration.
+limits](docs/scenes.md). The screensaver now resolves its images through the shared async source and
+background image preparation. Desktop packages support two layers with opacity.

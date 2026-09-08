@@ -54,6 +54,22 @@ enum WallpaperSmoke {
         controller.setSessionInactive(false)
         precondition(!controller.surfaces.isEmpty)
 
+        let suite = "idlesse.async-saver-test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = IdlessePreferences(defaults: defaults)
+        try preferences.saveFolder(folder)
+        let saver = IdlesseView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), preferences: preferences)
+        saver.startAnimation()
+        wait { saver.retainedImageCount == 1 }
+        saver.stopAnimation()
+        precondition(saver.retainedImageCount == 0)
+        saver.startAnimation()
+        saver.stopAnimation()
+        let stoppedEnd = Date(timeIntervalSinceNow: 0.3)
+        while Date() < stoppedEnd { _ = RunLoop.current.run(mode: .default, before: stoppedEnd) }
+        precondition(saver.retainedImageCount == 0, "Cancelled preparation must not repopulate a stopped saver")
+
         let broken = folder.appendingPathComponent("broken.png")
         try Data("not an image".utf8).write(to: broken)
         controller.select(broken)
@@ -76,6 +92,18 @@ enum WallpaperSmoke {
         controller.setAsleep(true)
         controller.setAsleep(false)
         precondition(controller.surfaces.first?.player != nil, "Package must survive display sleep")
+
+        try FileManager.default.copyItem(at: imageURL, to: package.appendingPathComponent("assets/overlay.png"))
+        try Data(#"{"layers":[{"type":"video","asset":"assets/loop.mp4"},{"type":"image","asset":"assets/overlay.png","opacity":0.25}]}"#.utf8)
+            .write(to: package.appendingPathComponent("scene.json"))
+        controller.select(package)
+        wait { !controller.isLoading }
+        precondition(errors.isEmpty)
+        let composite = controller.surfaces[0].window.contentView!
+        precondition(composite.subviews.count == 2 && composite.subviews[1].alphaValue == 0.25)
+        controller.togglePause()
+        precondition(controller.surfaces[0].player?.rate == 0)
+        controller.togglePause()
 
         try Data(#"{"version":99,"title":"Future scene","capabilities":[]}"#.utf8)
             .write(to: package.appendingPathComponent("manifest.json"))
@@ -109,6 +137,6 @@ enum WallpaperSmoke {
         while Date() < end { _ = RunLoop.current.run(mode: .default, before: end) }
         precondition(!controller.isRunning && controller.surfaces.isEmpty)
         precondition(errors.isEmpty)
-        print("Wallpaper checks passed: image, scene package, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
+        print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
 }

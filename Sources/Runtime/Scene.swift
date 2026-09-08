@@ -3,9 +3,20 @@ import Foundation
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct Playable: Sendable {
     enum Kind: String, Codable, Sendable { case image, video }
+    struct Layer: Sendable {
+        let assetURL: URL
+        let kind: Kind
+        let opacity: Double
+    }
     let title: String
-    let assetURL: URL
-    let kind: Kind
+    let layers: [Layer]
+    var assetURL: URL { layers[0].assetURL }
+    var kind: Kind { layers.contains { $0.kind == .video } ? .video : .image }
+    init(title: String, assetURL: URL, kind: Kind) {
+        self.title = title
+        self.layers = [Layer(assetURL: assetURL, kind: kind, opacity: 1)]
+    }
+    init(title: String, layers: [Layer]) { self.title = title; self.layers = layers }
 }
 
 protocol SceneSource {
@@ -30,6 +41,7 @@ struct LocalSceneSource: SceneSource {
         struct Layer: Decodable {
             let type: Playable.Kind
             let asset: String
+            let opacity: Double?
         }
     }
 
@@ -82,14 +94,21 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version == 1 else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard manifest.capabilities.isEmpty else { throw SceneError.invalid("This version cannot grant scene capabilities.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
-        guard scene.layers.count == 1, let layer = scene.layers.first else {
-            throw SceneError.invalid("Version 1 scenes need exactly one image or video layer.")
+        guard (1...2).contains(scene.layers.count) else {
+            throw SceneError.invalid("Scenes support one or two layers.")
         }
-        let asset = try contained(layer.asset, in: root)
-        guard try kind(asset) == layer.type else { throw SceneError.invalid("The asset does not match its layer type.") }
-        guard try asset.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
-            throw SceneError.invalid("The scene asset is not a regular file.")
+        let layers = try scene.layers.map { layer -> Playable.Layer in
+            let opacity = layer.opacity ?? 1
+            guard opacity.isFinite, (0...1).contains(opacity) else {
+                throw SceneError.invalid("Layer opacity must be between zero and one.")
+            }
+            let asset = try contained(layer.asset, in: root)
+            guard try kind(asset) == layer.type else { throw SceneError.invalid("The asset does not match its layer type.") }
+            guard try asset.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw SceneError.invalid("The scene asset is not a regular file.")
+            }
+            return Playable.Layer(assetURL: asset, kind: layer.type, opacity: opacity)
         }
-        return Playable(title: manifest.title, assetURL: asset, kind: layer.type)
+        return Playable(title: manifest.title, layers: layers)
     }
 }

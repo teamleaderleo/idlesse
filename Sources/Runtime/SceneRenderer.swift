@@ -76,3 +76,37 @@ final class VideoRenderer: SceneRenderer {
     }
     deinit { releaseResources() }
 }
+
+/// Ordered AppKit composition; static scenes have no continuous redraw timer.
+final class LayeredSceneRenderer: SceneRenderer {
+    let view: NSView
+    private var children: [SceneRenderer] = []
+    var player: AVQueuePlayer? { children.compactMap { $0.player }.first }
+    var completedLoops: Int { children.filter { $0.player != nil }.map { $0.completedLoops }.min() ?? 0 }
+
+    init(playable: Playable, bounds: NSRect, scale: CGFloat, onError: @escaping (String) -> Void) throws {
+        view = NSView(frame: bounds)
+        do {
+            for layer in playable.layers {
+                let item = Playable(title: playable.title, assetURL: layer.assetURL, kind: layer.kind)
+                let child: SceneRenderer = layer.kind == .video
+                    ? VideoRenderer(playable: item, bounds: bounds, onError: onError)
+                    : try StaticImageRenderer(playable: item, bounds: bounds, scale: scale)
+                (child.view as? ImageCanvasView)?.backdropColor = .clear
+                child.view.alphaValue = layer.opacity
+                child.view.autoresizingMask = [.width, .height]
+                children.append(child)
+                view.addSubview(child.view)
+            }
+        } catch {
+            releaseResources()
+            throw error
+        }
+    }
+    func setPaused(_ paused: Bool) { children.forEach { $0.setPaused(paused) } }
+    func releaseResources() {
+        children.forEach { $0.releaseResources(); $0.view.removeFromSuperview() }
+        children.removeAll()
+    }
+    deinit { releaseResources() }
+}

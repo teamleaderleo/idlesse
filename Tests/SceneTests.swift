@@ -17,6 +17,12 @@ import Foundation
         try setScene("picture.png")
         let result = try await source.resolve(root)
         precondition(result.kind == .image && result.title == "Example")
+        try Data(#"{"layers":[{"type":"image","asset":"picture.png"},{"type":"image","asset":"picture.png","opacity":0.3}]}"#.utf8).write(to: scene)
+        let layered = try await source.resolve(root)
+        precondition(layered.layers.count == 2 && layered.layers[1].opacity == 0.3)
+        try Data(#"{"layers":[{"type":"image","asset":"picture.png","opacity":2}]}"#.utf8).write(to: scene)
+        do { _ = try await source.resolve(root); fatalError("Accepted invalid opacity") }
+        catch is SceneError {}
         // Resolution is metadata-only; decoding this empty fixture belongs to the renderer.
         for path in ["../outside.png", "/tmp/outside.png", "https://example.com/picture.png"] {
             try setScene(path)

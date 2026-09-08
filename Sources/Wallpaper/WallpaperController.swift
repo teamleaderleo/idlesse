@@ -29,7 +29,9 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if playable.kind == .video {
+        if playable.layers.count > 1 {
+            renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds, scale: screen.backingScaleFactor, onError: onError)
+        } else if playable.kind == .video {
             renderer = VideoRenderer(playable: playable, bounds: bounds, onError: onError)
         } else {
             renderer = try StaticImageRenderer(playable: playable, bounds: bounds, scale: screen.backingScaleFactor)
@@ -182,9 +184,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             do {
                 let playable = try await self.source.resolve(url)
-                let video = playable.kind == .video
-                if video {
-                    let asset = AVURLAsset(url: playable.assetURL)
+                for layer in playable.layers where layer.kind == .video {
+                    let asset = AVURLAsset(url: layer.assetURL)
                     let playable = try await asset.load(.isPlayable)
                     let duration = try await asset.load(.duration)
                     let tracks = try await asset.loadTracks(withMediaType: .video)
