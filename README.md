@@ -13,21 +13,26 @@ Current prototype features:
 - fit, fill, or show at actual size
 - choose the background color used around fitted images
 - show the same sequence on every display or offset the sequence per display
-- PhotoKit permission/album-visibility probe in Options
-- configure everything from the screen saver Options sheet
+- PhotoKit permission/album-visibility probe in the companion app
+- a native Idlesse companion app for settings and live preview
 
 ## Current status
 
-Early prototype. The code is intentionally AppKit-first inside the screen saver bundle. A separate preview harness is included for quicker iteration.
+Early prototype. Idlesse has two pieces:
 
-The project uses Apple's `ScreenSaver` framework and produces a classic `.saver` bundle. GitHub Actions compiles both the preview app and the universal saver on a macOS runner and smoke-tests the Options UI at runtime.
+- **Idlesse.app** — the canonical settings surface and live preview.
+- **Idlesse.saver** — the actual ScreenSaver-framework bundle macOS runs.
+
+This split is intentional on macOS 26 Tahoe. Tahoe still lists third-party `.saver` bundles, but its legacy Screen Saver **Options** button can fail to call or present a third-party configuration sheet. Idlesse therefore does not depend on that button.
+
+GitHub Actions compiles the companion app and the universal saver on a macOS runner, smoke-tests the Settings UI at runtime, and verifies both bundles.
 
 ## Requirements
 
 - macOS 14 or newer
 - Xcode command-line tools / Xcode
 
-The build script produces a universal `arm64` + `x86_64` saver by default.
+The build script produces a universal `arm64` + `x86_64` saver by default. The companion app is built for the current Mac architecture.
 
 ## Build
 
@@ -38,37 +43,52 @@ The build script produces a universal `arm64` + `x86_64` saver by default.
 Outputs:
 
 ```text
+build/Idlesse.app
 build/Idlesse.saver
-build/Idlesse Preview.app
 ```
 
-Run the preview harness:
+Run Idlesse without installing it:
 
 ```sh
 ./build.sh run
 ```
 
-Install the saver for the current user:
+The app opens the Settings window and keeps a live screensaver preview behind it.
+
+## Install
 
 ```sh
 ./build.sh install
 ```
 
-### Finding Idlesse on macOS 26 Tahoe
+This installs:
 
-Tahoe no longer has a top-level Screen Saver pane in System Settings. Go to:
+```text
+~/Applications/Idlesse.app
+~/Library/Screen Savers/Idlesse.saver
+```
+
+and opens **Idlesse.app**. Choose the image folder and other settings there.
+
+### Selecting Idlesse on macOS 26 Tahoe
+
+Go to:
 
 **System Settings → Wallpaper → Screen Saver → Custom**
 
-Then scroll to **Other** and select **Idlesse**. Once Idlesse is selected, use **Options** at the top of the Screen Saver window to open its settings.
+Scroll to **Other** and select **Idlesse**.
 
-`./build.sh install` opens the Wallpaper settings pane after installation to make this easier.
+Tahoe may show an **Options…** button for Idlesse that does nothing. That is a `legacyScreenSaver` host regression; configure Idlesse in **Idlesse.app** instead. The `.saver` keeps the standard `configureSheet` implementation for older macOS versions and for any future Tahoe fix.
 
-On older macOS versions, the Screen Saver settings may still appear as their own pane.
+## Shared settings
 
-## Development notes
+The companion app and the sandboxed screen saver must see the same preferences. `ScreenSaverDefaults` is redirected by the `legacyScreenSaver` container, so an external app cannot reliably configure the saver through defaults alone.
 
-The screen saver host is sandboxed on modern macOS, so folder access is stored as a security-scoped bookmark created from an `NSOpenPanel` selection.
+Idlesse now stores one JSON settings file inside the legacy screen-saver container. The companion app reaches it through the user's normal home directory; the saver reaches the same file through its sandboxed home directory. The selected folder is stored as a read-only security-scoped bookmark.
+
+The old prototype's `ScreenSaverDefaults` values are migrated by Idlesse.app when possible.
+
+## Playback behavior
 
 Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item. Ordered modes support name, file creation date, and file modification date in both directions.
 
@@ -76,11 +96,11 @@ The selected folder is rescanned every 15 seconds. Added images enter the next r
 
 The multi-display modes share one per-process shuffle seed. In **Same image on every display**, saver instances use the same deck; in **Different image on each display**, each screen starts at a different offset in that deck. Exact transition timing still follows when macOS starts each saver instance.
 
-The real compatibility test is always the installed `.saver` inside the system screen saver host.
-
 ## Photos source
 
-Options now includes a small PhotoKit probe. **Connect Photos…** requests read access only in response to the user clicking it; after authorization, Idlesse reports how many album collections PhotoKit can see. This does not yet use those albums as a slideshow source—the probe exists to verify Photos permission behavior in both the standalone preview and the macOS 26 screen-saver host before the slideshow engine is refactored for asynchronous PhotoKit image delivery.
+Idlesse.app includes a small PhotoKit probe. **Connect Photos…** requests read access only in response to a click and reports how many album collections the companion app can see.
+
+This is still a proof, not yet a slideshow source. PhotoKit authorization for the companion app does not automatically prove that Tahoe's sandboxed legacy screen-saver host can fetch those assets, so album playback remains a separate compatibility task.
 
 See `docs/photos-source.md`.
 
@@ -88,4 +108,4 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next parity work: confirm PhotoKit access in the installed saver, then make Photos albums first-class slideshow sources with preloading.
+Next work: verify that the companion app's shared folder bookmark is redeemable by the installed Tahoe saver, then harden installation/distribution and continue the Photos-source investigation.

@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import ScreenSaver
 
-enum IdlesseScalingMode: String, CaseIterable {
+enum IdlesseScalingMode: String, CaseIterable, Codable {
     case fit
     case fill
     case actual
@@ -16,7 +16,7 @@ enum IdlesseScalingMode: String, CaseIterable {
     }
 }
 
-enum IdlesseMultiDisplayMode: String, CaseIterable {
+enum IdlesseMultiDisplayMode: String, CaseIterable, Codable {
     case same
     case different
 
@@ -28,7 +28,7 @@ enum IdlesseMultiDisplayMode: String, CaseIterable {
     }
 }
 
-enum IdlessePlaybackOrder: String, CaseIterable {
+enum IdlessePlaybackOrder: String, CaseIterable, Codable {
     case random
     case nameAscending
     case nameDescending
@@ -54,7 +54,7 @@ final class IdlessePreferences {
     static let moduleIdentifier = "com.teamleaderleo.idlesse"
     static let shared = IdlessePreferences()
 
-    private enum Key {
+    private enum LegacyKey {
         static let folderBookmark = "folderBookmark"
         static let folderDisplayPath = "folderDisplayPath"
         static let displayDuration = "displayDuration"
@@ -63,72 +63,52 @@ final class IdlessePreferences {
         static let backgroundColor = "backgroundColor"
         static let multiDisplayMode = "multiDisplayMode"
         static let playbackOrder = "playbackOrder"
-        static let shuffle = "shuffle" // legacy migration key
+        static let shuffle = "shuffle"
         static let includeSubfolders = "includeSubfolders"
     }
 
-    let defaults: UserDefaults
+    private var settings: IdlesseStoredSettings
 
     private init() {
-        if let saverDefaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) {
-            defaults = saverDefaults
-        } else {
-            defaults = .standard
+        if let stored = IdlesseSettingsFile.read() {
+            settings = stored
+            return
         }
 
-        let hadPlaybackOrder = defaults.object(forKey: Key.playbackOrder) != nil
-        let legacyShuffle = (defaults.object(forKey: Key.shuffle) as? NSNumber)?.boolValue
+        let migration = Self.readLegacySettings()
+        settings = migration.settings
 
-        defaults.register(defaults: [
-            Key.displayDuration: 300.0,
-            Key.transitionDuration: 2.0,
-            Key.scalingMode: IdlesseScalingMode.fit.rawValue,
-            Key.backgroundColor: [0.0, 0.0, 0.0, 1.0],
-            Key.multiDisplayMode: IdlesseMultiDisplayMode.same.rawValue,
-            Key.playbackOrder: IdlessePlaybackOrder.random.rawValue,
-            Key.includeSubfolders: true,
-        ])
-
-        // Preserve the old Random order checkbox when upgrading an existing prototype.
-        if !hadPlaybackOrder, let legacyShuffle {
-            defaults.set(
-                legacyShuffle ? IdlessePlaybackOrder.random.rawValue : IdlessePlaybackOrder.nameAscending.rawValue,
-                forKey: Key.playbackOrder
-            )
+        // The old preview harness already wrote ScreenSaverDefaults. Migrate those
+        // values once from the companion-app process. The saver process deliberately
+        // does not create an empty shared file before the app gets a chance to migrate.
+        if !IdlesseSettingsFile.isSaverProcess, migration.shouldMigrate {
+            try? IdlesseSettingsFile.write(settings)
         }
     }
 
     var folderDisplayPath: String? {
-        defaults.string(forKey: Key.folderDisplayPath)
+        settings.folderDisplayPath
     }
 
     var displayDuration: TimeInterval {
-        get { max(1, defaults.double(forKey: Key.displayDuration)) }
-        set { defaults.set(max(1, newValue), forKey: Key.displayDuration) }
+        get { max(1, settings.displayDuration) }
+        set { settings.displayDuration = max(1, newValue) }
     }
 
     var transitionDuration: TimeInterval {
-        get { max(0, defaults.double(forKey: Key.transitionDuration)) }
-        set { defaults.set(min(30, max(0, newValue)), forKey: Key.transitionDuration) }
+        get { max(0, settings.transitionDuration) }
+        set { settings.transitionDuration = min(30, max(0, newValue)) }
     }
 
     var scalingMode: IdlesseScalingMode {
-        get {
-            guard let raw = defaults.string(forKey: Key.scalingMode),
-                  let mode = IdlesseScalingMode(rawValue: raw) else {
-                return .fit
-            }
-            return mode
-        }
-        set { defaults.set(newValue.rawValue, forKey: Key.scalingMode) }
+        get { settings.scalingMode }
+        set { settings.scalingMode = newValue }
     }
 
     var backgroundColor: NSColor {
         get {
-            let values = defaults.array(forKey: Key.backgroundColor)?
-                .compactMap { ($0 as? NSNumber)?.doubleValue }
-
-            guard let values, values.count >= 4 else { return .black }
+            let values = settings.backgroundRGBA
+            guard values.count >= 4 else { return .black }
             return NSColor(
                 srgbRed: CGFloat(values[0]),
                 green: CGFloat(values[1]),
@@ -138,40 +118,36 @@ final class IdlessePreferences {
         }
         set {
             let color = newValue.usingColorSpace(.sRGB) ?? .black
-            defaults.set([
+            settings.backgroundRGBA = [
                 Double(color.redComponent),
                 Double(color.greenComponent),
                 Double(color.blueComponent),
                 Double(color.alphaComponent),
-            ], forKey: Key.backgroundColor)
+            ]
         }
     }
 
     var multiDisplayMode: IdlesseMultiDisplayMode {
-        get {
-            guard let raw = defaults.string(forKey: Key.multiDisplayMode),
-                  let mode = IdlesseMultiDisplayMode(rawValue: raw) else {
-                return .same
-            }
-            return mode
-        }
-        set { defaults.set(newValue.rawValue, forKey: Key.multiDisplayMode) }
+        get { settings.multiDisplayMode }
+        set { settings.multiDisplayMode = newValue }
     }
 
     var playbackOrder: IdlessePlaybackOrder {
-        get {
-            guard let raw = defaults.string(forKey: Key.playbackOrder),
-                  let order = IdlessePlaybackOrder(rawValue: raw) else {
-                return .random
-            }
-            return order
-        }
-        set { defaults.set(newValue.rawValue, forKey: Key.playbackOrder) }
+        get { settings.playbackOrder }
+        set { settings.playbackOrder = newValue }
     }
 
     var includeSubfolders: Bool {
-        get { defaults.bool(forKey: Key.includeSubfolders) }
-        set { defaults.set(newValue, forKey: Key.includeSubfolders) }
+        get { settings.includeSubfolders }
+        set { settings.includeSubfolders = newValue }
+    }
+
+    /// Re-read the shared file. The companion app and the sandboxed saver point at
+    /// the same underlying file through two different paths.
+    func reloadFromDisk() {
+        if let stored = IdlesseSettingsFile.read() {
+            settings = stored
+        }
     }
 
     func saveFolder(_ url: URL) throws {
@@ -181,32 +157,88 @@ final class IdlessePreferences {
             relativeTo: nil
         )
 
-        defaults.set(bookmark, forKey: Key.folderBookmark)
-        defaults.set(url.path, forKey: Key.folderDisplayPath)
-        defaults.synchronize()
+        settings.folderBookmark = bookmark
+        settings.folderDisplayPath = url.path
     }
 
     func resolveFolder() throws -> URL? {
-        guard let bookmark = defaults.data(forKey: Key.folderBookmark) else {
+        guard let bookmark = settings.folderBookmark else {
             return nil
         }
 
         var isStale = false
         let url = try URL(
             resolvingBookmarkData: bookmark,
-            options: [.withSecurityScope],
+            options: [.withSecurityScope, .withoutUI],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
 
         if isStale {
             try? saveFolder(url)
+            try? save()
         }
 
         return url
     }
 
-    func save() {
-        defaults.synchronize()
+    func save() throws {
+        try IdlesseSettingsFile.write(settings)
+    }
+
+    private static func readLegacySettings() -> (settings: IdlesseStoredSettings, shouldMigrate: Bool) {
+        var result = IdlesseStoredSettings()
+        guard let defaults = ScreenSaverDefaults(forModuleWithName: moduleIdentifier) else {
+            return (result, false)
+        }
+
+        let keys = [
+            LegacyKey.folderBookmark,
+            LegacyKey.folderDisplayPath,
+            LegacyKey.displayDuration,
+            LegacyKey.transitionDuration,
+            LegacyKey.scalingMode,
+            LegacyKey.backgroundColor,
+            LegacyKey.multiDisplayMode,
+            LegacyKey.playbackOrder,
+            LegacyKey.shuffle,
+            LegacyKey.includeSubfolders,
+        ]
+        let shouldMigrate = keys.contains { defaults.object(forKey: $0) != nil }
+
+        result.folderBookmark = defaults.data(forKey: LegacyKey.folderBookmark)
+        result.folderDisplayPath = defaults.string(forKey: LegacyKey.folderDisplayPath)
+
+        if let value = defaults.object(forKey: LegacyKey.displayDuration) as? NSNumber {
+            result.displayDuration = max(1, value.doubleValue)
+        }
+        if let value = defaults.object(forKey: LegacyKey.transitionDuration) as? NSNumber {
+            result.transitionDuration = min(30, max(0, value.doubleValue))
+        }
+        if let raw = defaults.string(forKey: LegacyKey.scalingMode),
+           let value = IdlesseScalingMode(rawValue: raw) {
+            result.scalingMode = value
+        }
+        if let values = defaults.array(forKey: LegacyKey.backgroundColor)?
+            .compactMap({ ($0 as? NSNumber)?.doubleValue }), values.count >= 4 {
+            result.backgroundRGBA = Array(values.prefix(4))
+        }
+        if let raw = defaults.string(forKey: LegacyKey.multiDisplayMode),
+           let value = IdlesseMultiDisplayMode(rawValue: raw) {
+            result.multiDisplayMode = value
+        }
+
+        if let raw = defaults.string(forKey: LegacyKey.playbackOrder),
+           let value = IdlessePlaybackOrder(rawValue: raw) {
+            result.playbackOrder = value
+        } else if let legacyShuffle = defaults.object(forKey: LegacyKey.shuffle) as? NSNumber {
+            result.playbackOrder = legacyShuffle.boolValue ? .random : .nameAscending
+        }
+
+        if let value = defaults.object(forKey: LegacyKey.includeSubfolders) as? NSNumber {
+            result.includeSubfolders = value.boolValue
+        }
+
+        return (result, shouldMigrate)
     }
 }

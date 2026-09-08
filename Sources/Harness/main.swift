@@ -1,12 +1,12 @@
 import AppKit
 import ScreenSaver
 
-final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
+final class IdlesseAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var saverView: IdlesseView!
-    private var optionsButton: NSButton!
+    private var settingsButton: NSButton!
 
-    private lazy var optionsController = ConfigureSheetController(preferences: IdlessePreferences.shared) { [weak self] in
+    private lazy var settingsController = ConfigureSheetController(preferences: IdlessePreferences.shared) { [weak self] in
         self?.saverView?.reloadFromPreferences()
     }
 
@@ -20,7 +20,7 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Idlesse Preview"
+        window.title = "Idlesse"
         window.center()
 
         guard let contentView = window.contentView else { return }
@@ -28,25 +28,24 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
         saverView.autoresizingMask = [.width, .height]
         contentView.addSubview(saverView)
 
-        optionsButton = NSButton(title: "Options…", target: self, action: #selector(showOptions))
-        optionsButton.bezelStyle = .rounded
-        optionsButton.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(optionsButton)
+        settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
+        settingsButton.bezelStyle = .rounded
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(settingsButton)
 
         NSLayoutConstraint.activate([
-            optionsButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            optionsButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            settingsButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            settingsButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
         ])
 
         window.makeKeyAndOrderFront(nil)
         saverView.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
 
-        // On first launch, skip the menu entirely and put configuration in front of the user.
-        if IdlessePreferences.shared.folderDisplayPath == nil {
-            DispatchQueue.main.async { [weak self] in
-                self?.showOptions()
-            }
+        // Idlesse.app is the canonical settings surface on Tahoe, where the legacy
+        // Screen Saver Options button may never call into a third-party .saver.
+        DispatchQueue.main.async { [weak self] in
+            self?.showSettings()
         }
     }
 
@@ -54,13 +53,13 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
         saverView?.stopAnimation()
     }
 
-    @objc private func showOptions() {
-        optionsController.reload()
-        let optionsWindow = optionsController.window
+    @objc private func showSettings() {
+        settingsController.reload()
+        let settingsWindow = settingsController.window
 
-        optionsWindow.center()
-        optionsWindow.makeKeyAndOrderFront(nil)
-        optionsWindow.orderFrontRegardless()
+        settingsWindow.center()
+        settingsWindow.makeKeyAndOrderFront(nil)
+        settingsWindow.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -72,11 +71,11 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        let options = NSMenuItem(title: "Options…", action: #selector(showOptions), keyEquivalent: ",")
-        options.target = self
-        appMenu.addItem(options)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit Idlesse Preview", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "Quit Idlesse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         NSApp.mainMenu = mainMenu
     }
@@ -85,14 +84,17 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 
 if CommandLine.arguments.contains("--smoke-options") {
-    // Instantiate and lay out the options UI without entering the app event loop.
-    // This catches Auto Layout exceptions that compilation alone cannot detect.
     let controller = ConfigureSheetController(preferences: IdlessePreferences.shared) {}
     controller.window.contentView?.layoutSubtreeIfNeeded()
-    print("Idlesse options UI smoke test passed")
+    print("Idlesse settings UI smoke test passed")
     exit(EXIT_SUCCESS)
 }
 
-let delegate = PreviewAppDelegate()
+if CommandLine.arguments.contains("--print-settings-path") {
+    print(IdlesseSettingsFile.runtimeURL.path)
+    exit(EXIT_SUCCESS)
+}
+
+let delegate = IdlesseAppDelegate()
 app.delegate = delegate
 app.run()
