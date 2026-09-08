@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import ScreenSaver
 
@@ -15,6 +16,18 @@ enum IdlesseScalingMode: String, CaseIterable {
     }
 }
 
+enum IdlesseMultiDisplayMode: String, CaseIterable {
+    case same
+    case different
+
+    var title: String {
+        switch self {
+        case .same: return "Same image on every display"
+        case .different: return "Different image on each display"
+        }
+    }
+}
+
 final class IdlessePreferences {
     static let moduleIdentifier = "com.teamleaderleo.idlesse"
     static let shared = IdlessePreferences()
@@ -25,6 +38,8 @@ final class IdlessePreferences {
         static let displayDuration = "displayDuration"
         static let transitionDuration = "transitionDuration"
         static let scalingMode = "scalingMode"
+        static let backgroundColor = "backgroundColor"
+        static let multiDisplayMode = "multiDisplayMode"
         static let shuffle = "shuffle"
         static let includeSubfolders = "includeSubfolders"
     }
@@ -42,6 +57,8 @@ final class IdlessePreferences {
             Key.displayDuration: 300.0,
             Key.transitionDuration: 2.0,
             Key.scalingMode: IdlesseScalingMode.fit.rawValue,
+            Key.backgroundColor: [0.0, 0.0, 0.0, 1.0],
+            Key.multiDisplayMode: IdlesseMultiDisplayMode.same.rawValue,
             Key.shuffle: true,
             Key.includeSubfolders: true,
         ])
@@ -70,6 +87,41 @@ final class IdlessePreferences {
             return mode
         }
         set { defaults.set(newValue.rawValue, forKey: Key.scalingMode) }
+    }
+
+    var backgroundColor: NSColor {
+        get {
+            let values = defaults.array(forKey: Key.backgroundColor)?
+                .compactMap { ($0 as? NSNumber)?.doubleValue }
+
+            guard let values, values.count >= 4 else { return .black }
+            return NSColor(
+                srgbRed: CGFloat(values[0]),
+                green: CGFloat(values[1]),
+                blue: CGFloat(values[2]),
+                alpha: CGFloat(values[3])
+            )
+        }
+        set {
+            let color = newValue.usingColorSpace(.sRGB) ?? .black
+            defaults.set([
+                Double(color.redComponent),
+                Double(color.greenComponent),
+                Double(color.blueComponent),
+                Double(color.alphaComponent),
+            ], forKey: Key.backgroundColor)
+        }
+    }
+
+    var multiDisplayMode: IdlesseMultiDisplayMode {
+        get {
+            guard let raw = defaults.string(forKey: Key.multiDisplayMode),
+                  let mode = IdlesseMultiDisplayMode(rawValue: raw) else {
+                return .same
+            }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.multiDisplayMode) }
     }
 
     var shuffle: Bool {

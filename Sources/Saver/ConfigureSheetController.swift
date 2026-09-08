@@ -11,6 +11,8 @@ final class ConfigureSheetController: NSObject {
     private let durationUnitPopup = NSPopUpButton()
     private let transitionField = NSTextField(string: "2")
     private let scalingPopup = NSPopUpButton()
+    private let backgroundColorWell = NSColorWell()
+    private let multiDisplayPopup = NSPopUpButton()
     private let shuffleButton = NSButton(checkboxWithTitle: "Random order", target: nil, action: nil)
     private let subfoldersButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
 
@@ -20,7 +22,7 @@ final class ConfigureSheetController: NSObject {
         self.preferences = preferences
         self.onSave = onSave
         self.window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 370),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 455),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -51,6 +53,8 @@ final class ConfigureSheetController: NSObject {
 
         transitionField.doubleValue = preferences.transitionDuration
         scalingPopup.selectItem(withTitle: preferences.scalingMode.title)
+        backgroundColorWell.color = preferences.backgroundColor
+        multiDisplayPopup.selectItem(withTitle: preferences.multiDisplayMode.title)
         shuffleButton.state = preferences.shuffle ? .on : .off
         subfoldersButton.state = preferences.includeSubfolders ? .on : .off
     }
@@ -110,6 +114,13 @@ final class ConfigureSheetController: NSObject {
         scalingPopup.addItems(withTitles: IdlesseScalingMode.allCases.map(\.title))
         root.addArrangedSubview(makeRow(label: "Image size", control: scalingPopup))
 
+        backgroundColorWell.supportsAlpha = false
+        backgroundColorWell.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        root.addArrangedSubview(makeRow(label: "Background", control: backgroundColorWell))
+
+        multiDisplayPopup.addItems(withTitles: IdlesseMultiDisplayMode.allCases.map(\.title))
+        root.addArrangedSubview(makeRow(label: "Displays", control: multiDisplayPopup))
+
         root.addArrangedSubview(shuffleButton)
         root.addArrangedSubview(subfoldersButton)
 
@@ -129,8 +140,6 @@ final class ConfigureSheetController: NSObject {
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
-        // Add the row before constraining it to `root`. Activating a constraint between
-        // views with no common ancestor throws an Auto Layout exception on macOS 26.
         root.addArrangedSubview(buttons)
         buttons.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
     }
@@ -188,10 +197,16 @@ final class ConfigureSheetController: NSObject {
         preferences.transitionDuration = max(0, transitionField.doubleValue)
         preferences.shuffle = shuffleButton.state == .on
         preferences.includeSubfolders = subfoldersButton.state == .on
+        preferences.backgroundColor = backgroundColorWell.color
 
         if let title = scalingPopup.titleOfSelectedItem,
            let mode = IdlesseScalingMode.allCases.first(where: { $0.title == title }) {
             preferences.scalingMode = mode
+        }
+
+        if let title = multiDisplayPopup.titleOfSelectedItem,
+           let mode = IdlesseMultiDisplayMode.allCases.first(where: { $0.title == title }) {
+            preferences.multiDisplayMode = mode
         }
 
         preferences.save()
