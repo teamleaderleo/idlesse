@@ -13,14 +13,21 @@ Current prototype features:
 - fit, fill, or show at actual size
 - choose the background color used around fitted images
 - show the same sequence on every display or offset the sequence per display
-- PhotoKit permission/album-visibility probe in Options
-- configure everything from the screen saver Options sheet
+- PhotoKit permission / album-visibility probe
+- a companion **Idlesse.app** for configuration and live preview
 
 ## Current status
 
-Early prototype. The code is intentionally AppKit-first inside the screen saver bundle. A separate preview harness is included for quicker iteration.
+Early prototype. The project now has two pieces:
 
-The project uses Apple's `ScreenSaver` framework and produces a classic `.saver` bundle. GitHub Actions compiles both the preview app and the universal saver on a macOS runner and smoke-tests the Options UI at runtime.
+- `Idlesse.app` — the canonical settings UI and live preview
+- `Idlesse.saver` — the classic ScreenSaver bundle macOS runs
+
+This split is intentional on macOS 26 Tahoe. Tahoe can display a legacy screen saver’s **Options…** button while failing to present the configuration window behind it. Idlesse keeps the standard `configureSheet` hook for systems where it works, but configuration no longer depends on that host behavior.
+
+The companion app and saver read the same JSON settings document inside the `legacyScreenSaver` container. Folder selection is persisted as a document-scoped security bookmark owned by that settings document, so the sandboxed saver can resolve the folder chosen in the companion app.
+
+GitHub Actions compiles the companion app and the universal saver on a macOS runner, smoke-tests the settings UI at runtime, and verifies both bundles.
 
 ## Requirements
 
@@ -38,37 +45,50 @@ The build script produces a universal `arm64` + `x86_64` saver by default.
 Outputs:
 
 ```text
+build/Idlesse.app
 build/Idlesse.saver
-build/Idlesse Preview.app
 ```
 
-Run the preview harness:
+Run Idlesse locally:
 
 ```sh
 ./build.sh run
 ```
 
-Install the saver for the current user:
+Install both the app and saver for the current user:
 
 ```sh
 ./build.sh install
 ```
 
+That installs:
+
+```text
+~/Applications/Idlesse.app
+~/Library/Screen Savers/Idlesse.saver
+```
+
+`./build.sh install` opens **Idlesse.app**. Choose the picture folder and save your settings there.
+
 ### Finding Idlesse on macOS 26 Tahoe
 
-Tahoe no longer has a top-level Screen Saver pane in System Settings. Go to:
+Go to:
 
 **System Settings → Wallpaper → Screen Saver → Custom**
 
-Then scroll to **Other** and select **Idlesse**. Once Idlesse is selected, use **Options** at the top of the Screen Saver window to open its settings.
+Then scroll to **Other** and select **Idlesse**.
 
-`./build.sh install` opens the Wallpaper settings pane after installation to make this easier.
+Tahoe currently has regressions around configuration windows for third-party legacy `.saver` bundles. The **Options…** button may do nothing. Use **Idlesse.app** for configuration; the saver reloads the shared settings while it runs.
 
-On older macOS versions, the Screen Saver settings may still appear as their own pane.
+To reopen Wallpaper settings from the terminal:
+
+```sh
+./build.sh wallpaper
+```
 
 ## Development notes
 
-The screen saver host is sandboxed on modern macOS, so folder access is stored as a security-scoped bookmark created from an `NSOpenPanel` selection.
+The companion app is sandboxed and requests read-only user-selected file access plus Photos access. On current macOS versions, the first attempt to save screen-saver settings may also trigger a system permission prompt because the app writes the shared settings document into the `legacyScreenSaver` container.
 
 Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item. Ordered modes support name, file creation date, and file modification date in both directions.
 
@@ -76,16 +96,14 @@ The selected folder is rescanned every 15 seconds. Added images enter the next r
 
 The multi-display modes share one per-process shuffle seed. In **Same image on every display**, saver instances use the same deck; in **Different image on each display**, each screen starts at a different offset in that deck. Exact transition timing still follows when macOS starts each saver instance.
 
-The real compatibility test is always the installed `.saver` inside the system screen saver host.
-
 ## Photos source
 
-Options now includes a small PhotoKit probe. **Connect Photos…** requests read access only in response to the user clicking it; after authorization, Idlesse reports how many album collections PhotoKit can see. This does not yet use those albums as a slideshow source—the probe exists to verify Photos permission behavior in both the standalone preview and the macOS 26 screen-saver host before the slideshow engine is refactored for asynchronous PhotoKit image delivery.
+The Idlesse app includes a PhotoKit probe. **Connect Photos…** requests read access only in response to the user clicking it; after authorization, Idlesse reports how many album collections PhotoKit can see.
+
+This does not yet use those albums as a slideshow source. The next step is to make Photos albums first-class sources and preload PhotoKit images before transitions.
 
 See `docs/photos-source.md`.
 
 ## Product direction
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
-
-Next parity work: confirm PhotoKit access in the installed saver, then make Photos albums first-class slideshow sources with preloading.
