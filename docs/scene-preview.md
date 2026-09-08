@@ -55,6 +55,19 @@ in Studio and on the desktop; first switching from Standard restarts playback,
 while subsequent appearance edits preserve the renderer. Plain scenes retain the
 Standard fallback. There is no timeline or arbitrary effect graph yet.
 
+## Scene transport
+
+With Metal selected, **Time…** seeks to a scene time, sets playback speed from
+0.1× to 4×, and optionally loops a start/end interval. Apply refreshes a paused
+canvas without resuming it. Time and loop endpoints are limited to 0–86400 seconds;
+loops must last at least 0.01 seconds. Seeking before the loop start lands on its
+start; seeking at or beyond the end wraps into the interval.
+
+Transport controls affect gradients and time-based bindings. Video players retain
+their own position and speed; this is not frame-accurate video scrubbing. Settings
+belong to the preview session, survive scene edits, and are not exported or sent
+to the desktop. There is no keyframe timeline yet.
+
 ## Documents and saving
 
 Raw media and Aurora start as untitled scenes. Save (⌘S) creates a new `.idlesse`

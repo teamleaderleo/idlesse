@@ -88,9 +88,11 @@ protocol SceneRenderer: AnyObject {
     func setPreferredFrameRate(_ rate: Int?)
     func releaseResources()
     func updateScene(_ scene: SceneDescriptor) -> Bool
+    func refreshSceneTime()
 }
 
 extension SceneRenderer {
+    func refreshSceneTime() { view.needsDisplay = true }
     func updateScene(_ scene: SceneDescriptor) -> Bool { false }
     var presentedFrameCount: Int? { nil }
     var gpuTotals: (seconds: Double, frames: Int)? { nil }

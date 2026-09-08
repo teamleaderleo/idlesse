@@ -246,7 +246,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let zoomIn = NSButton(title: "+", target: self, action: #selector(zoomIn))
         zoomIn.toolTip = "Zoom in"
         let fit = NSButton(title: "Fit", target: self, action: #selector(fitCanvas))
-        let controls = NSStackView(views: [open, sample, pauseButton, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
+        let transport = NSButton(title: "Time…", target: self, action: #selector(editTransport))
+        transport.toolTip = "Seek, change motion speed, or loop scene animation in Metal"
+        let controls = NSStackView(views: [open, sample, pauseButton, transport, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
         controls.spacing = 10
         nodePicker.onVisibility = { [weak self] in self?.editor.toggleVisibility($0) }
         nodePicker.onLock = { [weak self] in self?.editor.toggleLock($0) }
@@ -857,6 +859,50 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         if measurementResult != nil { measureButton.title = "Measure Again" }
     }
     @objc private func togglePause() { paused.toggle(); updatePlayback() }
+    @objc private func editTransport() {
+        guard renderer is MetalSceneRenderer else {
+            detailLabel.stringValue = "Select Metal to use scene transport."; return
+        }
+        let dialog = NSAlert()
+        dialog.messageText = "Scene Time"
+        dialog.informativeText = "Controls gradients and motion bindings. Videos keep their own playback speed and position. These preview settings are not saved in the package. Apply also redraws a paused scene."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let position = NSTextField(string: String(format: "%.3f", clock.time))
+        let rate = NSTextField(string: String(format: "%.2f", clock.playbackRate))
+        let loop = NSButton(checkboxWithTitle: "Loop scene time", target: nil, action: nil)
+        loop.state = clock.loopRange == nil ? .off : .on
+        let start = NSTextField(string: String(clock.loopRange?.lowerBound ?? 0))
+        let end = NSTextField(string: String(clock.loopRange?.upperBound ?? 8))
+        position.setAccessibilityLabel("Scene time in seconds")
+        rate.setAccessibilityLabel("Scene playback rate")
+        start.setAccessibilityLabel("Loop start"); end.setAccessibilityLabel("Loop end")
+        let fields = NSStackView(views: [NSTextField(labelWithString: "Time (seconds)"), position,
+            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, loop,
+            NSTextField(labelWithString: "Loop start / end (seconds)"), start, end])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 250)
+        position.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        dialog.accessoryView = fields
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            do {
+                guard let time = Double(position.stringValue), let speed = Double(rate.stringValue) else {
+                    throw SceneError.invalid("Enter numeric time and speed values.")
+                }
+                var range: Range<Double>?
+                if loop.state == .on {
+                    guard let lower = Double(start.stringValue), let upper = Double(end.stringValue),
+                          lower.isFinite, upper.isFinite, lower < upper else {
+                        throw SceneError.invalid("Loop end must be greater than loop start.")
+                    }
+                    range = lower..<upper
+                }
+                try self.clock.configure(time: time, rate: speed, loop: range)
+                self.renderer?.refreshSceneTime()
+                self.detailLabel.stringValue = "Scene transport updated; video playback is independent."
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+    }
     @objc private func changeEngine() {
         let previous = renderer
         rebuild()

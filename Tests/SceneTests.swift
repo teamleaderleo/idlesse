@@ -43,6 +43,33 @@ import Foundation
         clock.setPaused(false)
         instant = 101
         precondition(clock.time == 3)
+        var transportNow = 0.0
+        let transport = SceneClock(now: { transportNow })
+        try transport.configure(time: 2, rate: 2, loop: nil)
+        transport.setPaused(false)
+        transportNow = 3
+        precondition(transport.time == 8)
+        try transport.configure(time: transport.time, rate: 0.5, loop: nil)
+        transportNow = 5
+        precondition(transport.time == 9)
+        transport.setPaused(true)
+        try transport.seek(to: 4)
+        transportNow = 20
+        precondition(transport.time == 4 && transport.isPaused)
+        try transport.configure(time: 7, rate: 2, loop: 2..<8)
+        transport.setPaused(false)
+        transportNow = 21
+        precondition(transport.time == 3)
+        transportNow = 30
+        precondition(transport.time == 3)
+        try transport.seek(to: 8)
+        precondition(transport.time == 2)
+        for invalid in [-1.0, Double.nan, Double.infinity, 86401] {
+            do { try transport.seek(to: invalid); fatalError("Accepted invalid seek") } catch is SceneError {}
+            precondition(transport.time == 2 && transport.playbackRate == 2 && transport.loopRange == 2..<8)
+        }
+        do { try transport.configure(time: 0, rate: 0, loop: nil); fatalError("Accepted zero rate") } catch is SceneError {}
+        do { try transport.configure(time: 0, rate: 1, loop: 1..<1.001); fatalError("Accepted tiny loop") } catch is SceneError {}
         try Data(#"{"version":1,"title":"Example","capabilities":[]}"#.utf8).write(to: manifest)
         // Resolution is metadata-only; decoding this empty fixture belongs to the renderer.
         for path in ["../outside.png", "/tmp/outside.png", "https://example.com/picture.png"] {

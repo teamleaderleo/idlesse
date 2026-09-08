@@ -240,7 +240,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     func updateScene(_ scene: SceneDescriptor) -> Bool {
         let authored = scene
-        guard let scene = try? scene.evaluated() else { return false }
+        guard let scene = try? scene.evaluated(signals: currentSignals()) else { return false }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
@@ -286,6 +286,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         command.commit()
         needsFrame = false
         diagnostics.frameCount += 1
+    }
+    func refreshSceneTime() {
+        guard diagnostics.state != .disposed else { return }
+        updateSignals(currentSignals())
+        needsFrame = true
+        metal.draw()
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
