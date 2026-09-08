@@ -4,6 +4,11 @@ import ScreenSaver
 final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var saverView: IdlesseView!
+    private var optionsButton: NSButton!
+
+    private lazy var optionsController = ConfigureSheetController(preferences: IdlessePreferences.shared) { [weak self] in
+        self?.saverView?.reloadFromPreferences()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -23,9 +28,26 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
         saverView.autoresizingMask = [.width, .height]
         contentView.addSubview(saverView)
 
+        optionsButton = NSButton(title: "Options…", target: self, action: #selector(showOptions))
+        optionsButton.bezelStyle = .rounded
+        optionsButton.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(optionsButton)
+
+        NSLayoutConstraint.activate([
+            optionsButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            optionsButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+        ])
+
         window.makeKeyAndOrderFront(nil)
         saverView.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
+
+        // On first launch, skip the menu entirely and put configuration in front of the user.
+        if IdlessePreferences.shared.folderDisplayPath == nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.showOptions()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -33,13 +55,12 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showOptions() {
-        guard let optionsWindow = saverView?.configureSheet else { return }
+        optionsController.reload()
+        let optionsWindow = optionsController.window
 
-        // The real screen saver host presents configureSheet itself. In the standalone
-        // preview app, opening that same window directly is much more reliable than
-        // trying to emulate the host's sheet presentation behavior.
         optionsWindow.center()
         optionsWindow.makeKeyAndOrderFront(nil)
+        optionsWindow.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
     }
 
