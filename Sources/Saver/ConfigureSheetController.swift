@@ -1,5 +1,12 @@
 import AppKit
 
+// The saver extension cannot reliably activate like a normal application.
+// A nonactivating panel can still accept text input when the user clicks Options.
+private final class SettingsPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 final class ConfigureSheetController: NSObject {
     let window: NSWindow
 
@@ -7,8 +14,6 @@ final class ConfigureSheetController: NSObject {
     private let onSave: () -> Void
 
     private let folderPathLabel = NSTextField(labelWithString: "No folder selected")
-    private let photosStatusLabel = NSTextField(labelWithString: "Not connected")
-    private let photosButton = NSButton(title: "Connect Photos…", target: nil, action: nil)
     private let durationField = NSTextField(string: "5")
     private let durationUnitPopup = NSPopUpButton()
     private let transitionField = NSTextField(string: "2")
@@ -23,9 +28,9 @@ final class ConfigureSheetController: NSObject {
     init(preferences: IdlessePreferences, onSave: @escaping () -> Void) {
         self.preferences = preferences
         self.onSave = onSave
-        self.window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 530),
-            styleMask: [.titled, .closable],
+        self.window = SettingsPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 640),
+            styleMask: [.titled, .closable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -33,6 +38,7 @@ final class ConfigureSheetController: NSObject {
 
         window.title = "Idlesse Settings"
         window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false
         buildInterface()
         reload()
     }
@@ -41,7 +47,6 @@ final class ConfigureSheetController: NSObject {
         preferences.reloadFromDisk()
         pendingFolderURL = nil
         setFolderPath(preferences.folderDisplayPath)
-        refreshPhotosStatus()
 
         let seconds = preferences.displayDuration
         if seconds >= 3600 {
@@ -63,13 +68,58 @@ final class ConfigureSheetController: NSObject {
         subfoldersButton.state = preferences.includeSubfolders ? .on : .off
     }
 
+    /// An opt-in render of our own content, not a capture of other applications.
+    /// The marker is consumed, and each request replaces the previous artifact.
+    func captureDiagnosticIfRequested() {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        let marker = directory.appendingPathComponent("idlesse-capture-request")
+        guard FileManager.default.fileExists(atPath: marker.path) else { return }
+        try? FileManager.default.removeItem(at: marker)
+        guard let view = window.contentView else { return }
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return }
+        let imageURL = directory.appendingPathComponent("idlesse-settings.png")
+        do {
+            try png.write(to: imageURL, options: .atomic)
+            let state: [String: Any] = [
+                "pid": Int(getpid()), "capturedAt": ISO8601DateFormatter().string(from: Date()),
+                "visible": window.isVisible, "key": window.isKeyWindow,
+                "frame": NSStringFromRect(window.frame),
+                "contentSize": NSStringFromSize(view.bounds.size),
+                "pixelWidth": bitmap.pixelsWide, "pixelHeight": bitmap.pixelsHigh,
+                "kind": "own-view-render; does not prove on-screen visibility",
+                "controls": diagnosticControls(in: view),
+            ]
+            let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: directory.appendingPathComponent("idlesse-settings.json"), options: .atomic)
+        } catch {
+            NSLog("Idlesse settings capture failed: %@", error.localizedDescription)
+        }
+    }
+
+    private func diagnosticControls(in view: NSView) -> [[String: String]] {
+        var result: [[String: String]] = []
+        if let control = view as? NSControl {
+            let text: String
+            if let popup = control as? NSPopUpButton { text = popup.title }
+            else if let button = control as? NSButton { text = button.title }
+            else { text = control.stringValue }
+            result.append(["type": String(describing: type(of: control)), "text": text,
+                           "frame": NSStringFromRect(view.convert(view.bounds, to: window.contentView))])
+        }
+        return result + view.subviews.flatMap { diagnosticControls(in: $0) }
+    }
+
     private func buildInterface() {
         guard let contentView = window.contentView else { return }
 
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
-        root.spacing = 14
+        root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 20, right: 24)
         root.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(root)
@@ -82,13 +132,14 @@ final class ConfigureSheetController: NSObject {
         ])
 
         let title = NSTextField(labelWithString: "Idlesse")
-        title.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        title.font = NSFont.systemFont(ofSize: 28, weight: .semibold)
         root.addArrangedSubview(title)
 
-        let subtitle = NSTextField(labelWithString: "Give the picture enough time to exist.")
+        let subtitle = NSTextField(labelWithString: "Your pictures. A little room to breathe.")
         subtitle.textColor = .secondaryLabelColor
         root.addArrangedSubview(subtitle)
 
+        root.addArrangedSubview(sectionTitle("Pictures"))
         let folderControls = NSStackView()
         folderControls.orientation = .horizontal
         folderControls.spacing = 8
@@ -99,15 +150,21 @@ final class ConfigureSheetController: NSObject {
         folderControls.addArrangedSubview(chooseButton)
         root.addArrangedSubview(makeRow(label: "Image folder", control: folderControls))
 
-        photosStatusLabel.textColor = .secondaryLabelColor
-        photosStatusLabel.lineBreakMode = .byTruncatingTail
-        photosStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        photosButton.target = self
-        photosButton.action = #selector(connectPhotos)
-        let photosControls = NSStackView(views: [photosStatusLabel, photosButton])
-        photosControls.orientation = .horizontal
-        photosControls.spacing = 8
-        root.addArrangedSubview(makeRow(label: "Photos", control: photosControls))
+        root.addArrangedSubview(subfoldersButton)
+        let sourceHint = NSTextField(wrappingLabelWithString: "Choose a local folder or downloaded cloud folder. Photos albums aren’t supported yet.")
+        sourceHint.font = .systemFont(ofSize: 11)
+        sourceHint.textColor = .secondaryLabelColor
+        root.addArrangedSubview(sourceHint)
+        root.addArrangedSubview(sectionTitle("Pace"))
+        let presets = NSStackView()
+        presets.spacing = 8
+        for (index, title) in ["Calm · 5 min", "Gallery · 30 sec", "Quick · 5 sec"].enumerated() {
+            let button = NSButton(title: title, target: self, action: #selector(applyPreset(_:)))
+            button.bezelStyle = .rounded
+            button.tag = index
+            presets.addArrangedSubview(button)
+        }
+        root.addArrangedSubview(presets)
 
         durationUnitPopup.addItems(withTitles: ["Seconds", "Minutes", "Hours"])
         durationField.alignment = .right
@@ -125,6 +182,7 @@ final class ConfigureSheetController: NSObject {
         transitionControls.spacing = 8
         root.addArrangedSubview(makeRow(label: "Crossfade", control: transitionControls))
 
+        root.addArrangedSubview(sectionTitle("Presentation"))
         scalingPopup.addItems(withTitles: IdlesseScalingMode.allCases.map(\.title))
         root.addArrangedSubview(makeRow(label: "Image size", control: scalingPopup))
 
@@ -137,8 +195,6 @@ final class ConfigureSheetController: NSObject {
 
         orderingPopup.addItems(withTitles: IdlessePlaybackOrder.allCases.map(\.title))
         root.addArrangedSubview(makeRow(label: "Order", control: orderingPopup))
-
-        root.addArrangedSubview(subfoldersButton)
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -157,7 +213,10 @@ final class ConfigureSheetController: NSObject {
         buttons.spacing = 8
 
         root.addArrangedSubview(buttons)
-        buttons.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        buttons.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48).isActive = true
+        for item in root.arrangedSubviews {
+            item.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -48).isActive = true
+        }
     }
 
     private func makeRow(label: String, control: NSView) -> NSStackView {
@@ -181,30 +240,50 @@ final class ConfigureSheetController: NSObject {
         panel.message = "Choose the folder of pictures Idlesse should show."
         panel.prompt = "Choose"
 
-        panel.begin { [weak self] response in
+        if let path = preferences.folderDisplayPath {
+            panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true)
+        }
+        panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.pendingFolderURL = url
             self?.setFolderPath(url.path)
         }
     }
 
-    @objc private func connectPhotos() {
-        photosButton.isEnabled = false
-        photosStatusLabel.stringValue = "Requesting access…"
-
-        PhotosProbe.shared.requestAccess { [weak self] in
-            self?.refreshPhotosStatus()
-        }
+    private func sectionTitle(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        return label
     }
 
-    private func refreshPhotosStatus() {
-        photosStatusLabel.stringValue = PhotosProbe.shared.statusText
-        photosStatusLabel.toolTip = PhotosProbe.shared.statusText
-        photosButton.title = PhotosProbe.shared.actionTitle
-        photosButton.isEnabled = PhotosProbe.shared.actionEnabled
+    @objc private func applyPreset(_ sender: NSButton) {
+        let durations = [300.0, 30.0, 5.0]
+        let seconds = durations[sender.tag]
+        durationField.doubleValue = seconds >= 60 ? seconds / 60 : seconds
+        durationUnitPopup.selectItem(withTitle: seconds >= 60 ? "Minutes" : "Seconds")
+        transitionField.doubleValue = sender.tag == 2 ? 0.5 : 2
+    }
+
+    static func timingNumber(_ text: String) -> Double? {
+        let scanner = Scanner(string: text)
+        scanner.locale = Locale.current
+        guard let value = scanner.scanDouble(), scanner.isAtEnd, value.isFinite else { return nil }
+        return value
     }
 
     @objc private func save() {
+        let durationText = durationField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fadeText = transitionField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let duration = Self.timingNumber(durationText),
+              let fade = Self.timingNumber(fadeText),
+              duration.isFinite, duration > 0, fade.isFinite, (0...30).contains(fade) else {
+            let alert = NSAlert()
+            alert.messageText = "Check the timing"
+            alert.informativeText = "Use a positive number for image duration and 0–30 seconds for crossfade."
+            alert.beginSheetModal(for: window)
+            return
+        }
         if let pendingFolderURL {
             do {
                 try preferences.saveFolder(pendingFolderURL)
@@ -225,8 +304,8 @@ final class ConfigureSheetController: NSObject {
         default: multiplier = 1
         }
 
-        preferences.displayDuration = max(1, durationField.doubleValue * multiplier)
-        preferences.transitionDuration = max(0, transitionField.doubleValue)
+        preferences.displayDuration = max(1, duration * multiplier)
+        preferences.transitionDuration = fade
         preferences.includeSubfolders = subfoldersButton.state == .on
         preferences.backgroundColor = backgroundColorWell.color
 
@@ -259,13 +338,13 @@ final class ConfigureSheetController: NSObject {
         if let parent = window.sheetParent {
             parent.endSheet(window)
         } else {
-            window.orderOut(nil)
+            window.close()
         }
     }
 
     private func setFolderPath(_ path: String?) {
         let display = path ?? "No folder selected"
-        folderPathLabel.stringValue = display
+        folderPathLabel.stringValue = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? display
         folderPathLabel.toolTip = path
     }
 }

@@ -1,0 +1,185 @@
+{
+  "source": "https://motionbgs.com/astra-yao-zzz",
+  "official": false,
+  "media": {
+    "width": 3840,
+    "height": 2160,
+    "fps": 30,
+    "seconds": 11.233333,
+    "bytes": 21003575,
+    "sha256": "fba0bcc19d22a43e509045c140530200367f438b00457dbdac51b1dd2aca036f"
+  },
+  "observations": {
+    "unit": "byte",
+    "bytes per unit": 1,
+    "samples": [
+      {
+        "start_time": {
+          "mach_absolute_time_ns": 988614661415541,
+          "mach_continuous_time_ns": 1114538083726250,
+          "wall_time_s": 810547291.413751,
+          "date": "2026-09-08T04:01:31.414-04:00"
+        },
+        "processes": [
+          {
+            "name": "Idlesse",
+            "pid": 8266,
+            "translated": false,
+            "page size": 16384,
+            "footprint": 103122048,
+            "auxiliary": {
+              "phys_footprint_peak": 198689800,
+              "phys_footprint": 103154816
+            }
+          }
+        ],
+        "errors": [],
+        "warnings": [],
+        "summary": {
+          "total": {
+            "dirty": 103122048,
+            "swapped": 16957440,
+            "clean": 24788992,
+            "reclaimable": 131072,
+            "wired": 65536,
+            "regions": 8511
+          }
+        },
+        "total footprint": 103122048,
+        "shared": [],
+        "end_time": {
+          "mach_absolute_time_ns": 988614719216125,
+          "mach_continuous_time_ns": 1114538141526833,
+          "wall_time_s": 810547291.471551,
+          "date": "2026-09-08T04:01:31.472-04:00"
+        }
+      },
+      {
+        "start_time": {
+          "mach_absolute_time_ns": 988625164674708,
+          "mach_continuous_time_ns": 1114548586985416,
+          "wall_time_s": 810547301.91706,
+          "date": "2026-09-08T04:01:41.917-04:00"
+        },
+        "processes": [
+          {
+            "name": "Idlesse",
+            "pid": 8266,
+            "translated": false,
+            "page size": 16384,
+            "footprint": 101254272,
+            "auxiliary": {
+              "phys_footprint_peak": 198689800,
+              "phys_footprint": 101287040
+            }
+          }
+        ],
+        "errors": [],
+        "warnings": [],
+        "summary": {
+          "total": {
+            "dirty": 101254272,
+            "swapped": 66633728,
+            "clean": 24788992,
+            "reclaimable": 98304,
+            "wired": 65536,
+            "regions": 8511
+          }
+        },
+        "total footprint": 101254272,
+        "shared": [],
+        "end_time": {
+          "mach_absolute_time_ns": 988625236699666,
+          "mach_continuous_time_ns": 1114548659010375,
+          "wall_time_s": 810547301.989085,
+          "date": "2026-09-08T04:01:41.989-04:00"
+        }
+      },
+      {
+        "start_time": {
+          "mach_absolute_time_ns": 988635163731166,
+          "mach_continuous_time_ns": 1114558586041875,
+          "wall_time_s": 810547311.916159,
+          "date": "2026-09-08T04:01:51.916-04:00"
+        },
+        "processes": [
+          {
+            "name": "Idlesse",
+            "pid": 8266,
+            "translated": false,
+            "page size": 16384,
+            "footprint": 101663872,
+            "auxiliary": {
+              "phys_footprint_peak": 198689800,
+              "phys_footprint": 101696640
+            }
+          }
+        ],
+        "errors": [],
+        "warnings": [],
+        "summary": {
+          "total": {
+            "dirty": 101663872,
+            "swapped": 66633728,
+            "clean": 24788992,
+            "reclaimable": 65536,
+            "wired": 65536,
+            "regions": 8516
+          }
+        },
+        "total footprint": 101663872,
+        "shared": [],
+        "end_time": {
+          "mach_absolute_time_ns": 988635236578833,
+          "mach_continuous_time_ns": 1114558658889541,
+          "wall_time_s": 810547311.989007,
+          "date": "2026-09-08T04:01:51.989-04:00"
+        }
+      },
+      {
+        "start_time": {
+          "mach_absolute_time_ns": 988645165756958,
+          "mach_continuous_time_ns": 1114568588067666,
+          "wall_time_s": 810547321.918226,
+          "date": "2026-09-08T04:02:01.918-04:00"
+        },
+        "processes": [
+          {
+            "name": "Idlesse",
+            "pid": 8266,
+            "translated": false,
+            "page size": 16384,
+            "footprint": 103941248,
+            "auxiliary": {
+              "phys_footprint_peak": 198689800,
+              "phys_footprint": 103974016
+            }
+          }
+        ],
+        "errors": [],
+        "warnings": [],
+        "summary": {
+          "total": {
+            "dirty": 103941248,
+            "swapped": 66633728,
+            "clean": 24788992,
+            "reclaimable": 32768,
+            "wired": 65536,
+            "regions": 8524
+          }
+        },
+        "total footprint": 103941248,
+        "shared": [],
+        "end_time": {
+          "mach_absolute_time_ns": 988645240615333,
+          "mach_continuous_time_ns": 1114568662926041,
+          "wall_time_s": 810547321.993084,
+          "date": "2026-09-08T04:02:01.993-04:00"
+        }
+      }
+    ],
+    "page size": 16384
+  },
+  "cpuSnapshotPercent": 2.6,
+  "scope": "Idlesse process only; decoder helpers and GPU/system costs excluded"
+}

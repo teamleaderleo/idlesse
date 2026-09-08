@@ -17,6 +17,7 @@ TAHOE_DIAG="$HOME/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSa
 SHARED_SOURCES=(
   "$ROOT/Sources/Shared/Preferences.swift"
   "$ROOT/Sources/Shared/ImageLibrary.swift"
+  "$ROOT/Sources/Shared/DisplayImageDecoder.swift"
   "$ROOT/Sources/Shared/ImageCanvasView.swift"
   "$ROOT/Sources/Shared/PhotosProbe.swift"
 )
@@ -97,8 +98,12 @@ build_app() {
     -swift-version 5 \
     "${SWIFT_OPT[@]}" \
     -module-name IdlesseApp \
+    -framework AVFoundation \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
+    "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
+    "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
+    "$ROOT/Sources/Harness/Benchmark.swift" \
     "$ROOT/Sources/Harness/main.swift" \
     -framework AppKit \
     -framework Photos \
@@ -152,6 +157,15 @@ case "${1:-all}" in
       echo "$TAHOE_DIAG"
       echo "Install Idlesse, select it in Wallpaper → Screen Saver, click Options once, then run this command again."
     fi
+    ;;
+  capture-settings)
+    touch "$(dirname "$TAHOE_DIAG")/idlesse-capture-request"
+    log "Capture armed. Click Idlesse Options in Wallpaper settings."
+    log "Latest local render: $(dirname "$TAHOE_DIAG")/idlesse-settings.png"
+    ;;
+  clear-capture)
+    rm -f "$(dirname "$TAHOE_DIAG")/idlesse-capture-request" "$(dirname "$TAHOE_DIAG")/idlesse-settings.png" "$(dirname "$TAHOE_DIAG")/idlesse-settings.json"
+    log "Cleared local settings capture."
     ;;
   clear-diagnose)
     rm -f "$TAHOE_DIAG" 2>/dev/null || true

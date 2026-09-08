@@ -1,0 +1,20 @@
+[
+  {
+    "character": "Vivian",
+    "exit_code": 0,
+    "elapsed_seconds": 32.43,
+    "output": "Wallpaper checks passed: image, video loop, click-through, sleep/session overlap, pause, stop, cancellation\n"
+  },
+  {
+    "character": "Evelyn",
+    "exit_code": 0,
+    "elapsed_seconds": 31.1,
+    "output": "Wallpaper checks passed: image, video loop, click-through, sleep/session overlap, pause, stop, cancellation\n"
+  },
+  {
+    "character": "Jane",
+    "exit_code": 0,
+    "elapsed_seconds": 33.23,
+    "output": "Wallpaper checks passed: image, video loop, click-through, sleep/session overlap, pause, stop, cancellation\n"
+  }
+]

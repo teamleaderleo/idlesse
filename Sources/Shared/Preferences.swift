@@ -70,8 +70,10 @@ final class IdlessePreferences {
 
     let defaults: UserDefaults
 
-    private init() {
-        if let saverDefaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) {
+    init(defaults suppliedDefaults: UserDefaults? = nil) {
+        if let suppliedDefaults {
+            defaults = suppliedDefaults
+        } else if let saverDefaults = ScreenSaverDefaults(forModuleWithName: Self.moduleIdentifier) {
             defaults = saverDefaults
         } else {
             defaults = .standard

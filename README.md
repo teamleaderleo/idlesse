@@ -13,7 +13,7 @@ Current prototype features:
 - fit, fill, or show at actual size
 - choose the background color used around fitted images
 - show the same sequence on every display or offset the sequence per display
-- PhotoKit permission/album-visibility probe in Settings
+- Timing presets and keyboard-friendly preview playback controls
 
 ## Current status
 
@@ -102,9 +102,7 @@ The multi-display modes share one per-process shuffle seed. In **Same image on e
 
 ## Photos source
 
-Settings includes a small PhotoKit probe. **Connect Photos…** requests read access only in response to a click and reports how many album collections that host process can see.
-
-This is still a proof, not yet a slideshow source. Photos album playback remains a separate compatibility task.
+Photos album playback remains a separate compatibility task. Settings explains this limitation rather than offering a permission probe that cannot play albums. The prototype probe source remains available for development.
 
 See `docs/photos-source.md`.
 
@@ -112,4 +110,48 @@ See `docs/photos-source.md`.
 
 The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
 
-Next work: verify the Tahoe Options-triggered standalone settings presentation, then continue Photos-source work and distribution hardening.
+Next work: resolve repeated automated Options routing, then continue Photos-source work and distribution hardening. See `docs/local-verification.md` for verified installed-host behavior and the local capture workflow.
+
+## Memory and idle work
+
+Images are decoded with ImageIO at the backing-pixel size needed by the view,
+including Retina scaling and fit/fill geometry. Each image is capped at 16 million
+pixels and an 8192-pixel edge. This bounds retained image dimensions, not total
+process memory or temporary decoder allocations. Extreme crops and very large
+Actual Size images can lose detail at the cap. Originals remain untouched.
+Only the first frame/page is displayed. Color space and orientation are retained;
+there is no full-resolution fallback or persistent image cache.
+
+The canvas retains one image while holding and two during a crossfade. Stopping
+releases both images and the folder index. Hidden/minimized development previews
+stop playback, and the unused host animation callback is reduced to hourly; the
+30 Hz fade timer runs only during transitions. Folder refresh remains every 15
+seconds, with timer tolerance for coalescing wakeups.
+
+Run `bash test.sh` for generated-image decoder checks and `CONFIG=release ./build.sh`
+for optimized bundles. This is not yet a measured whole-process comparison against
+Apple's saver: the host, windows and graphics compositor have additional costs.
+Large-library directory scans and image decoding still run synchronously; moving
+those off the UI thread is a remaining performance task.
+
+## Preview controls and timing presets
+
+The standalone preview includes Pause/Resume (Space), Next (Right Arrow), Show in
+Finder, and Settings (Command-comma). Playback controls are confined to the preview;
+the installed saver keeps normal macOS wake/lock behavior. Pausing holds the
+picture; minimizing or hiding the preview releases its decoded images.
+
+Settings groups pictures, pace and presentation. Calm, Gallery and Quick presets
+fill in timing fields; changes are saved only with Save. Invalid timing stays
+unsaved and produces an explanation. Cloud folders must be locally downloaded;
+Photos album playback is not implemented.
+
+See [measured performance and limitations](docs/performance-2026-09-08.md).
+Run `python3 Benchmarks/run.py` after a release build for isolated stress tests.
+
+## Wallpaper prototype
+
+The app now includes **Wallpaper…** for a desktop image or muted looping MP4/MOV,
+with a menu-bar Stop control. This is separate from the screensaver and leaves
+your saved macOS wallpaper intact. See [wallpaper mode](docs/wallpaper-prototype.md)
+for controls, measured resource use, verification and current limitations.

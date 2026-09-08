@@ -1,0 +1,262 @@
+{
+  "synthetic": [
+    {
+      "mode": "bounded",
+      "elapsedSeconds": 27.6613417082699,
+      "peakSampledFootprint": 112952952,
+      "baseline": {
+        "footprint": 6029912,
+        "phase": "baseline",
+        "resident": 26394624,
+        "retainedImages": 0,
+        "seconds": 2.004159614443779e-05
+      },
+      "last": {
+        "footprint": 46319032,
+        "phase": "released",
+        "resident": 349339648,
+        "retainedImages": 0,
+        "seconds": 27.659534208243713
+      }
+    },
+    {
+      "mode": "full-resolution",
+      "elapsedSeconds": 26.10779895831365,
+      "peakSampledFootprint": 44451208,
+      "baseline": {
+        "footprint": 6193776,
+        "phase": "baseline",
+        "resident": 26329088,
+        "retainedImages": 0,
+        "seconds": 3.462505992501974e-05
+      },
+      "last": {
+        "footprint": 44352760,
+        "phase": "released",
+        "resident": 363593728,
+        "retainedImages": 0,
+        "seconds": 26.106798541732132
+      }
+    },
+    {
+      "mode": "lifecycle",
+      "elapsedSeconds": 33.232496916665696,
+      "peakSampledFootprint": 28001792,
+      "baseline": {
+        "footprint": 7225992,
+        "phase": "baseline",
+        "resident": 29982720,
+        "retainedImages": 0,
+        "seconds": 2.4458393454551697e-05
+      },
+      "last": {
+        "footprint": 28001792,
+        "phase": "stopped-7",
+        "resident": 290177024,
+        "retainedImages": 0,
+        "seconds": 33.23159895837307
+      }
+    }
+  ],
+  "live": {
+    "installed-processes": [
+      {
+        "time": "2026-09-08T03:17:00.226-04:00",
+        "processes": [
+          {
+            "pid": 98678,
+            "name": "Flurry",
+            "footprint": 846168640
+          },
+          {
+            "pid": 92797,
+            "name": "legacyScreenSaver",
+            "footprint": 474727936
+          },
+          {
+            "pid": 92796,
+            "name": "legacyScreenSaver",
+            "footprint": 23724896
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:17:10.730-04:00",
+        "processes": [
+          {
+            "pid": 98678,
+            "name": "Flurry",
+            "footprint": 846168640
+          },
+          {
+            "pid": 92797,
+            "name": "legacyScreenSaver",
+            "footprint": 311887336
+          },
+          {
+            "pid": 92796,
+            "name": "legacyScreenSaver",
+            "footprint": 23724896
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:17:20.729-04:00",
+        "processes": [
+          {
+            "pid": 98678,
+            "name": "Flurry",
+            "footprint": 846168640
+          },
+          {
+            "pid": 92797,
+            "name": "legacyScreenSaver",
+            "footprint": 311969280
+          },
+          {
+            "pid": 92796,
+            "name": "legacyScreenSaver",
+            "footprint": 23724896
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:17:30.728-04:00",
+        "processes": [
+          {
+            "pid": 98678,
+            "name": "Flurry",
+            "footprint": 846168640
+          },
+          {
+            "pid": 92797,
+            "name": "legacyScreenSaver",
+            "footprint": 474695168
+          },
+          {
+            "pid": 92796,
+            "name": "legacyScreenSaver",
+            "footprint": 23724896
+          }
+        ]
+      }
+    ],
+    "preview-paused": [
+      {
+        "time": "2026-09-08T03:18:28.636-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 72189200
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:18:39.139-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 68994320
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:18:49.140-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 68994320
+          }
+        ]
+      }
+    ],
+    "preview-playing-before": [
+      {
+        "time": "2026-09-08T03:19:30.517-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 141985016
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:19:41.015-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 141968680
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:19:51.016-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 141919528
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:20:01.015-04:00",
+        "processes": [
+          {
+            "pid": 96975,
+            "name": "Idlesse",
+            "footprint": 141903144
+          }
+        ]
+      }
+    ],
+    "preview-playing-after": [
+      {
+        "time": "2026-09-08T03:21:24.659-04:00",
+        "processes": [
+          {
+            "pid": 98454,
+            "name": "Idlesse",
+            "footprint": 131761184
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:21:35.157-04:00",
+        "processes": [
+          {
+            "pid": 98454,
+            "name": "Idlesse",
+            "footprint": 129958992
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:21:45.159-04:00",
+        "processes": [
+          {
+            "pid": 98454,
+            "name": "Idlesse",
+            "footprint": 139445352
+          }
+        ]
+      },
+      {
+        "time": "2026-09-08T03:21:55.158-04:00",
+        "processes": [
+          {
+            "pid": 98454,
+            "name": "Idlesse",
+            "footprint": 144262368
+          }
+        ]
+      }
+    ]
+  },
+  "notes": "Raw samples remain in build/benchmarks. MiB = bytes / 1048576. Different app workloads are not a controlled comparison."
+}
