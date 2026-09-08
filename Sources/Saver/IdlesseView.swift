@@ -28,7 +28,7 @@ final class IdlesseView: ScreenSaverView {
     }()
 
     private let canvas = ImageCanvasView(frame: .zero)
-    private let preferences = IdlessePreferences.shared
+    private let preferences: IdlessePreferences
 
     private lazy var library = ImageLibrary(preferences: preferences)
 
@@ -40,14 +40,56 @@ final class IdlesseView: ScreenSaverView {
     private var currentURL: URL?
     private var nextURL: URL?
     private var running = false
+    private(set) var isPlaybackPaused = false
+    var displayedFileURL: URL? { currentURL }
+    var retainedImageCount: Int {
+        (canvas.currentImage == nil ? 0 : 1) + (canvas.nextImage == nil ? 0 : 1)
+    }
+
+    /// Preview controls never intercept keys in the system screen saver.
+    func togglePlaybackPause() {
+        guard running else { return }
+        isPlaybackPaused.toggle()
+        if isPlaybackPaused {
+            displayTimer?.invalidate()
+            displayTimer = nil
+            if canvas.nextImage != nil {
+                fadeTimer?.invalidate()
+                fadeTimer = nil
+                finishTransition()
+            }
+        } else {
+            scheduleNextImage()
+        }
+    }
+
+    func showNextImage() {
+        guard running else { return }
+        displayTimer?.invalidate()
+        fadeTimer?.invalidate()
+        displayTimer = nil
+        fadeTimer = nil
+        if canvas.nextImage != nil { finishTransition() }
+        displayTimer?.invalidate()
+        displayTimer = nil
+        beginTransition()
+    }
 
     override init(frame: NSRect, isPreview: Bool) {
+        preferences = .shared
         super.init(frame: frame, isPreview: isPreview)!
         commonInit()
         diagnostic("init(frame:isPreview:)")
     }
 
+    init(frame: NSRect, preferences: IdlessePreferences) {
+        self.preferences = preferences
+        super.init(frame: frame, isPreview: false)!
+        commonInit()
+    }
+
     required init?(coder: NSCoder) {
+        preferences = .shared
         super.init(coder: coder)
         commonInit()
         diagnostic("init(coder:)")
@@ -92,13 +134,20 @@ final class IdlesseView: ScreenSaverView {
         diagnostic("stopAnimation")
         running = false
         stopTimers()
-        library.stopAccess()
+        canvas.currentImage = nil
+        canvas.nextImage = nil
+        currentURL = nil
+        nextURL = nil
+        canvas.transitionProgress = 0
+        library.releaseContents()
         super.stopAnimation()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         diagnostic(window == nil ? "viewDidMoveToWindow(nil)" : "viewDidMoveToWindow(window)")
+        // Tahoe can detach a view without calling stopAnimation first.
+        if window == nil && running { stopAnimation() }
     }
 
     /// Used by the standalone development preview after its settings window saves.
@@ -116,6 +165,8 @@ final class IdlesseView: ScreenSaverView {
     }
 
     private func commonInit() {
+        // Our display/fade timers own drawing; the host frame callback does no work.
+        animationTimeInterval = 3600
         autoresizesSubviews = true
         canvas.frame = bounds
         canvas.autoresizingMask = [.width, .height]
@@ -149,9 +200,7 @@ final class IdlesseView: ScreenSaverView {
             }
 
             Self.configureController.reload()
-            settingsWindow.level = NSWindow.Level(
-                rawValue: NSWindow.Level.screenSaver.rawValue + 100
-            )
+            settingsWindow.level = .floating
             settingsWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             settingsWindow.hidesOnDeactivate = false
             settingsWindow.center()
@@ -164,6 +213,9 @@ final class IdlesseView: ScreenSaverView {
             settingsWindow.orderFrontRegardless()
 
             self.diagnostic("Options click: Settings ordered front")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                Self.configureController.captureDiagnosticIfRequested()
+            }
         }
     }
 
@@ -183,7 +235,11 @@ final class IdlesseView: ScreenSaverView {
         guard let data = line.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: Self.diagnosticURL) {
             defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
+            // Keep only a bounded diagnostic history, including in long-lived hosts.
+            if let end = try? handle.seekToEnd(), end + UInt64(data.count) > 256 * 1024 {
+                try? handle.truncate(atOffset: 0)
+                try? handle.seek(toOffset: 0)
+            }
             try? handle.write(contentsOf: data)
         } else {
             try? data.write(to: Self.diagnosticURL, options: .atomic)
@@ -193,15 +249,18 @@ final class IdlesseView: ScreenSaverView {
     private func restartSlideshow() {
         stopTimers()
         preferences.reloadFromDisk()
+        guard running else { return }
 
+        let scale = window?.backingScaleFactor ?? 2
+        library.displayPixelSize = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
         library.playbackOffset = preferences.multiDisplayMode == .different ? currentDisplayIndex : 0
-        library.reload()
-
+        // Drop the previous decoded images before scanning a potentially large folder.
         currentURL = nil
         nextURL = nil
         canvas.currentImage = nil
         canvas.nextImage = nil
         canvas.transitionProgress = 0
+        library.reload()
         canvas.scalingMode = preferences.scalingMode
         canvas.backdropColor = preferences.backgroundColor
         canvas.message = library.lastError
@@ -247,6 +306,7 @@ final class IdlesseView: ScreenSaverView {
         displayTimer?.invalidate()
         displayTimer = nil
 
+        guard !isPlaybackPaused else { return }
         let timer = Timer(timeInterval: preferences.displayDuration, repeats: false) { [weak self] _ in
             self?.beginTransition()
         }
@@ -260,6 +320,7 @@ final class IdlesseView: ScreenSaverView {
         let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
             self?.refreshLibrary()
         }
+        timer.tolerance = 3
         libraryRefreshTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }

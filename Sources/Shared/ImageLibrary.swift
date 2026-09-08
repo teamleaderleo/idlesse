@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 final class ImageLibrary {
@@ -27,6 +28,7 @@ final class ImageLibrary {
     private var folderURL: URL?
     private var securityScopeStarted = false
 
+    var displayPixelSize = CGSize(width: 1920, height: 1080)
     var playbackOffset = 0
     private(set) var lastError: String?
 
@@ -105,13 +107,21 @@ final class ImageLibrary {
             cursor += 1
             examined += 1
 
-            if let image = NSImage(contentsOf: url) {
+            if let image = autoreleasepool(invoking: {
+                DisplayImageDecoder.load(url, target: displayPixelSize, mode: preferences.scalingMode)
+            }) {
                 return Item(url: url, image: image)
             }
         }
 
         lastError = "Idlesse found image files, but macOS could not open them."
         return nil
+    }
+
+    func releaseContents() {
+        imageEntries = []
+        playbackOrder = []
+        stopAccess()
     }
 
     func stopAccess() {
@@ -130,14 +140,16 @@ final class ImageLibrary {
         switch preferences.playbackOrder {
         case .random:
             let cycleSeed = Self.sessionShuffleSeed &+ UInt64(cycle) &* 0x9E3779B97F4A7C15
-            playbackOrder = imageEntries.map(\.url).sorted { lhs, rhs in
-                let left = stableScore(for: lhs, seed: cycleSeed)
-                let right = stableScore(for: rhs, seed: cycleSeed)
-                if left == right {
-                    return lhs.path < rhs.path
+            // Hash each path once, rather than twice per sort comparison.
+            // Preserve the existing ordering so displays still share one deck.
+            playbackOrder = imageEntries.map { entry in
+                (url: entry.url, score: stableScore(for: entry.url, seed: cycleSeed))
+            }.sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.url.path < rhs.url.path
                 }
-                return left < right
-            }
+                return lhs.score < rhs.score
+            }.map(\.url)
 
         case .nameAscending:
             playbackOrder = imageEntries.map(\.url).sorted(by: compareNamesAscending)
