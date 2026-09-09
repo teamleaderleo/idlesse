@@ -15,6 +15,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
+    private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let poster = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "Choose a scene")
     private let detail = NSTextField(wrappingLabelWithString: "")
@@ -59,6 +60,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
         let add = NSButton(title: "Add Scenes…", target: self, action: #selector(addScenes))
+        collectionActions.addItem(withTitle: "Collections")
+        collectionActions.target = self
+        collectionActions.action = #selector(collectionAction)
         let toolbar = NSStackView(views: [search, filter, sort, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
@@ -87,7 +91,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let duplicate = NSButton(title: "Make a Copy in Studio", target: self, action: #selector(duplicateScene))
         let primary = NSStackView(views: [edit, duplicate, apply])
         for button in [add, favorite, apply, edit, remove, refresh, duplicate] { button.bezelStyle = .rounded }
-        let right = NSStackView(views: [titleLabel, poster, detail, actions, primary])
+        let right = NSStackView(views: [titleLabel, collectionActions, poster, detail, actions, primary])
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
@@ -135,8 +139,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func controlTextDidChange(_ obj: Notification) { reload() }
     private func reload(selecting id: String? = nil) {
         let previous = id ?? selected?.id
+        let collectionID = filter.selectedItem?.representedObject as? String
+        let previousFilter = min(filter.indexOfSelectedItem, 3)
+        filter.removeAllItems()
+        filter.addItems(withTitles: ["All Scenes", "Built-in", "Imported", "Favorites"])
+        for collection in store.catalog.collections {
+            filter.addItem(withTitle: "Collection: \(collection.name)")
+            filter.lastItem?.representedObject = collection.id
+        }
+        if let collectionID, let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == collectionID }) {
+            filter.selectItem(at: index)
+        } else { filter.selectItem(at: max(0, previousFilter)) }
+        let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
         items = allItems().filter { item in
             let matches = search.stringValue.isEmpty || item.title.localizedCaseInsensitiveContains(search.stringValue)
+            if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
             switch filter.indexOfSelectedItem {
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
@@ -192,6 +209,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         apply.isEnabled = selected != nil
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
+        collectionActions.removeAllItems()
+        collectionActions.addItems(withTitles: ["Collections", "New Collection…"])
+        if filter.selectedItem?.representedObject is String {
+            collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…"])
+        }
+        if let selected {
+            for collection in store.catalog.collections {
+                collectionActions.addItem(withTitle: "\(collection.sceneIDs.contains(selected.id) ? "Remove from" : "Add to") \(collection.name)")
+                collectionActions.lastItem?.representedObject = collection.id
+            }
+        }
         guard let selected else { titleLabel.stringValue = "No scenes"; detail.stringValue = "Add a scene or change the search/filter."; return }
         titleLabel.stringValue = selected.title
         favorite.title = store.catalog.favorites.contains(selected.id) ? "★ Favorited" : "☆ Favorite"
@@ -292,6 +320,40 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { detail.stringValue = error.localizedDescription }
     }
     @objc private func useScene() { act(editing: false) }
+    @objc private func collectionAction() {
+        guard let item = collectionActions.selectedItem else { return }
+        if let id = item.representedObject as? String, let selected {
+            do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
+            catch { detail.stringValue = error.localizedDescription }
+            return
+        }
+        let activeID = filter.selectedItem?.representedObject as? String
+        let deleting = item.title == "Delete Collection…"
+        let renaming = item.title == "Rename Collection…"
+        guard item.title == "New Collection…" || deleting || renaming else { return }
+        let alert = NSAlert()
+        alert.messageText = deleting ? "Delete this collection?" : (renaming ? "Rename Collection" : "New Collection")
+        alert.informativeText = deleting ? "Scenes and original files stay in your Library." : "Give this group of scenes a name."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = renaming ? (store.catalog.collections.first { $0.id == activeID }?.name ?? "") : ""
+        if !deleting { alert.accessoryView = field }
+        alert.addButton(withTitle: deleting ? "Delete Collection" : "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window!) { [weak self] result in
+            guard let self, result == .alertFirstButtonReturn else { return }
+            do {
+                if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0) }
+                else if renaming, let activeID { try self.store.renameCollection(activeID, name: field.stringValue) }
+                else {
+                    let collection = try self.store.createCollection(name: field.stringValue)
+                    self.reload()
+                    self.filter.selectItem(at: self.filter.itemArray.firstIndex { ($0.representedObject as? String) == collection.id }!)
+                    self.search.stringValue = ""
+                }
+                self.reload()
+            } catch { self.detail.stringValue = error.localizedDescription }
+        }
+    }
     @objc private func doubleClickScene() {
         guard items.indices.contains(table.clickedRow) else { return }
         selected = items[table.clickedRow]
@@ -349,6 +411,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.count == 1 && controller.items[0].title == "Undertow")
         precondition(controller.selected?.id == controller.items[0].id)
+        let collection = try controller.store.createCollection(name: "Psychedelic")
+        try controller.store.toggleMembership(sceneID: controller.selected!.id, collectionID: collection.id)
+        controller.reload()
+        controller.filter.selectItem(at: controller.filter.itemArray.firstIndex { ($0.representedObject as? String) == collection.id }!)
+        controller.reload()
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        precondition(controller.collectionActions.itemArray.contains { $0.title == "Rename Collection…" })
         let root = controller.window!.contentView!
         root.layoutSubtreeIfNeeded()
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
