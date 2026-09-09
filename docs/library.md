@@ -44,10 +44,12 @@ index keeps security-scoped bookmarks under Application Support/Idlesse/Library,
 with up to 128 imports and a 1 MiB index limit. A corrupt index is preserved and
 reported, not overwritten. A moved/unavailable file can be re-added through the picker.
 
-Posters are generated only for the selected scene. Procedural/image compositions
+Posters are generated only for the selected scene. All compositions
 are rendered at scene time 2 seconds with pointer/audio grants off, then their GPU
-resources are released. Video scenes show a thumbnail of their first video node;
-Studio supplies the complete moving composition. This is a still-preview library,
+resources are released. Video frames are decoded at the same preview time and
+composited with layers, masks, blending, and effects. Authored video-following uses
+scene transport time; ordinary looping video uses elapsed preview time.
+Studio supplies the moving composition. This is a still-preview library,
 not a grid of continuously playing wallpapers.
 
 The memory cache holds at most eight 512-square posters (about 8 MiB pixel data).
@@ -59,7 +61,7 @@ Revision checks run off the main thread, without a background folder scan or tim
 Edits during generation discard the result. Refresh Preview forces regeneration. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: weekday rules, collection reordering, and full video-composition posters. Imported
+Still missing: weekday rules, collection reordering. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 
 Validation includes index round trips/removal preservation, generated Metal posters,
