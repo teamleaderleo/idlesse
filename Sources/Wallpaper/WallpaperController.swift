@@ -296,7 +296,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func watch(url: URL, scene: SceneDescriptor) {
         watcher = nil
         guard url.pathExtension.lowercased() == "idlesse" else { return }
-        watcher = SceneWatcher(package: url, assets: scene.allNodes.compactMap { $0.assetURL }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.allNodes.flatMap { $0.assets }) { [weak self] in
             guard let self, self.selectedURL == url else { return }
             self.select(url, reloading: true)
         }
@@ -408,9 +408,45 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         surfaces.removeAll()
     }
 
+    static func smokeTransitions(imageURL: URL) throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "wallpaperTransitionSeconds")
+        defer {
+            if let previous { defaults.set(previous, forKey: "wallpaperTransitionSeconds") }
+            else { defaults.removeObject(forKey: "wallpaperTransitionSeconds") }
+        }
+        let controller = WallpaperController()
+        controller.presentsWindows = false
+        controller.transitionDuration = 0.5
+        let scene = SceneDescriptor(title: "Transition", assetURL: imageURL, kind: .image)
+        controller.retiring = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        let old = controller.retiring
+        controller.surfaces = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        controller.surfaces.forEach { $0.window.alphaValue = 0 }
+        controller.beginTransition()
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while controller.transitionTimer != nil && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+        }
+        precondition(controller.transitionTimer == nil && controller.retiring.isEmpty)
+        precondition(old.allSatisfy { $0.diagnostics.activeResources == 0 })
+        precondition(controller.surfaces.allSatisfy { $0.window.alphaValue == 1 })
+        controller.retiring = controller.surfaces
+        let interrupted = controller.retiring
+        controller.surfaces = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        controller.beginTransition()
+        controller.setDimmedForBedtime(true)
+        precondition(controller.transitionTimer == nil && controller.retiring.isEmpty)
+        precondition(interrupted.allSatisfy { $0.diagnostics.activeResources == 0 })
+        controller.stop()
+        precondition(controller.surfaces.isEmpty)
+    }
+
     private func beginTransition() {
-        for (next, old) in zip(surfaces, retiring) {
-            next.window.order(.above, relativeTo: old.window.windowNumber)
+        if presentsWindows {
+            for (next, old) in zip(surfaces, retiring) {
+                next.window.order(.above, relativeTo: old.window.windowNumber)
+            }
         }
         let start = ProcessInfo.processInfo.systemUptime
         let duration = transitionDuration

@@ -90,7 +90,7 @@ final class SceneDocument {
                 let value = try target.value(in: recovery.scene.nodes)
                 guard value.isFinite, try target.range(in: recovery.scene.nodes).contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
             }
-            if let url = node.assetURL {
+            for url in node.assets {
                 guard url.isFileURL, FileManager.default.isReadableFile(atPath: url.path) else {
                     throw SceneError.invalid("Recovery asset is unavailable: \(url.lastPathComponent). Restore its location and reopen Studio.")
                 }
@@ -184,7 +184,7 @@ final class SceneDocument {
     }
     func pruneAssets() {
         let scenes = [scene] + (savedScene.map { [$0] } ?? []) + (undoTargets + redoTargets).map { $0.scene }
-        let needed = Set(scenes.flatMap { $0.allNodes.compactMap { $0.assetURL } })
+        let needed = Set(scenes.flatMap { $0.allNodes.flatMap { $0.assets } })
         workingAssets.removeAll { url in
             guard !needed.contains(url) else { return false }
             url.stopAccessingSecurityScopedResource()

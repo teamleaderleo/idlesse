@@ -117,6 +117,7 @@ build_app() {
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
     "$ROOT/Sources/Harness/SceneTimelineView.swift" \
     "$ROOT/Sources/Harness/ScenePreviewHost.swift" \
+    "$ROOT/Sources/Harness/SceneVideoExporter.swift" \
     "$ROOT/Sources/Harness/SceneParameterControls.swift" \
     "$ROOT/Sources/Harness/SceneLayerList.swift" \
     "$ROOT/Sources/Harness/SceneCanvasInteraction.swift" \

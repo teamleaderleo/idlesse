@@ -318,3 +318,5 @@ It requires ffmpeg and the built app. Use `--keep-stills` to retain first/middle
 frames for visual inspection. Outputs are never overwritten. Duration/fps are
 bounded to 180 total frames; this samples scene time and does not measure real-time
 playback performance. The app's offscreen export restrictions still apply.
+
+Studio now exposes Span Desktop in Playback, Mask & Blend for image/node masks and normal/add/multiply/screen modes, particle image sprites in Emitter, and cancellable silent HEVC video export (1080p/4K, 30/60 fps). See docs/scenes.md for format and export limits.

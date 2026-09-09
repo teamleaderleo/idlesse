@@ -49,8 +49,14 @@ struct SceneDescriptor: Codable, Sendable {
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
-    var animated: Bool { usesSignals || nodes.contains { $0.animated } }
+    var requiresMetal: Bool { canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var animated: Bool {
+        if usesSignals || nodes.contains(where: { $0.animated }) { return true }
+        let referenced = Set(allNodes.compactMap { $0.maskNodeID })
+        return allNodes.filter { referenced.contains($0.id) }.flatMap { $0.descendants }.contains {
+            $0.hasAnimatedEffects || [.video, .gradient, .particles].contains($0.kind)
+        }
+    }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
@@ -317,6 +323,15 @@ struct SceneNode: Codable, Sendable {
             effects = try values.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         }
     }
+    enum Blend: String, Codable, Sendable { case normal, add, multiply, screen }
+    enum MaskChannel: String, Codable, Sendable { case alpha, luma }
+    var blend: Blend? = nil
+    var maskAsset: URL? = nil
+    var maskNodeID: UUID? = nil
+    var maskChannel: MaskChannel? = nil
+    var sprite: URL? = nil
+    var needsComposition: Bool { blend != nil && blend != .normal || maskAsset != nil || maskNodeID != nil }
+    var assets: [URL] { [assetURL, maskAsset, sprite].compactMap { $0 } }
     var style: Style = .plain
     var name: String? = nil
     var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : kind == .particles ? "Particles" : "Gradient") }
@@ -334,11 +349,16 @@ struct SceneNode: Codable, Sendable {
     var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
     var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : kind != .image)) }
     func duplicated() -> SceneNode {
-        var copy = self
-        copy.id = UUID()
-        for index in copy.style.effects.indices { copy.style.effects[index].id = UUID() }
-        if kind == .group { copy.content = .group(children.map { $0.duplicated() }) }
-        return copy
+        let identities = Dictionary(uniqueKeysWithValues: descendants.map { ($0.id, UUID()) })
+        func copy(_ node: SceneNode) -> SceneNode {
+            var result = node
+            result.id = identities[node.id]!
+            if let mask = node.maskNodeID { result.maskNodeID = identities[mask] ?? mask }
+            for index in result.style.effects.indices { result.style.effects[index].id = UUID() }
+            if node.kind == .group { result.content = .group(node.children.map(copy)) }
+            return result
+        }
+        return copy(self)
     }
     var assetURL: URL? {
         switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles: return nil }
@@ -371,6 +391,11 @@ struct LocalSceneSource: SceneSource {
         let nodes: [Node]?
         struct Node: Decodable {
             let id: UUID?
+            let blend: SceneNode.Blend?
+            let maskAsset: String?
+            let maskNodeID: UUID?
+            let maskChannel: SceneNode.MaskChannel?
+            let sprite: String?
             let style: SceneNode.Style?
             let children: [Node]?
             let name: String?
@@ -440,7 +465,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...19).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...20).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -497,7 +522,21 @@ struct LocalSceneSource: SceneSource {
                 }
                 if decodedStyle.effects[index].id == nil { decodedStyle.effects[index].id = UUID() }
             }
-            return SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: decodedStyle, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            var result = SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: decodedStyle, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            guard manifest.version >= 20 || (node.blend == nil && node.maskAsset == nil && node.maskNodeID == nil && node.maskChannel == nil && node.sprite == nil) else {
+                throw SceneError.invalid("Asset masks, blend modes and sprites require scene version 20.")
+            }
+            func imageAsset(_ path: String?) throws -> URL? {
+                guard let path else { return nil }
+                let url = try contained(path, in: root)
+                guard try kind(url) == .image, try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                    throw SceneError.invalid("Mask and sprite assets must be regular image files.")
+                }
+                return url
+            }
+            result.blend = node.blend; result.maskNodeID = node.maskNodeID; result.maskChannel = node.maskChannel
+            result.maskAsset = try imageAsset(node.maskAsset); result.sprite = try imageAsset(node.sprite)
+            return result
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
@@ -667,6 +706,7 @@ enum ScenePackageWriter {
         }
         try files.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
         var retained = Set<String>()
+        var copiedAssets: [URL: String] = [:]
         func encode(_ node: SceneNode) throws -> [String: Any] {
             try Task.checkCancellation()
             var json: [String: Any] = ["id": node.id.uuidString, "type": node.kind.rawValue, "opacity": node.opacity, "visible": node.visible, "locked": node.locked,
@@ -677,17 +717,25 @@ enum ScenePackageWriter {
             if node.style != .plain {
                 json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
             }
-            if let source = node.assetURL {
+            if let blend = node.blend { json["blend"] = blend.rawValue }
+            if let id = node.maskNodeID { json["maskNodeID"] = id.uuidString }
+            if let channel = node.maskChannel { json["maskChannel"] = channel.rawValue }
+            for (key, source) in [("asset", node.assetURL), ("maskAsset", node.maskAsset), ("sprite", node.sprite)] {
+                guard let source else { continue }
                 let root = destination.resolvingSymlinksInPath().path + "/"
                 let path = source.resolvingSymlinksInPath().path
                 let relative: String
-                if expected != nil, path.hasPrefix(root) {
+                let identity = source.resolvingSymlinksInPath().standardizedFileURL
+                if let existing = copiedAssets[identity] {
+                    relative = existing
+                } else if expected != nil, path.hasPrefix(root) {
                     relative = String(path.dropFirst(root.count))
                 } else {
                     relative = "assets/\(UUID().uuidString).\(source.pathExtension.lowercased())"
                     try files.copyItem(at: source, to: staging.appendingPathComponent(relative))
                 }
-                json["asset"] = relative
+                copiedAssets[identity] = relative
+                json[key] = relative
                 retained.insert(relative)
             }
             if node.kind == .group { json["children"] = try node.children.map(encode) }
@@ -705,7 +753,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.canvas != nil ? 19 : scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.needsComposition || $0.sprite != nil || $0.blend != nil || $0.maskChannel != nil } ? 20 : scene.canvas != nil ? 19 : scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -720,7 +768,7 @@ enum ScenePackageWriter {
             // by this edit. Preserve ancillary files, previews, and unrelated assets.
             let previous = try LocalSceneSource.read(destination)
             let root = destination.resolvingSymlinksInPath().path + "/"
-            for asset in previous.allNodes.compactMap({ $0.assetURL }) {
+            for asset in previous.allNodes.flatMap({ $0.assets }) {
                 let path = asset.resolvingSymlinksInPath().path
                 if path.hasPrefix(root) {
                     let relative = String(path.dropFirst(root.count))
@@ -751,7 +799,7 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
     var order: [Int] = []
     for node in new {
         guard let index = old.firstIndex(where: { $0.id == node.id }),
-              old[index].kind == node.kind, old[index].assetURL == node.assetURL else { return nil }
+              old[index].kind == node.kind, old[index].assets == node.assets else { return nil }
         if node.kind == .group, sceneResourceOrder(from: old[index].children, to: node.children) == nil { return nil }
         order.append(index)
     }
@@ -790,6 +838,22 @@ enum SceneBudget {
             return result
         }
         let nodes = try walk(roots, depth: 0)
+        let byID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var visiting = Set<UUID>(), visited = Set<UUID>()
+        func checkReferences(_ node: SceneNode) throws {
+            guard !visiting.contains(node.id) else { throw SceneError.invalid("Masks and groups cannot form a reference cycle.") }
+            if visited.contains(node.id) { return }
+            visiting.insert(node.id)
+            guard node.maskAsset == nil || node.maskNodeID == nil else { throw SceneError.invalid("Choose either an image mask or a node mask.") }
+            guard node.sprite == nil || node.kind == .particles else { throw SceneError.invalid("Only particles can use a sprite.") }
+            if let id = node.maskNodeID {
+                guard let mask = byID[id] else { throw SceneError.invalid("The mask layer no longer exists. Remove its mask reference first.") }
+                try checkReferences(mask)
+            }
+            for child in node.children { try checkReferences(child) }
+            visiting.remove(node.id); visited.insert(node.id)
+        }
+        for node in nodes { try checkReferences(node) }
         guard nodes.filter({ $0.kind == .particles }).count <= 4 else { throw SceneError.invalid("A scene supports at most four particle emitters.") }
         let effectIDs = nodes.flatMap { $0.style.effects }.compactMap(\.id)
         guard effectIDs.count == nodes.reduce(0, { $0 + $1.style.effects.count }), Set(effectIDs).count == effectIDs.count else {
@@ -804,13 +868,19 @@ enum SceneBudget {
     /// Two in-flight frames share a fixed byte allowance. Larger group surfaces
     /// are reduced uniformly; images/video assets themselves are never rewritten.
     static func groupTargetSize(width: Double, height: Double, count: Int) -> (width: Int, height: Int)? {
-        guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...(maxGroups + 3 * maxNodes)).contains(count) else { return nil }
+        guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...(maxGroups + 4 * maxNodes + 2)).contains(count) else { return nil }
         let pixels = Double(intermediateTextureBytes / (2 * count) - 65_536) / 4
         let scale = min(1, 16384 / max(width, height), sqrt(pixels / width / height))
         return (max(1, Int(floor(width * scale))), max(1, Int(floor(height * scale))))
     }
     static func imagePixels(_ nodes: [SceneNode]) -> Int {
-        min(16_000_000, decodedImagePixels / max(1, nodes.flatMap { $0.descendants }.filter { $0.kind == .image }.count))
+        var count = 0
+        for node in nodes.flatMap({ $0.descendants }) {
+            if node.kind == .image { count += 1 }
+            if node.maskAsset != nil { count += 1 }
+            if node.sprite != nil { count += 1 }
+        }
+        return min(16_000_000, decodedImagePixels / max(1, count))
     }
 }
 

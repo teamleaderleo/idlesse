@@ -171,6 +171,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let nodePicker = SceneLayerList()
     private let timeline = SceneTimelineView(frame: .zero)
     private var transformFields: [NSTextField] = []
+    private var exportTask: Task<Void, Never>?
+    private let exportButton = NSButton(title: "Export Video…", target: nil, action: nil)
     private let saveCopyButton = NSButton(title: "Save As…", target: nil, action: nil)
     private var draft: Bool { get { document.draft } set { document.draft = newValue } }
     private var saving: Bool { get { document.busy } set { document.busy = newValue } }
@@ -388,6 +390,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             inspector.addArrangedSubview(row)
         }
         inspector.addArrangedSubview(NSButton(title: "Appearance…", target: self, action: #selector(editAppearance)))
+        inspector.addArrangedSubview(NSButton(title: "Mask & Blend…", target: self, action: #selector(editCompositing)))
         inspector.addArrangedSubview(NSStackView(views: [
             NSButton(title: "Controls…", target: self, action: #selector(editControls)),
             NSButton(title: "Bind…", target: self, action: #selector(editBinding))]))
@@ -409,6 +412,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         saveButton.action = #selector(saveDocument)
         inspector.addArrangedSubview(saveButton)
         inspector.addArrangedSubview(saveCopyButton)
+        exportButton.target = self; exportButton.action = #selector(exportVideo)
+        inspector.addArrangedSubview(exportButton)
         inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
         let hint = NSTextField(wrappingLabelWithString: "Expand groups to edit children. Drag rows to reorder siblings.")
         hint.font = .systemFont(ofSize: 11)
@@ -597,6 +602,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         selectNode()
         applyButton.isEnabled = selectedURL != nil && !draft && !saving
         saveCopyButton.isEnabled = !saving
+        exportButton.isEnabled = !saving
         saveButton.isEnabled = !saving
         nameField.isEditable = !saving
         duplicateButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
@@ -891,6 +897,62 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Binding", controls: next)
         }
     }
+    @objc private func editCompositing() {
+        guard !saving, var node = editor.selectedNode, !node.locked else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Mask & Blend — " + node.displayName
+        dialog.informativeText = "Masks cover the scene canvas after this layer's transform. Node masks include that layer's effects and transform; hidden layers can still supply a mask. Image masks stretch to the canvas. Use an image layer as the mask to position it."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let blend = NSPopUpButton()
+        let blends: [SceneNode.Blend] = [.normal, .add, .multiply, .screen]
+        blend.addItems(withTitles: ["Normal", "Add", "Multiply", "Screen"])
+        blend.selectItem(at: blends.firstIndex(of: node.blend ?? .normal) ?? 0)
+        let masks = scene.allNodes.filter { $0.id != node.id }
+        let mask = NSPopUpButton()
+        mask.addItems(withTitles: ["No asset/node mask", "Choose Image…", "Keep Current Image"] + masks.map { $0.displayName })
+        mask.item(at: 2)?.isEnabled = node.maskAsset != nil
+        mask.selectItem(at: node.maskAsset != nil ? 2 : node.maskNodeID.flatMap { id in masks.firstIndex { $0.id == id }.map { $0 + 3 } } ?? 0)
+        let channel = NSPopUpButton()
+        channel.addItems(withTitles: ["Alpha", "Luminance"])
+        channel.selectItem(at: node.maskChannel == .luma ? 1 : 0)
+        let fields = NSStackView(views: [NSTextField(labelWithString: "Blend"), blend,
+            NSTextField(labelWithString: "Mask source"), mask, NSTextField(labelWithString: "Mask channel"), channel])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+        dialog.accessoryView = fields
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.editor.selectedNode?.id == node.id, !self.saving else { return }
+            node.blend = blends[blend.indexOfSelectedItem] == .normal ? nil : blends[blend.indexOfSelectedItem]
+            node.maskChannel = channel.indexOfSelectedItem == 1 ? .luma : nil
+            let choice = mask.indexOfSelectedItem
+            if choice != 2 { node.maskAsset = nil }
+            node.maskNodeID = choice >= 3 ? masks[choice - 3].id : nil
+            if choice == 1 { self.chooseLayerImage(node, sprite: false) }
+            else { self.editor.replaceSelected(node, name: "Change Mask and Blend") }
+        }
+    }
+
+    private func chooseLayerImage(_ proposed: SceneNode, sprite: Bool) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .heic]
+        panel.prompt = sprite ? "Use Sprite" : "Use Mask"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url, !self.saving,
+                  self.editor.selectedNode?.id == proposed.id, self.editor.selectedNode?.locked == false else { return }
+            let access = url.startAccessingSecurityScopedResource()
+            var adopted = false
+            defer { if access && !adopted { url.stopAccessingSecurityScopedResource() } }
+            var node = proposed
+            if sprite { node.sprite = url } else { node.maskAsset = url; node.maskNodeID = nil }
+            var roots = self.scene.nodes
+            _ = SceneTree.edit(node.id, in: &roots) { siblings, index in siblings[index] = node }
+            if self.applyEdit(roots, selected: self.editor.selection, name: sprite ? "Change Particle Sprite" : "Change Image Mask"),
+               access && !self.importedScopes.contains(url) {
+                self.importedScopes.append(url); adopted = true
+            }
+        }
+    }
+
     @objc private func editAppearance() {
         guard !saving, var node = editor.selectedNode else { return }
         let dialog = NSAlert()
@@ -951,6 +1013,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let names = ["Count (1–512)", "Lifetime (0.1–60 s)", "Speed (−1…1)", "Wind (−1…1)", "Gravity (−1…1)", "Size (0.001–0.05)", "Seed (0–65535)"]
         let values = [String(current.count), String(current.lifetime), String(current.speed), String(current.wind), String(current.gravity), String(current.size), String(current.seed)]
         let fields = values.map { NSTextField(string: $0) }
+        let sprite = NSPopUpButton()
+        sprite.addItems(withTitles: ["Procedural Discs", "Choose Sprite Image…", "Keep Current Sprite"])
+        sprite.item(at: 2)?.isEnabled = node.sprite != nil
+        sprite.selectItem(at: node.sprite != nil ? 2 : 0)
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading
         for (index, name) in names.enumerated() {
@@ -958,7 +1024,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             fields[index].widthAnchor.constraint(equalToConstant: 250).isActive = true
             stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(fields[index])
         }
-        stack.frame = NSRect(x: 0, y: 0, width: 270, height: 350)
+        stack.addArrangedSubview(sprite)
+        stack.frame = NSRect(x: 0, y: 0, width: 270, height: 385)
         dialog.accessoryView = stack
         dialog.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn, self.editor.selectedNode?.id == node.id,
@@ -972,7 +1039,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             let emitter = SceneNode.Emitter(count: count, lifetime: lifetime, speed: speed, wind: wind, gravity: gravity, size: size, seed: seed)
             do { try emitter.validate() } catch { self.detailLabel.stringValue = error.localizedDescription; return }
             node.content = .particles(emitter)
-            self.editor.replaceSelected(node, name: "Change Emitter")
+            if sprite.indexOfSelectedItem == 1 { self.chooseLayerImage(node, sprite: true) }
+            else {
+                if sprite.indexOfSelectedItem == 0 { node.sprite = nil }
+                self.editor.replaceSelected(node, name: "Change Emitter")
+            }
         }
     }
     @objc private func showRippleSample() {
@@ -1145,6 +1216,74 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             }
         }
     }
+    @objc private func exportVideo() {
+        guard !saving else { return }
+        commitFieldEdits()
+        let options = NSAlert()
+        options.messageText = "Export Video"
+        options.informativeText = "Silent HEVC movie of the whole scene. Pointer and live audio responses are off. Authored looping is preserved; exporting does not make non-looping source media seamless."
+        options.addButton(withTitle: "Continue…"); options.addButton(withTitle: "Cancel")
+        let resolution = NSPopUpButton()
+        resolution.addItems(withTitles: ["1080p · 1920 × 1080", "4K · 3840 × 2160"])
+        let rate = NSPopUpButton(); rate.addItems(withTitles: ["30 fps", "60 fps"])
+        let duration = NSTextField(string: String(min(60, scene.timeline?.duration ?? 8)))
+        duration.setAccessibilityLabel("Export duration in seconds")
+        let fields = NSStackView(views: [resolution, rate, NSTextField(labelWithString: "Duration (0.1–60 seconds)"), duration])
+        fields.orientation = .vertical; fields.alignment = .leading
+        fields.frame = CGRect(x: 0, y: 0, width: 310, height: 120)
+        options.accessoryView = fields
+        options.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard let seconds = Double(duration.stringValue), seconds.isFinite, (0.1...60).contains(seconds) else {
+                self.detailLabel.stringValue = "Use a duration of 0.1–60 seconds."; return
+            }
+            let width = resolution.indexOfSelectedItem == 1 ? 3840 : 1920
+            let fps = rate.indexOfSelectedItem == 1 ? 60 : 30
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.mpeg4Movie]
+            panel.nameFieldStringValue = self.scene.title + ".mp4"
+            panel.beginSheetModal(for: self.window) { [weak self] response in
+                guard let self, response == .OK, let url = panel.url else { return }
+                self.beginExport(to: url, width: width, fps: fps, duration: seconds)
+            }
+        }
+    }
+
+    private func beginExport(to url: URL, width: Int, fps: Int, duration: Double) {
+        let snapshot = scene
+        saving = true; watcher = nil
+        let wasPaused = paused
+        paused = true; updatePlayback(); updateInspector()
+        let progress = NSProgressIndicator()
+        progress.isIndeterminate = false; progress.minValue = 0; progress.maxValue = 1
+        progress.frame = CGRect(x: 0, y: 0, width: 320, height: 16)
+        let sheet = NSAlert()
+        sheet.messageText = "Exporting Video"
+        sheet.informativeText = "Rendering frames…"
+        sheet.accessoryView = progress
+        sheet.addButton(withTitle: "Cancel")
+        sheet.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.exportTask?.cancel() }
+        }
+        exportTask = Task { @MainActor [self] in
+            let access = url.startAccessingSecurityScopedResource()
+            defer {
+                if access { url.stopAccessingSecurityScopedResource() }
+                if sheet.window.sheetParent != nil { window.endSheet(sheet.window, returnCode: .abort) }
+                saving = false; paused = wasPaused; exportTask = nil
+                updatePlayback(); updateInspector(); watchPackage()
+            }
+            do {
+                try await SceneVideoExporter.export(snapshot, to: url, width: width, height: width * 9 / 16,
+                    fps: fps, duration: duration) { value in progress.doubleValue = value }
+                detailLabel.stringValue = "Exported " + url.lastPathComponent
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch is CancellationError {
+                detailLabel.stringValue = "Video export cancelled."
+            } catch { detailLabel.stringValue = error.localizedDescription }
+        }
+    }
+
     @objc private func changeFrameRate() {
         cancelMeasurement()
         SceneFrameRate.selected = SceneFrameRate.allCases[frameRate.indexOfSelectedItem]
@@ -1404,7 +1543,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private func watchPackage() {
         watcher = nil
         guard !draft, undoEdits.isEmpty, redoEdits.isEmpty, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
-        watcher = SceneWatcher(package: url, assets: scene.allNodes.compactMap { $0.assetURL }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.allNodes.flatMap { $0.assets }) { [weak self] in
             self?.load(url)
         }
     }
@@ -1414,6 +1553,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { updatePlayback() }
     func windowShouldClose(_ sender: NSWindow) -> Bool { mayDiscard() }
     func windowWillClose(_ notification: Notification) {
+        exportTask?.cancel()
         cancelLoading()
         cancelMeasurement()
         watcher = nil

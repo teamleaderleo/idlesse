@@ -96,6 +96,8 @@ enum WallpaperSmoke {
             }
         }
         try image.representation(using: .png, properties: [:])!.write(to: imageURL)
+        try compositionChecks(imageURL: imageURL)
+        try WallpaperController.smokeTransitions(imageURL: imageURL)
         let controller = WallpaperController()
         controller.presentsWindows = false
         var errors: [String] = []
@@ -676,4 +678,56 @@ enum WallpaperSmoke {
         controller.stop()
         print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, isolated/nested groups, masks/color, automatic Metal selection and bounded target allocation, mixed compositor, grouped video live edits, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
+    private static func compositionChecks(imageURL: URL) throws {
+        let clock = SceneClock()
+        func pixels(_ nodes: [SceneNode]) throws -> [UInt8] {
+            let renderer = try MetalSceneRenderer(playable: SceneDescriptor(title: "Composition", nodes: nodes),
+                bounds: CGRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: clock) { fatalError($0) }
+            defer { renderer.releaseResources() }
+            let pixels = try renderer.renderProbe(dimension: 64)
+            precondition(renderer.intermediateTextureBytes <= SceneBudget.intermediateTextureBytes)
+            return pixels
+        }
+        let base = SceneNode(content: .image(imageURL))
+        let plain = try pixels([base])
+        for blend in [SceneNode.Blend.multiply, .screen, .add] {
+            var foreground = base; foreground.blend = blend
+            let isolated = try pixels([foreground])
+            precondition(zip(plain, isolated).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
+                         "Blending against transparency must preserve a layer")
+            foreground.id = UUID(); foreground.opacity = 0.5
+            let pair = try pixels([base, foreground])
+            let channel = 0 // BGRA blue
+            let source = Double(plain[channel]) / 255
+            let expected = blend == .multiply ? source * 0.5 + source * source * 0.5 :
+                blend == .screen ? source * 1.5 - source * source * 0.5 : min(1, source * 1.5)
+            precondition(abs(Double(pair[channel]) / 255 - expected) < 0.02, "Premultiplied blend equation")
+        }
+        var masked = base; masked.maskAsset = imageURL
+        let alpha = try pixels([masked])
+        precondition(alpha == plain)
+        masked.maskChannel = .luma
+        let luma = try pixels([masked])
+        precondition(luma[0] > 0 && Int(luma[0]) < Int(plain[0]) * 3 / 4)
+        var mask = SceneNode(content: .image(imageURL), visible: false,
+            transform: .init(x: 0, y: 0, scale: 0.5, rotation: 0))
+        masked.maskAsset = nil; masked.maskChannel = nil; masked.maskNodeID = mask.id
+        let nodeMask = try pixels([masked, mask])
+        precondition(nodeMask[0] == 0 && nodeMask[(32 * 64 + 32) * 4] == plain[0],
+                     "Hidden node masks retain their transform without painting the desktop")
+        mask.content = .gradient
+        precondition(SceneDescriptor(title: "Hidden reactive mask", nodes: [masked, mask]).animated)
+        var particle = SceneNode(content: .particles(.init(count: 128, size: 0.04)))
+        particle.sprite = imageURL
+        let sprite = try pixels([particle])
+        let colored = stride(from: 0, to: sprite.count, by: 4).filter { sprite[$0] > 10 }
+        precondition(!colored.isEmpty && colored.allSatisfy { sprite[$0] > sprite[$0 + 2] },
+                     "Particles must sample the authored sprite instead of the procedural gold disc")
+        let again = try pixels([particle])
+        precondition(sprite == again, "Sprite positions must remain deterministic")
+        var grouped = SceneNode(content: .group([masked, mask]), opacity: 0.5)
+        grouped.blend = .screen
+        _ = try pixels([grouped])
+    }
+
 }

@@ -381,3 +381,59 @@ targets. No extra texture pool is allocated. Nonzero displacement animates a
 still image or static group; zero returns otherwise-static scenes to event-driven
 rendering. Bind its identified amount to parameters, keyframes, or input signals
 using V16 targets. `Examples/Ripple.idlesse` exposes Ripple Strength as a control.
+# V19–V20: shared canvases and compositing
+
+V19 adds optional `"canvas": "desktopSpan"` to scene.json. Omitting it (or using
+`perDisplay`) repeats the scene on every display. Desktop-span uses the union of
+display frames in logical points. Each display samples its viewport, retaining
+gaps and unequal sizes. Pointer bindings use this union with host opt-in. Studio
+Playback exposes the choice. Video synchronization remains approximate.
+
+V20 adds optional node fields:
+
+- `blend`: `normal`, `add`, `multiply`, or `screen`.
+- `maskAsset`: contained image path, such as `assets/silhouette.png`.
+- `maskNodeID`: another node UUID, mutually exclusive with maskAsset.
+- `maskChannel`: `alpha` (default) or `luma`; transparent pixels contribute zero luminance.
+- `sprite`: contained image path, for particles only; omission uses gold discs.
+
+Masks cover the logical scene canvas after the target's transform and effects.
+Image masks stretch to the canvas. Node masks use the source's transformed,
+styled output, including its masks/effects, before blending with siblings.
+Hidden nodes can supply masks; animated sources continue updating. To position
+an image mask, use an image node. Missing references and cycles through masks or
+groups are rejected. Group duplication remaps internal references.
+
+Studio offers Mask & Blend alongside Appearance, and sprite selection in Emitter.
+Sprites retain their aspect ratio and the existing seeded, seekable particle
+motion and fades. Animated sprite sequences and atlases are not supported.
+
+Save/Save As stores a shared source file once even when used by several layers, masks, or sprites.
+Additional images share the 32-million-decoded-pixel allowance. Isolated node
+frames and scratch textures share the 128 MiB intermediate budget across two
+in-flight frames. Large compositions downsample intermediate targets. Simple
+scenes avoid these additional passes.
+
+## Offline video export
+
+Studio Export Video writes silent HEVC MP4 at 1080p/4K, 30/60 fps, for 0.1–60
+seconds. Authored rate, looping, ping-pong and drivers use exact frame times.
+Opted-in video transport follows scene time; ordinary videos loop on elapsed
+export time. Video frames are decoded explicitly rather than captured from
+real-time playback. Pointer/audio inputs are zero; no capability is granted.
+
+Output is SDR Rec.709 from sRGB compositor pixels; HDR is not preserved. The
+encoder pool is limited to three frames. Progress is cancellable, partial files
+are removed, and existing movies are never replaced. Export includes no audio
+track and does not make non-looping content seamless.
+
+The same exporter is available from the app executable:
+
+```sh
+Idlesse --export-video input.idlesse output.mp4 8 30 1920
+Idlesse --smoke-export source.mp4
+```
+
+Frames end at `(frameCount - 1) / fps`, without a duplicate endpoint. Studio and
+export show the whole scene in their output aspect ratio, rather than capturing
+the current physical monitor arrangement.
