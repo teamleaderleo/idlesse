@@ -21,7 +21,7 @@ Open Library from the preview window or Wallpaper menu (Command-L).
   Missing references are omitted; load failures keep the existing wallpaper and
   the next timer tick tries the next member. There is no catch-up burst after sleep.
 - Playback & Daily Schedule… provides native time pickers, interval and shuffle
-  controls. Enable one daily local-time range per collection; overnight ranges work.
+  controls. Enable one local-time range per collection and choose its start days. Overnight ranges continue into the following morning; overlaps are checked across the entire week. Older daily schedules keep every day enabled.
   Overlapping ranges and equal start/end times are rejected. Schedules resume when
   the app launches and are evaluated every 30 seconds (plus timer tolerance).
   Manual selection or Stop suppresses automatic playback through the current
@@ -61,7 +61,7 @@ Revision checks run off the main thread, without a background folder scan or tim
 Edits during generation discard the result. Refresh Preview forces regeneration. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: weekday rules, collection reordering. Imported
+Collections retain a saved order. Use Move Collection Up/Down to arrange the collection menu, and Move Scene Earlier/Later to arrange playback. Collection views show playback order, regardless of the global sort setting. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 
 Validation includes index round trips/removal preservation, generated Metal posters,

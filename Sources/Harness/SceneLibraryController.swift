@@ -235,6 +235,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             default: return matches
             }
         }.sorted {
+            if let activeCollection {
+                return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
+            }
             if sort.indexOfSelectedItem == 1 {
                 let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
                 if a != b { return a > b }
@@ -287,7 +290,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
             collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
-                "Play Collection in Order", "Shuffle Collection", "Playback & Daily Schedule…"])
+                "Move Collection Up", "Move Collection Down", "Move Scene Earlier", "Move Scene Later", "Play Collection in Order", "Shuffle Collection", "Playback & Schedule…"])
         }
         collectionActions.addItems(withTitles: ["Change Every 5 Minutes", "Change Every 15 Minutes", "Change Every 30 Minutes", "Change Every 60 Minutes"])
         if rotationTimer != nil {
@@ -425,7 +428,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func useScene() { act(editing: false) }
     @objc private func collectionAction() {
         guard let item = collectionActions.selectedItem else { return }
-        if item.title == "Playback & Daily Schedule…" { editPlayback(); return }
+        if ["Move Collection Up", "Move Collection Down"].contains(item.title),
+           let id = filter.selectedItem?.representedObject as? String {
+            do {
+                try store.moveCollection(id, by: item.title == "Move Collection Up" ? -1 : 1)
+                reload()
+            } catch { detail.stringValue = error.localizedDescription }
+            return
+        }
+        if ["Move Scene Earlier", "Move Scene Later"].contains(item.title),
+           let id = filter.selectedItem?.representedObject as? String, let selected {
+            do {
+                try store.moveScene(selected.id, in: id, by: item.title == "Move Scene Earlier" ? -1 : 1)
+                reload(selecting: selected.id)
+            } catch { detail.stringValue = error.localizedDescription }
+            return
+        }
+        if item.title == "Playback & Schedule…" { editPlayback(); return }
         if item.title == "Stop Collection Rotation" { stopRotation(); preview(); return }
         if item.title.hasPrefix("Change Every "), let minutes = Int(item.title.split(separator: " ")[2]) {
             if let id = filter.selectedItem?.representedObject as? String,
@@ -492,7 +511,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let id = filter.selectedItem?.representedObject as? String,
               let collection = store.catalog.collections.first(where: { $0.id == id }), let window else { return }
         let settings = collection.playback ?? SceneLibraryStore.Playback()
-        let enabled = NSButton(checkboxWithTitle: "Play on a daily schedule", target: nil, action: nil)
+        let enabled = NSButton(checkboxWithTitle: "Play on a schedule", target: nil, action: nil)
         enabled.state = settings.startMinute == nil ? .off : .on
         let shuffle = NSButton(checkboxWithTitle: "Shuffle without repeats", target: nil, action: nil)
         shuffle.state = settings.shuffle ? .on : .off
@@ -508,15 +527,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         let start = picker(settings.startMinute ?? 420)
         let end = picker(settings.endMinute ?? 1320)
-        let stack = NSStackView(views: [enabled, NSTextField(labelWithString: "From"), start,
+        let dayButtons = (1...7).map { day -> NSButton in
+            let button = NSButton(checkboxWithTitle: Calendar.current.shortWeekdaySymbols[day - 1], target: nil, action: nil)
+            button.state = (settings.weekdays?.contains(day) ?? true) ? .on : .off
+            return button
+        }
+        let days = NSStackView(views: dayButtons)
+        days.orientation = .horizontal
+        days.spacing = 8
+        let stack = NSStackView(views: [enabled, days, NSTextField(labelWithString: "From"), start,
             NSTextField(labelWithString: "Until"), end, NSTextField(labelWithString: "Change scene every"), interval, shuffle])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 270)
+        stack.frame = NSRect(x: 0, y: 0, width: 460, height: 305)
         let alert = NSAlert()
         alert.messageText = collection.name + " Playback"
-        alert.informativeText = "Daily local time, including overnight ranges. Manual wallpaper choices last until the next boundary. Bedtime dimming stays independent."
+        alert.informativeText = "Local time. Checked days are when a range starts; an overnight range continues into the following morning. Manual wallpaper choices last until the next boundary. Bedtime dimming stays independent."
         alert.accessoryView = stack
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
@@ -528,7 +555,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
             let updated = SceneLibraryStore.Playback(minutes: [5, 15, 30, 60][interval.indexOfSelectedItem],
                 shuffle: shuffle.state == .on, startMinute: enabled.state == .on ? minute(start) : nil,
-                endMinute: enabled.state == .on ? minute(end) : nil)
+                endMinute: enabled.state == .on ? minute(end) : nil,
+                weekdays: enabled.state == .off ? nil : Set(dayButtons.enumerated().compactMap { $0.element.state == .on ? $0.offset + 1 : nil }))
             do {
                 try self.store.setPlayback(id, updated)
                 self.scheduleToken = nil
