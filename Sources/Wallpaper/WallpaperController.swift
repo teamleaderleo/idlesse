@@ -11,6 +11,8 @@ final class WallpaperSurface {
     let window: NSWindow
     private let renderer: SceneRenderer
     var diagnostics: RendererDiagnostics { renderer.diagnostics }
+    var presentedFrameCount: Int? { renderer.presentedFrameCount }
+    var gpuTotals: (seconds: Double, frames: Int)? { renderer.gpuTotals }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {

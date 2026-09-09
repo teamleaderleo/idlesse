@@ -44,7 +44,7 @@ import AppKit
                 for index in indices {
                     try clock.seek(to: test.times[index])
                     try await renderer.prepareOfflineVideo(at: clock.time, size: CGSize(width: 64, height: 64))
-                    let pixels = try renderer.renderProbe(signals: .init(time: clock.time), dimension: 64)
+                    let pixels = try renderer.renderFrame(signals: .init(time: clock.time), width: 64, height: 64, sampleVideo: false)
                     guard errors.isEmpty else { throw SceneError.invalid("\(test.name): \(errors.joined(separator: "; "))") }
                     guard renderer.intermediateTextureBytes <= SceneBudget.intermediateTextureBytes else {
                         throw SceneError.invalid("\(test.name): intermediate texture budget exceeded")

@@ -75,3 +75,67 @@ On Apple Silicon, macOS 26.6.2 (25G83), Swift 6.3.3:
 
 These close the initial release-build and package-corpus checks only. The open
 qualification gates above remain open; renderer defaults are unchanged.
+
+## Desktop resource and lifecycle runner
+
+The optimized app accepts:
+
+```sh
+IDLESSE_METAL_COMPOSITOR=1 build/qualification/Idlesse.app/Contents/MacOS/Idlesse \
+  --qualify-desktop /absolute/path/to/scene report.json 10 3
+```
+
+This runs three ten-second playback cycles on the actual attached desktop
+surfaces. It temporarily displays the test scene and closes its own windows on
+completion. The report path must be new. Duration accepts 1–7200 seconds per
+cycle and cycles accepts 1–100. Run measurements serially, without another
+benchmark/export in parallel.
+
+Each cycle exercises pause, overlapping system/display/session suspension,
+replacement while suspended, resume, failed replacement preserving the current
+scene, and stop. Suspension is invoked through the host's lifecycle handlers;
+this is not physical sleep, monitor hotplug, or audio permission-loss testing.
+Existing crossfade preferences are respected, not changed. This runner does not
+guarantee that a crossfade occurred.
+
+JSON samples contain process CPU seconds, resident/physical footprint bytes,
+surface count, per-surface submitted/presented counters, GPU seconds and completed
+GPU frames where available. Counters restart when a surface is reconstructed.
+Compute deltas only within one uninterrupted playback interval. GPU mean is
+delta GPU seconds / delta GPU frames; process CPU is delta CPU seconds / wall
+seconds (one core = 100%). Memory is process-wide, including decoder allocations;
+it is not a decoder-specific estimate. Energy remains unmeasured.
+
+Locked or occluded desktops can produce zero presented frames. Those samples
+still exercise allocation/lifecycle, but cannot qualify visible playback cadence
+or serve as a matched rendering performance comparison. A short run does not
+establish multi-hour stability or absence of a slow memory leak.
+
+### Second checkpoint: color and real media
+
+The corpus now passes 15 packages / 120 frames, including tagged sRGB and
+Display P3 images representing the same in-gamut color. Both match RGB
+(64,128,192) within two code values. HDR and out-of-gamut behavior remain open.
+Real 4K Evelyn H.264 and Mika HEVC sources additionally passed exact-time offline
+forward/reverse replay (16 frames). Offline conformance now explicitly disables
+live-player sampling after preparing its requested frame.
+
+Release desktop runs on Mac17,4, 24 GiB, macOS 26.6.2 used two displays:
+2560×1440 logical at 2× / reported 160 Hz, and 1710×1107 at 2× / 60 Hz.
+Each source below passed five five-second playback cycles plus the lifecycle
+transitions described above, running serially with Metal requested.
+
+| Source | Sampled peak process footprint | Post-stop footprint, cycles 1 → 5 | Last-cycle CPU, one core | Last-cycle presented FPS, display 1 / 2 |
+| --- | --- | --- | --- | --- |
+| Vivian trust, H.264 960×540/60 | 353.8 MiB | 19.8 → 20.6 MiB | 15.6% | 59.6 / 52.6 |
+| Shiroko Terror, HEVC 3840×2160/60 | 376.3 MiB | 21.4 → 22.0 MiB | 17.7% | 58.6 / 52.0 |
+
+These short samples are not a codec comparison, energy claim, guarantee of source
+cadence, or multi-hour soak. Peaks are sampled, not allocation-level transient
+maxima. Raw reports are generated under `build/qualification/`.
+
+An early CLI prototype appeared to retain gigabytes across repeated lifecycle
+calls. Adding an event-level autorelease pool around each synchronous test cycle
+removed that accumulation in the two runs above. Post-stop measurement happens
+after draining the pool. This was a harness correction, not evidence of a fixed
+production renderer leak. The earlier unpooled readings are not release baselines.

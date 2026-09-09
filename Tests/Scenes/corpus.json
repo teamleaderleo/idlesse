@@ -252,6 +252,52 @@
       ],
       "changes": true,
       "probes": []
+    },
+    {
+      "name": "tagged-srgb",
+      "path": "tagged-srgb.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "tagged-display-p3",
+      "path": "tagged-display-p3.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        }
+      ]
     }
   ]
 }

@@ -325,6 +325,19 @@ if let index = CommandLine.arguments.firstIndex(of: "--export-video") {
     exit(1)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--qualify-desktop") {
+    guard CommandLine.arguments.count == index + 5,
+          let seconds = Double(CommandLine.arguments[index + 3]), seconds.isFinite, (1...7200).contains(seconds),
+          let cycles = Int(CommandLine.arguments[index + 4]), (1...100).contains(cycles) else {
+        fputs("Usage: --qualify-desktop source report.json seconds-per-cycle cycles\n", stderr); exit(1)
+    }
+    do {
+        try DesktopQualification.run(source: URL(fileURLWithPath: CommandLine.arguments[index + 1]),
+            output: URL(fileURLWithPath: CommandLine.arguments[index + 2]), seconds: seconds, cycles: cycles)
+        exit(0)
+    } catch { fputs("Qualification failed: \(error.localizedDescription)\n", stderr); exit(1) }
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--conformance") {
     guard CommandLine.arguments.count == index + 2 else {
         fputs("Usage: --conformance corpus.json\n", stderr); exit(1)
