@@ -150,3 +150,127 @@ private final class LayerTableView: NSTableView {
         line.stroke()
     }
 }
+
+
+/// Local effect edits are committed together by the Appearance sheet.
+final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    private let table = NSTableView()
+    private let kind = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let amount = NSTextField(string: "")
+    private let rangeLabel = NSTextField(labelWithString: "")
+    private let addButton = NSButton(title: "+ Effect", target: nil, action: nil)
+    private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let kinds: [SceneNode.Style.Effect.Kind] = [.bloom, .blur, .exposure, .saturation, .vignette]
+    private let dragType = NSPasteboard.PasteboardType("app.idlesse.effect-row")
+    private let owner = UUID().uuidString
+    private var effects: [SceneNode.Style.Effect]
+    private var drafts: [UUID: String] = [:]
+    init(effects: [SceneNode.Style.Effect]) {
+        self.effects = effects
+        super.init(frame: .zero)
+        orientation = .vertical; alignment = .leading; spacing = 8
+        widthAnchor.constraint(equalToConstant: 280).isActive = true
+        let column = NSTableColumn(identifier: .init("effect"))
+        column.width = 260
+        table.addTableColumn(column); table.headerView = nil; table.rowHeight = 28
+        table.dataSource = self; table.delegate = self
+        table.setAccessibilityLabel("Ordered effects, first applied first")
+        table.registerForDraggedTypes([dragType])
+        table.setDraggingSourceOperationMask(.move, forLocal: true)
+        let scroll = NSScrollView()
+        scroll.documentView = table; scroll.hasVerticalScroller = true
+        scroll.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        addArrangedSubview(scroll)
+        addButton.target = self; addButton.action = #selector(addEffect)
+        removeButton.target = self; removeButton.action = #selector(removeEffect)
+        addArrangedSubview(NSStackView(views: [addButton, removeButton]))
+        kind.addItems(withTitles: kinds.map { $0.rawValue.capitalized })
+        kind.target = self; kind.action = #selector(changeKind)
+        kind.setAccessibilityLabel("Selected effect type")
+        amount.setAccessibilityLabel("Selected effect amount")
+        amount.delegate = self
+        kind.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        amount.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        addArrangedSubview(NSStackView(views: [kind, amount]))
+        addArrangedSubview(rangeLabel)
+        if !effects.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        updateSelection()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func numberOfRows(in tableView: NSTableView) -> Int { effects.count }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        NSTextField(labelWithString: "\(row + 1).  \(effects[row].type.rawValue.capitalized)")
+    }
+    func tableViewSelectionDidChange(_ notification: Notification) { updateSelection() }
+    private func updateSelection() {
+        let selected = effects.indices.contains(table.selectedRow)
+        kind.isEnabled = selected; amount.isEnabled = selected; removeButton.isEnabled = selected
+        addButton.isEnabled = effects.count < 8
+        guard selected else { amount.stringValue = ""; rangeLabel.stringValue = "Add an effect to begin."; return }
+        let effect = effects[table.selectedRow]
+        kind.selectItem(at: kinds.firstIndex(of: effect.type)!)
+        amount.stringValue = effect.id.flatMap { drafts[$0] } ?? String(effect.amount)
+        rangeLabel.stringValue = "Amount: \(effect.range.lowerBound)…\(effect.range.upperBound)"
+    }
+    func controlTextDidChange(_ notification: Notification) {
+        guard effects.indices.contains(table.selectedRow), let id = effects[table.selectedRow].id else { return }
+        drafts[id] = amount.stringValue
+    }
+    @objc private func addEffect() {
+        guard effects.count < 8 else { return }
+        effects.append(.init(type: .bloom, amount: 0.8))
+        table.reloadData(); table.selectRowIndexes(IndexSet(integer: effects.count - 1), byExtendingSelection: false)
+        updateSelection()
+    }
+    @objc private func removeEffect() {
+        let index = table.selectedRow
+        guard effects.indices.contains(index) else { return }
+        if let id = effects[index].id { drafts.removeValue(forKey: id) }
+        effects.remove(at: index); table.reloadData()
+        if !effects.isEmpty { table.selectRowIndexes(IndexSet(integer: min(index, effects.count - 1)), byExtendingSelection: false) }
+        updateSelection()
+    }
+    @objc private func changeKind() {
+        guard effects.indices.contains(table.selectedRow) else { return }
+        let index = table.selectedRow
+        effects[index].type = kinds[kind.indexOfSelectedItem]
+        effects[index].amount = effects[index].type == .blur ? 8 : effects[index].type == .exposure ? 0 : 1
+        if let id = effects[index].id { drafts.removeValue(forKey: id) }
+        table.reloadData(); table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        updateSelection()
+    }
+    func validatedEffects() throws -> [SceneNode.Style.Effect] {
+        if effects.indices.contains(table.selectedRow), let id = effects[table.selectedRow].id { drafts[id] = amount.stringValue }
+        return try effects.map { effect in
+            var result = effect
+            if let text = effect.id.flatMap({ drafts[$0] }) {
+                guard let value = Double(text), value.isFinite else { throw SceneError.invalid("Enter a finite effect amount.") }
+                result.amount = value
+            }
+            guard result.range.contains(result.amount) else { throw SceneError.invalid("\(result.type.rawValue.capitalized) amount must be \(result.range.lowerBound)…\(result.range.upperBound).") }
+            return result
+        }
+    }
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard effects.indices.contains(row), let id = effects[row].id else { return nil }
+        let item = NSPasteboardItem(); item.setString(owner + ":" + id.uuidString, forType: dragType); return item
+    }
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                   proposedDropOperation operation: NSTableView.DropOperation) -> NSDragOperation {
+        guard operation == .above, let value = info.draggingPasteboard.string(forType: dragType),
+              value.hasPrefix(owner + ":") else { return [] }
+        return .move
+    }
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+                   dropOperation: NSTableView.DropOperation) -> Bool {
+        guard (0...effects.count).contains(row), let value = info.draggingPasteboard.string(forType: dragType),
+              value.hasPrefix(owner + ":"), let id = UUID(uuidString: String(value.dropFirst(owner.count + 1))),
+              let index = effects.firstIndex(where: { $0.id == id }) else { return false }
+        let effect = effects.remove(at: index)
+        let destination = row > index ? row - 1 : row
+        effects.insert(effect, at: destination)
+        table.reloadData(); table.selectRowIndexes(IndexSet(integer: destination), byExtendingSelection: false)
+        updateSelection(); return true
+    }
+}

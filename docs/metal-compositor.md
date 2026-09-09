@@ -1,15 +1,17 @@
-# Metal compositor experiment
+# Metal creative renderer
 
-The desktop host can use `MetalSceneRenderer` by launching the development app with
-`IDLESSE_METAL_COMPOSITOR=1`. The default remains `LayeredSceneRenderer`; this is a
-comparison path, not a performance win established by measurement. The saver is unaffected.
+Metal is the creative renderer for styles/effects, audio and signal bindings,
+tracks, and authored transport. Plain scenes retain the Standard compatibility
+path; the preview workbench can compare engines. `IDLESSE_METAL_COMPOSITOR=1`
+also requests Metal for plain desktop scenes. This routing is not a claim that
+Metal has passed every color, power, and presentation gate below.
 
-The compositor draws existing v1/v2 image, video and gradient nodes into one MTKView
-and one render pass per display. It supports aspect fill, normalized translation,
-scale, rotation, array ordering and premultiplied opacity. Images are decoded to the
-display budget and uploaded once. Static scenes redraw on activation/resize instead
-of maintaining an animation timer. Animated scenes request 60 fps; submissions are
-bounded to two in flight and never wait for GPU completion in the display loop.
+Images, videos, gradients, and isolated groups feed one MTKView per display.
+Groups and ordered effects use bounded offscreen passes; they share a 128 MiB
+target pool including cached and in-flight textures. Blur/bloom and ordered color
+effects are implemented. Static scenes are event-driven; animated scenes use the
+selected refresh preference and skip unchanged video compositions. At most two
+frames are in flight, without blocking the display loop on GPU completion.
 
 Video uses AVPlayerItemVideoOutput BGRA buffers and CVMetalTextureCache. The GPU
 completion handler retains both the Core Video texture wrappers and pixel buffers.
@@ -38,17 +40,20 @@ still run. Probe readback is confined to tests.
   AVQueuePlayer + AVPlayerLooper with an output on each replica, removing the
   explicit end-of-file seek. Synthetic tests verify continued decoding across
   replicas; they do not establish gap-free presentation for every source.
-- Clock authority. Gradients use SceneClock, but videos still use AVPlayer time;
-  neither multi-video nor multi-display frame synchronization is implemented.
+- Exact clock authority remains open. V13 added opt-in Once/Loop video following:
+  coalesced seek, playback rate, and bounded drift correction have tests. Default
+  videos still play independently. This is approximate synchronization, not
+  frame locking across multiple videos or displays; Ping-pong video is rejected.
 - Host lifecycle integration tests with the experimental switch enabled. Existing
   tests inspect the default renderer's view hierarchy and cannot simply be run with
   that switch. Direct compositor tests cover GPU output and pause/disposal separately.
 
-Offscreen group composition now exists with a 128 MiB target-pool budget (see
-[groups](scenes.md#groups-version-3)). After the promotion gates, continue with
-masks/blend modes and a small effect vocabulary. Declarative parameters and
-bindings should precede scripts. Studio already reuses the package watcher.
-Keep node limits until resource budgets cover the richer composition graph.
+V15/V16 checks cover ordered blur/bloom output, effect order, 16 effect-bearing
+layers, 8K-requested target allocations under the cap, teardown, and direct audio
+modulation of bloom. Parameters, drivers, smoothing, keyframes, and ellipse masks
+are implemented. Asset/node masks, displacement, and broader blend modes remain
+separate features. Do not treat a windowed GPU timing sample as release-build
+energy evidence or HDR parity.
 
 API references: [AVPlayerItemVideoOutput](https://developer.apple.com/documentation/avfoundation/avplayeritemvideooutput)
 and [Core Video Metal texture mapping and lifetime](https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:)).

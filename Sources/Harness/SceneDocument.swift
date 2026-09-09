@@ -70,12 +70,23 @@ final class SceneDocument {
         guard let url = urls.first else { return nil }
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size <= 1_048_576 else { throw SceneError.invalid("Recovery draft is too large.") }
-        let recovery = try JSONDecoder().decode(Recovery.self, from: Data(contentsOf: url))
+        let stored = try JSONDecoder().decode(Recovery.self, from: Data(contentsOf: url))
+        var nodes = stored.scene.nodes
+        for node in stored.scene.allNodes where node.style.effects.contains(where: { $0.id == nil }) {
+            _ = SceneTree.edit(node.id, in: &nodes) { siblings, index in
+                for effect in siblings[index].style.effects.indices where siblings[index].style.effects[effect].id == nil {
+                    siblings[index].style.effects[effect].id = UUID()
+                }
+            }
+        }
+        let recovery = Recovery(version: stored.version, edited: stored.edited,
+            scene: SceneDescriptor(title: stored.scene.title, nodes: nodes, parameters: stored.scene.parameters,
+                                   bindings: stored.scene.bindings, timeline: stored.scene.timeline))
         guard recovery.version == 1 else { throw SceneError.invalid("Unsupported recovery version.") }
         try SceneBudget.validate(recovery.scene.nodes)
         _ = try recovery.scene.evaluated()
         for node in recovery.scene.allNodes {
-            for property in ScenePropertyAddress.Property.allCases {
+            for property in ScenePropertyAddress.Property.allCases where property != .effectAmount {
                 let value = try ScenePropertyAddress(nodeID: node.id, property: property).value(in: recovery.scene.nodes)
                 guard value.isFinite, property.range.contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
             }

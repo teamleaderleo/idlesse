@@ -206,6 +206,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         fieldEditor.isFieldEditor = true
         fieldEditor.allowsUndo = true
         editor.onError = { [weak self] message in self?.detailLabel.stringValue = message }
+        editor.duplicateCommit = { [weak self] source, copy, nodes, selected in
+            guard let self else { return false }
+            let next = self.scene.duplicatingBindings(from: source, to: copy)
+            guard (try? next.replacingNodes(nodes).evaluated()) != nil else {
+                self.detailLabel.stringValue = "Duplicating this layer would exceed the scene binding budget."; return false
+            }
+            return self.applyEdit(nodes, selected: selected, name: "Duplicate Layer", controls: next)
+        }
         editor.commit = { [weak self] nodes, selected, name in self?.applyEdit(nodes, selected: selected, name: name) ?? false }
         document.currentSelection = { [weak self] in self?.nodePicker.indexOfSelectedItem ?? 0 }
         document.prepareRestore = { [weak self] target in
@@ -714,9 +722,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         dialog.messageText = "Keyframes — " + node.displayName
         dialog.informativeText = "Enter time:value pairs separated by commas (seconds). Replaces the selected property's binding. Use Time… to seek or loop; Playback… controls video following."
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Remove Track"); dialog.addButton(withTitle: "Cancel")
-        let properties = ScenePropertyAddress.Property.allCases
+        let properties = ScenePropertyAddress.targets(for: node)
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
-        property.addItems(withTitles: properties.map(\.rawValue))
+        property.addItems(withTitles: properties.map { $0.label(in: scene.nodes) })
         property.setAccessibilityLabel("Keyframe property")
         let interpolation = NSPopUpButton(frame: .zero, pullsDown: false)
         interpolation.addItems(withTitles: ["Linear", "Hold", "Ease In Out"])
@@ -730,7 +738,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let selectionAction = StudioControlAction()
         selectionAction.perform = { [weak self] in
             guard let self else { return }
-            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let target = properties[property.indexOfSelectedItem]
             if let track = self.scene.bindings.first(where: { $0.target == target })?.keyframes {
                 values.stringValue = track.keys.map { "\($0.time):\($0.value)" }.joined(separator: ", ")
                 interpolation.selectItem(at: track.interpolation == .linear ? 0 : track.interpolation == .hold ? 1 : 2)
@@ -742,7 +750,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         }
         property.target = selectionAction; property.action = #selector(StudioControlAction.changed)
         if let existing = scene.bindings.first(where: { $0.target.nodeID == node.id && $0.keyframes != nil }),
-           let index = properties.firstIndex(of: existing.target.property) { property.selectItem(at: index) }
+           let index = properties.firstIndex(of: existing.target) { property.selectItem(at: index) }
         selectionAction.perform()
         dialog.accessoryView = stack
         dialog.beginSheetModal(for: window) { [weak self] response in
@@ -750,7 +758,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             guard let self, response != .alertThirdButtonReturn, !self.saving,
                   self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
             do {
-                let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+                let target = properties[property.indexOfSelectedItem]
                 if response == .alertSecondButtonReturn {
                     var next = self.scene
                     next.bindings.removeAll { $0.target == target && $0.keyframes != nil }
@@ -789,9 +797,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         dialog.informativeText = "Output = source × scale + offset, clamped to the property range. Sine runs from −1 to 1. Pointer response needs the enable switch. Remove restores the static value."
         dialog.addButton(withTitle: "Bind"); dialog.addButton(withTitle: "Remove Binding"); dialog.addButton(withTitle: "Cancel")
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
-        let properties = ScenePropertyAddress.Property.allCases
-        property.addItems(withTitles: properties.map(\.rawValue))
-        property.selectItem(at: properties.firstIndex(of: .opacity)!)
+        let properties = ScenePropertyAddress.targets(for: node)
+        property.addItems(withTitles: properties.map { $0.label(in: scene.nodes) })
+        property.selectItem(at: properties.firstIndex(where: { $0.property == .opacity })!)
         property.setAccessibilityLabel("Target property")
         let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
         let keys = scene.parameters.keys.sorted()
@@ -820,7 +828,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let selectionAction = StudioControlAction()
         selectionAction.perform = { [weak self] in
             guard let self else { return }
-            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let target = properties[property.indexOfSelectedItem]
             let binding = self.scene.bindings.first { $0.target == target }
             scale.stringValue = String(binding?.scale ?? 1)
             offset.stringValue = String(binding?.offset ?? 0)
@@ -835,7 +843,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         }
         property.target = selectionAction; property.action = #selector(StudioControlAction.changed)
         if let existing = scene.bindings.first(where: { $0.target.nodeID == node.id }),
-           let index = properties.firstIndex(of: existing.target.property) { property.selectItem(at: index) }
+           let index = properties.firstIndex(of: existing.target) { property.selectItem(at: index) }
         selectionAction.perform()
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
@@ -843,7 +851,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             guard let self, !self.saving, response != .alertThirdButtonReturn,
                   self.scene.allNodes.contains(where: { $0.id == node.id && !$0.locked }) else { return }
             var next = self.scene
-            let target = ScenePropertyAddress(nodeID: node.id, property: properties[property.indexOfSelectedItem])
+            let target = properties[property.indexOfSelectedItem]
             let previous = next.bindings.first { $0.target == target }
             let previousKeys = next.bindings.filter { $0.target == target }.flatMap(\.referencedParameters)
             next.bindings.removeAll { $0.target == target }
@@ -859,9 +867,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 if index == 0 {
                     let title = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !title.isEmpty, title.count <= 80 else { self.detailLabel.stringValue = "Use a control name of 1–80 characters."; return }
-                    let value = (try? target.value(in: self.scene.nodes)) ?? target.property.range.lowerBound
+                    guard let range = try? target.range(in: self.scene.nodes) else {
+                        self.detailLabel.stringValue = "The target effect no longer exists."; return
+                    }
+                    let value = (try? target.value(in: self.scene.nodes)) ?? range.lowerBound
                     next.parameters[key] = SceneParameter(name: title, value: value,
-                                                          min: target.property.range.lowerBound, max: target.property.range.upperBound)
+                                                          min: range.lowerBound, max: range.upperBound)
                 }
                 let modifiers: [SceneParameterBinding.Modifier] = multiplier.indexOfSelectedItem == 0 ? previous?.modifiers ?? []
                     : multiplier.indexOfSelectedItem > 1 ? [.init(operation: .multiply, parameter: keys[multiplier.indexOfSelectedItem - 2])] : []
@@ -889,33 +900,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         saturation.setAccessibilityLabel("Saturation")
         let vignette = NSSlider(value: node.style.vignette, minValue: 0, maxValue: 1, target: nil, action: nil)
         vignette.setAccessibilityLabel("Vignette strength")
-        let effectKinds: [SceneNode.Style.Effect.Kind] = [.blur, .bloom, .exposure, .saturation, .vignette]
-        let effectRows: [(NSPopUpButton, NSTextField)] = (0..<8).map { index in
-            let kind = NSPopUpButton(frame: .zero, pullsDown: false)
-            kind.addItems(withTitles: ["None", "Blur", "Bloom", "Exposure", "Saturation", "Vignette"])
-            let value = NSTextField(string: "")
-            if index < node.style.effects.count {
-                let effect = node.style.effects[index]
-                kind.selectItem(at: (effectKinds.firstIndex(of: effect.type) ?? 0) + 1)
-                value.stringValue = String(effect.amount)
-            }
-            kind.setAccessibilityLabel("Effect \(index + 1) type")
-            value.setAccessibilityLabel("Effect \(index + 1) amount")
-            kind.widthAnchor.constraint(equalToConstant: 150).isActive = true
-            value.widthAnchor.constraint(equalToConstant: 90).isActive = true
-            return (kind, value)
-        }
+        let effectEditor = SceneEffectsEditor(effects: node.style.effects)
         let fields = NSStackView(views: [mask, NSTextField(labelWithString: "Exposure"), exposure,
                                         NSTextField(labelWithString: "Saturation"), saturation,
                                         NSTextField(labelWithString: "Vignette"), vignette])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.addArrangedSubview(NSTextField(labelWithString: "Effects • applied top to bottom"))
-        for (kind, value) in effectRows {
-            fields.addArrangedSubview(NSStackView(views: [kind, value]))
-        }
-        let hint = NSTextField(wrappingLabelWithString: "Blur 0–24 · Bloom 0–2 · Exposure −2–2\nSaturation 0–2 · Vignette 0–1. None skips a slot.")
-        fields.addArrangedSubview(hint)
-        fields.frame = NSRect(x: 0, y: 0, width: 280, height: 520)
+        fields.addArrangedSubview(NSTextField(labelWithString: "Effects • drag to reorder"))
+        fields.addArrangedSubview(effectEditor)
+        fields.frame = NSRect(x: 0, y: 0, width: 300, height: 490)
         exposure.widthAnchor.constraint(equalToConstant: 260).isActive = true
         saturation.widthAnchor.constraint(equalToConstant: 260).isActive = true
         vignette.widthAnchor.constraint(equalToConstant: 260).isActive = true
@@ -929,17 +921,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                   ev.isFinite, (-2...2).contains(ev), sat.isFinite, (0...2).contains(sat) else {
                 self.detailLabel.stringValue = "Use exposure −2…2 and saturation 0…2."; return
             }
-            var effects: [SceneNode.Style.Effect] = []
-            for (kind, value) in effectRows where kind.indexOfSelectedItem > 0 {
-                guard let amount = Double(value.stringValue), amount.isFinite else {
-                    self.detailLabel.stringValue = "Every enabled effect needs a finite amount."; return
-                }
-                let effect = SceneNode.Style.Effect(type: effectKinds[kind.indexOfSelectedItem - 1], amount: amount)
-                guard effect.range.contains(amount) else {
-                    self.detailLabel.stringValue = "Effect amount is outside its supported range."; return
-                }
-                effects.append(effect)
-            }
+            let effects: [SceneNode.Style.Effect]
+            do { effects = try effectEditor.validatedEffects() }
+            catch { self.detailLabel.stringValue = error.localizedDescription; return }
             node.style = .init(mask: mask.indexOfSelectedItem == 1 ? .ellipse : nil, exposure: ev, saturation: sat, vignette: vignette.doubleValue)
             node.style.effects = effects
             self.editor.replaceSelected(node, name: "Change Appearance")
@@ -1253,8 +1237,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         var node = SceneNode(name: "Audio Glow", content: .gradient)
         node.style.effects = [.init(type: .exposure, amount: 0.8), .init(type: .bloom, amount: 0.9)]
         let audio = SceneDescriptor(title: "Audio Aurora", nodes: [node], parameters: ["gain": .init(name: "Audio Sensitivity", value: 1, min: 0.1, max: 4)], bindings: [
-            .init(target: .init(nodeID: node.id, property: .exposure), scale: 6, signal: .audioBass,
-                  modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: -0.5)], smoothing: 0.08),
+            .init(target: .init(nodeID: node.id, property: .effectAmount, effectID: node.style.effects[1].id), scale: 20, signal: .audioBass,
+                  modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: 0.3)], smoothing: 0.08),
             .init(target: .init(nodeID: node.id, property: .vignette), scale: -2, signal: .audioLevel,
                   modifiers: [.init(operation: .multiply, parameter: "gain"), .init(operation: .add, value: 0.7)], smoothing: 0.08)
         ])

@@ -284,7 +284,7 @@ import Foundation
         let reloaded = try await source.resolve(groupedPackage)
         precondition(reloaded.allNodes.map(\.id) == grouped.allNodes.map(\.id))
         var addressed = reloaded.nodes
-        for property in ScenePropertyAddress.Property.allCases {
+        for property in ScenePropertyAddress.Property.allCases where property != .effectAmount {
             let address = ScenePropertyAddress(nodeID: firstNode.id, property: property)
             let decoded = try JSONDecoder().decode(ScenePropertyAddress.self, from: JSONEncoder().encode(address))
             precondition(decoded == address)
@@ -486,6 +486,39 @@ import Foundation
             effectNode.style.effects = invalid
             do { try SceneBudget.validate([effectNode]); fatalError("Accepted invalid effect budget") } catch is SceneError {}
         }
+        var reactiveEffectNode = SceneNode(content: .gradient)
+        reactiveEffectNode.style.effects = [.init(type: .bloom, amount: 0.8), .init(type: .blur, amount: 4)]
+        let bloomTarget = ScenePropertyAddress(nodeID: reactiveEffectNode.id, property: .effectAmount, effectID: reactiveEffectNode.style.effects[0].id)
+        let blurTarget = ScenePropertyAddress(nodeID: reactiveEffectNode.id, property: .effectAmount, effectID: reactiveEffectNode.style.effects[1].id)
+        var reactiveEffects = SceneDescriptor(title: "Reactive effects", nodes: [reactiveEffectNode], bindings: [
+            .init(target: bloomTarget, scale: 10, signal: .audioBass),
+            .init(target: blurTarget, scale: 1, keyframes: .init(interpolation: .linear, keys: [.init(time: 0, value: 0), .init(time: 2, value: 24)]))
+        ])
+        let effectResult = try reactiveEffects.evaluated(signals: .init(audio: .init(bass: 0.3), time: 1))
+        let actualBloom = try bloomTarget.value(in: effectResult.nodes); precondition(actualBloom == 2)
+        let actualBlur = try blurTarget.value(in: effectResult.nodes); precondition(actualBlur == 12)
+        reactiveEffectNode.style.effects.reverse()
+        reactiveEffects = reactiveEffects.replacingNodes([reactiveEffectNode])
+        precondition(reactiveEffects.bindings.count == 2)
+        let reorderedEffects = try reactiveEffects.evaluated(signals: .init(audio: .init(bass: 0.3), time: 1))
+        let reorderedBloom = try bloomTarget.value(in: reorderedEffects.nodes); precondition(reorderedBloom == 2)
+        let reactivePackage = root.appendingPathComponent("Reactive.idlesse")
+        try ScenePackageWriter.write(reactiveEffects, to: reactivePackage)
+        let savedReactive = try await source.resolve(reactivePackage)
+        precondition(savedReactive.bindings.map(\.target) == reactiveEffects.bindings.map(\.target))
+        precondition(savedReactive.nodes[0].style.effects == reactiveEffectNode.style.effects)
+        let duplicated = reactiveEffectNode.duplicated()
+        let cloned = reactiveEffects.duplicatingBindings(from: reactiveEffectNode, to: duplicated).replacingNodes([reactiveEffectNode, duplicated])
+        precondition(cloned.bindings.count == 4)
+        _ = try cloned.evaluated()
+        let originalEffectIDs = Set(reactiveEffectNode.style.effects.compactMap(\.id))
+        precondition(originalEffectIDs.isDisjoint(with: Set(duplicated.style.effects.compactMap(\.id))))
+        reactiveEffectNode.style.effects.removeAll { $0.id == bloomTarget.effectID }
+        precondition(reactiveEffects.replacingNodes([reactiveEffectNode]).bindings.map(\.target) == [blurTarget])
+        do { var roots = [reactiveEffectNode]; try bloomTarget.set(1, in: &roots); fatalError("Accepted missing effect") } catch is SceneError {}
+        var duplicateIDs = duplicated
+        duplicateIDs.style.effects[1].id = duplicateIDs.style.effects[0].id
+        do { try SceneBudget.validate([duplicateIDs]); fatalError("Accepted duplicate effect identity") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }

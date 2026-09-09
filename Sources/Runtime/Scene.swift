@@ -58,7 +58,21 @@ struct SceneDescriptor: Codable, Sendable {
     }
     func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
-        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) }, timeline: timeline)
+        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline)
+    }
+    func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
+        let pairs = zip(source.descendants, copy.descendants)
+        var result = self
+        for (old, new) in pairs {
+            let effectMap = Dictionary(uniqueKeysWithValues: zip(old.style.effects.compactMap(\.id), new.style.effects.compactMap(\.id)))
+            for binding in bindings where binding.target.nodeID == old.id {
+                var cloned = binding
+                cloned.target = ScenePropertyAddress(nodeID: new.id, property: binding.target.property,
+                    effectID: binding.target.effectID.flatMap { effectMap[$0] })
+                result.bindings.append(cloned)
+            }
+        }
+        return result
     }
     func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
         if validating {
@@ -74,10 +88,10 @@ struct SceneDescriptor: Codable, Sendable {
             }
         }
         var result = nodes
-        var targets = Set<String>()
+        var targets = Set<ScenePropertyAddress>()
         for binding in bindings {
             guard binding.scale.isFinite, binding.offset.isFinite,
-                  (!validating || targets.insert(binding.target.nodeID.uuidString + binding.target.property.rawValue).inserted) else {
+                  (!validating || targets.insert(binding.target).inserted) else {
                 throw SceneError.invalid("Bindings need an existing parameter and a unique property target.")
             }
             guard binding.smoothing.isFinite, (0...5).contains(binding.smoothing),
@@ -128,7 +142,7 @@ struct SceneDescriptor: Codable, Sendable {
             }
             guard raw.isFinite else { throw SceneError.invalid("The binding result is not finite.") }
             if binding.smoothing > 0, let smooth { raw = smooth(binding.target, raw, binding.smoothing) }
-            let range = binding.target.property.range
+            let range = try binding.target.range(in: nodes)
             try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
         }
         if validating { try SceneBudget.validate(result) }
@@ -193,7 +207,7 @@ struct SceneParameterBinding: Codable, Sendable {
         var value: Double? = nil
     }
     enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
-    let target: ScenePropertyAddress
+    var target: ScenePropertyAddress
     var parameter: String = ""
     var scale: Double = 1
     var offset: Double = 0
@@ -249,6 +263,7 @@ struct SceneNode: Codable, Sendable {
     struct Style: Codable, Sendable, Equatable {
         struct Effect: Codable, Sendable, Equatable {
             enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette }
+            var id: UUID? = UUID()
             var type: Kind
             var amount: Double
             var range: ClosedRange<Double> {
@@ -297,6 +312,7 @@ struct SceneNode: Codable, Sendable {
     func duplicated() -> SceneNode {
         var copy = self
         copy.id = UUID()
+        for index in copy.style.effects.indices { copy.style.effects[index].id = UUID() }
         if kind == .group { copy.content = .group(children.map { $0.duplicated() }) }
         return copy
     }
@@ -398,7 +414,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...15).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...16).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -438,7 +454,14 @@ struct LocalSceneSource: SceneSource {
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             guard (node.style?.effects.isEmpty ?? true) || manifest.version >= 15 else { throw SceneError.invalid("Ordered effects require scene version 15.") }
             guard manifest.version < 6 || node.id != nil else { throw SceneError.invalid("Every v6 node needs a UUID id.") }
-            return SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: node.style ?? .plain, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            var decodedStyle = node.style ?? .plain
+            for index in decodedStyle.effects.indices {
+                guard manifest.version < 16 || decodedStyle.effects[index].id != nil else {
+                    throw SceneError.invalid("Every v16 effect needs a UUID id.")
+                }
+                if decodedStyle.effects[index].id == nil { decodedStyle.effects[index].id = UUID() }
+            }
+            return SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: decodedStyle, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
         }
         let nodes = try descriptions.map { try decode($0, depth: 0) }
         try SceneBudget.validate(nodes)
@@ -452,6 +475,9 @@ struct LocalSceneSource: SceneSource {
         guard !result.usesTracks || manifest.version >= 10 else { throw SceneError.invalid("Keyframes require scene version 10.") }
         guard !result.usesDrivers || manifest.version >= 9 else { throw SceneError.invalid("Binding modifiers require scene version 9.") }
         guard !result.usesSignals || manifest.version >= 8 else { throw SceneError.invalid("Signal bindings require scene version 8.") }
+        guard manifest.version >= 16 || !result.bindings.contains(where: { $0.target.effectID != nil || $0.target.property == .effectAmount }) else {
+            throw SceneError.invalid("Effect targets require scene version 16.")
+        }
         guard !result.usesAudio || (manifest.version >= 14 && manifest.capabilities.contains("audio")) else { throw SceneError.invalid("Audio bindings require v14 and the audio capability.") }
         guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
         _ = try result.evaluated()
@@ -463,6 +489,7 @@ struct LocalSceneSource: SceneSource {
 struct ScenePropertyAddress: Codable, Sendable, Hashable {
     enum Property: String, Codable, Sendable, CaseIterable {
         case x = "transform.x", y = "transform.y", scale = "transform.scale", rotation = "transform.rotation"
+        case effectAmount = "effect.amount"
         case opacity, exposure = "style.exposure", saturation = "style.saturation", vignette = "style.vignette"
         var range: ClosedRange<Double> {
             switch self {
@@ -471,13 +498,32 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
             case .rotation: return -360...360
             case .opacity, .vignette: return 0...1
             case .saturation: return 0...2
+            case .effectAmount: return -2...24
             }
         }
     }
     let nodeID: UUID
     let property: Property
+    var effectID: UUID? = nil
+    static func targets(for node: SceneNode) -> [Self] {
+        Property.allCases.filter { $0 != .effectAmount }.map { Self(nodeID: node.id, property: $0) }
+        + node.style.effects.map { Self(nodeID: node.id, property: .effectAmount, effectID: $0.id) }
+    }
+    func label(in nodes: [SceneNode]) -> String {
+        guard let effectID, let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }),
+              let index = node.style.effects.firstIndex(where: { $0.id == effectID }) else { return property.rawValue }
+        return "Effect \(index + 1) · \(node.style.effects[index].type.rawValue) amount"
+    }
+    func range(in nodes: [SceneNode]) throws -> ClosedRange<Double> {
+        guard (property == .effectAmount) == (effectID != nil) else { throw SceneError.invalid("Effect amount requires an effect ID, and other properties cannot use one.") }
+        guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else { throw SceneError.invalid("The target layer no longer exists.") }
+        guard let effectID else { return property.range }
+        guard let effect = node.style.effects.first(where: { $0.id == effectID }) else { throw SceneError.invalid("The target effect no longer exists.") }
+        return effect.range
+    }
 
     func value(in nodes: [SceneNode]) throws -> Double {
+        _ = try range(in: nodes)
         guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else {
             throw SceneError.invalid("The property target no longer exists.")
         }
@@ -490,12 +536,13 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
         case .exposure: return node.style.exposure
         case .saturation: return node.style.saturation
         case .vignette: return node.style.vignette
+        case .effectAmount: return node.style.effects.first { $0.id == effectID }!.amount
         }
     }
 
     /// Reject invalid values before mutation; bindings must explicitly clamp their output.
     func set(_ value: Double, in nodes: inout [SceneNode]) throws {
-        guard value.isFinite, property.range.contains(value) else {
+        guard value.isFinite, try range(in: nodes).contains(value) else {
             throw SceneError.invalid("The property value is outside its supported range.")
         }
         guard SceneTree.edit(nodeID, in: &nodes, { siblings, index in
@@ -510,6 +557,7 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
             case .exposure: node.style.exposure = value
             case .saturation: node.style.saturation = value
             case .vignette: node.style.vignette = value
+            case .effectAmount: node.style.effects[node.style.effects.firstIndex { $0.id == effectID }!].amount = value
             }
             siblings[index] = node
         }) else { throw SceneError.invalid("The property target no longer exists.") }
@@ -603,7 +651,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { !$0.style.effects.isEmpty } ? 15 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -687,6 +735,10 @@ enum SceneBudget {
             return result
         }
         let nodes = try walk(roots, depth: 0)
+        let effectIDs = nodes.flatMap { $0.style.effects }.compactMap(\.id)
+        guard effectIDs.count == nodes.reduce(0, { $0 + $1.style.effects.count }), Set(effectIDs).count == effectIDs.count else {
+            throw SceneError.invalid("Effect identities must exist and be unique across the scene.")
+        }
         guard Set(nodes.map { $0.id }).count == nodes.count else { throw SceneError.invalid("Scene layer identities must be unique.") }
         guard nodes.filter({ $0.kind == .group }).count <= maxGroups else { throw SceneError.invalid("A scene supports at most four groups.") }
         guard (1...maxNodes).contains(nodes.count) else { throw SceneError.invalid("A scene supports 1–16 layers.") }
