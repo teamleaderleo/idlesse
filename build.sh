@@ -129,6 +129,7 @@ build_app() {
     "$ROOT/Sources/Harness/Benchmark.swift" \
     "$ROOT/Sources/Harness/AudioSmoke.swift" \
     "$ROOT/Sources/Harness/SceneConformance.swift" \
+    "$ROOT/Sources/Harness/DesktopQualification.swift" \
     "$ROOT/Sources/Harness/main.swift" \
     -framework AppKit \
     -framework Photos \
