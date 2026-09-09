@@ -23,7 +23,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let apply = NSButton(title: "Use on Desktop", target: nil, action: nil)
     private let edit = NSButton(title: "Open in Studio", target: nil, action: nil)
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
-    private var cache: [String: (image: NSImage, note: String)] = [:]
+    private enum PosterRevision: Equatable, Sendable {
+        case package(ScenePackageWriter.Revision)
+        case file(Date?, Int?)
+        static func read(_ source: URL) throws -> PosterRevision {
+            var url = source
+            url.removeAllCachedResourceValues()
+            if url.pathExtension.lowercased() == "idlesse" { return .package(try ScenePackageWriter.revision(of: url)) }
+            let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return .file(values.contentModificationDate, values.fileSize)
+        }
+    }
+    private var cache: [String: (image: NSImage, note: String, revision: PosterRevision)] = [:]
     private var cacheOrder: [String] = []
     private var items: [Item] = []
     private var selected: Item?
@@ -135,6 +146,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         table.delegate = self; table.dataSource = self
         table.target = self; table.doubleAction = #selector(doubleClickScene)
         table.setAccessibilityLabel("Scenes")
+        table.registerForDraggedTypes([.fileURL])
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -185,7 +197,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if selected != nil, poster.image == nil { preview() }
+        if selected != nil { preview() }
     }
     private func allItems() -> [Item] {
         let names = [("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
@@ -291,11 +303,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         titleLabel.stringValue = selected.title
         favorite.title = store.catalog.favorites.contains(selected.id) ? "★ Favorited" : "☆ Favorite"
         detail.stringValue = "Preparing still preview…"
-        if let cached = cache[selected.id] {
-            poster.image = cached.image
-            detail.stringValue = cached.note
-            return
-        }
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if token == self.generation { self.task = nil } }
@@ -303,6 +310,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let url = try self.url(selected)
                 let accessed = url.startAccessingSecurityScopedResource()
                 defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                let revision = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
+                try Task.checkCancellation()
+                guard token == self.generation else { return }
+                if let cached = self.cache[selected.id], cached.revision == revision {
+                    self.poster.image = cached.image
+                    self.detail.stringValue = cached.note
+                    return
+                }
+                self.cache.removeValue(forKey: selected.id)
                 let scene = try await LocalSceneSource().resolve(url)
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
@@ -332,10 +348,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 }
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
+                let after = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
+                try Task.checkCancellation()
+                guard token == self.generation else { return }
+                guard after == revision else { throw SceneError.invalid("Scene changed while preparing its preview. Select it again to retry.") }
                 self.cacheOrder.removeAll { $0 == selected.id }
                 while self.cacheOrder.count >= 8 { self.cache.removeValue(forKey: self.cacheOrder.removeFirst()) }
                 self.cacheOrder.append(selected.id)
-                self.cache[selected.id] = (image, note)
+                self.cache[selected.id] = (image, note, revision)
                 self.poster.image = image
                 self.detail.stringValue = note
             } catch {
@@ -356,11 +376,32 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             self.importScenes(panel.urls)
         }
     }
+    private static func supportedImport(_ url: URL) -> Bool {
+        url.isFileURL && ["idlesse", "jpg", "jpeg", "png", "heic", "mp4", "mov"].contains(url.pathExtension.lowercased())
+    }
+    private func droppedURLs(_ pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
+            .filter(Self.supportedImport)
+    }
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
+                   proposedRow row: Int, proposedDropOperation operation: NSTableView.DropOperation) -> NSDragOperation {
+        guard !droppedURLs(info.draggingPasteboard).isEmpty else { return [] }
+        tableView.setDropRow(-1, dropOperation: .on)
+        return .copy
+    }
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
+                   row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+        let urls = droppedURLs(info.draggingPasteboard)
+        guard !urls.isEmpty else { return false }
+        importScenes(urls)
+        return true
+    }
     private func importScenes(_ urls: [URL]) {
         var firstID: String?
         var failures: [String] = []
         for url in urls {
             do {
+                guard Self.supportedImport(url) else { throw SceneError.invalid("Choose an Idlesse package, JPG, PNG, HEIC, MP4, or MOV.") }
                 let entry = try store.add(url)
                 if firstID == nil { firstID = entry.id }
             } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
@@ -537,10 +578,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
+        let raw = folder.appendingPathComponent("revision.png")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data([1]).write(to: raw)
+        let oldRevision = try PosterRevision.read(raw)
+        try Data([1, 2]).write(to: raw)
+        let newRevision = try PosterRevision.read(raw)
+        precondition(oldRevision != newRevision)
         var copied = false
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
             onUse: { _ in applied = true }, onEdit: { _, asCopy in copied = asCopy })
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
+        precondition(controller.droppedURLs(pasteboard) == [raw])
         precondition(controller.items.count == 6)
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -600,6 +652,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.stopRotation()
         try controller.store.setPlayback(collection.id, .init())
         controller.preview()
+        let posterDeadline = Date().addingTimeInterval(10)
+        while controller.task != nil && Date() < posterDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(controller.poster.image != nil, controller.detail.stringValue)
         let root = controller.window!.contentView!
         root.layoutSubtreeIfNeeded()
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
