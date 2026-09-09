@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    {
+      "id": "42a08ecd-4d62-4ebd-9587-d25d5d1d8b85",
+      "type": "gradient",
+      "name": "Ripple",
+      "style": {
+        "effects": [
+          {
+            "id": "67580e78-bae2-4d69-baef-440e05677bf5",
+            "type": "displacement",
+            "amount": 0.04
+          }
+        ]
+      }
+    }
+  ],
+  "parameters": {
+    "strength": {
+      "name": "Ripple Strength",
+      "default": 0.04,
+      "min": 0,
+      "max": 0.1
+    }
+  },
+  "bindings": [
+    {
+      "target": {
+        "nodeID": "42a08ecd-4d62-4ebd-9587-d25d5d1d8b85",
+        "property": "effect.amount",
+        "effectID": "67580e78-bae2-4d69-baef-440e05677bf5"
+      },
+      "parameter": "strength",
+      "scale": 1,
+      "offset": 0
+    }
+  ]
+}

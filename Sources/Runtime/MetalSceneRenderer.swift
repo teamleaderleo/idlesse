@@ -330,8 +330,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                             guard effectPass(source: available[1], original: current, destination: available[0], mode: 3, amount: amount) else { return false }
                             current = available[0]
                         } else { current = available[1] }
-                    case .exposure, .saturation, .vignette:
-                        let mode: Float = effect.type == .exposure ? 4 : effect.type == .saturation ? 5 : 6
+                    case .exposure, .saturation, .vignette, .displacement:
+                        let mode: Float = effect.type == .displacement ? 8 : effect.type == .exposure ? 4 : effect.type == .saturation ? 5 : 6
                         guard effectPass(source: current, destination: available[0], mode: mode, amount: amount) else { return false }
                         current = available[0]
                     }
@@ -393,7 +393,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         if diagnostics.state == .running { updateSignals(currentSignals()) }
         let changed = updateVideos()
         needsFrame = needsFrame || changed
-        guard needsFrame || inputs.contains(where: { visibleIDs.contains($0.node.id) && ($0.node.kind == .gradient || $0.node.kind == .particles) }) else {
+        guard needsFrame || roots.flatMap({ $0.descendants }).contains(where: { visibleIDs.contains($0.id) && $0.hasAnimatedEffects }) || inputs.contains(where: { visibleIDs.contains($0.node.id) && ($0.node.kind == .gradient || $0.node.kind == .particles) }) else {
             gate.signal(); return
         }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
@@ -622,6 +622,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             float4 glow = image.sample(effectSample, v.uv);
             float a = max(base.a, min(1.0, max(glow.r, max(glow.g, glow.b)) * amount));
             return float4(min(float3(a), base.rgb + glow.rgb * amount), a);
+        }
+        if (mode == 8) {
+            float phase = u.viewport.y * (6.28318530718 / 8.0);
+            float2 offset = float2(sin(v.uv.y * 18.0 + phase) / u.viewport.x,
+                                   sin(v.uv.x * 15.0 - phase)) * amount;
+            return image.sample(effectSample, v.uv + offset);
         }
         if (mode >= 4 && mode <= 6) {
             float4 pixel = image.sample(effectSample, v.uv);

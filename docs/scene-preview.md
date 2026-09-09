@@ -305,3 +305,16 @@ renders a 1024×1024 PNG at the specified scene time, without desktop windows or
 input grants. It supports images, gradients, particles, groups, and effects; video
 scenes are rejected instead of exporting a not-yet-decoded frame. Output must not
 already exist. This is a verification/export aid, not a display-performance test.
+
+**Samples → Ripple** demonstrates wave displacement with a generated Ripple
+Strength control. Add **Displacement** in Appearance's effects list to warp any
+image, video, particle layer, or composited group. Its amount can be selected in
+Bind/Keyframes like other identified effects. Strength zero stops the procedural
+movement without discarding the effect or its identity.
+
+`python3 scripts/render-motion-preview.py Examples/Ripple.idlesse build/ripple.mp4`
+captures a four-second, 12 fps offscreen preview and deletes its temporary PNGs.
+It requires ffmpeg and the built app. Use `--keep-stills` to retain first/middle/last
+frames for visual inspection. Outputs are never overwritten. Duration/fps are
+bounded to 180 total frames; this samples scene time and does not measure real-time
+playback performance. The app's offscreen export restrictions still apply.

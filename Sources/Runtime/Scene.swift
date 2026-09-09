@@ -281,12 +281,13 @@ struct SceneNode: Codable, Sendable {
     }
     struct Style: Codable, Sendable, Equatable {
         struct Effect: Codable, Sendable, Equatable {
-            enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette }
+            enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette, displacement }
             var id: UUID? = UUID()
             var type: Kind
             var amount: Double
             var range: ClosedRange<Double> {
                 switch type {
+                case .displacement: return 0...0.1
                 case .blur: return 0...24
                 case .bloom, .saturation: return 0...2
                 case .exposure: return -2...2
@@ -328,7 +329,8 @@ struct SceneNode: Codable, Sendable {
     var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
     var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
     var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
-    var animated: Bool { visible && (kind == .group ? children.contains { $0.animated } : kind != .image) }
+    var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
+    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : kind != .image)) }
     func duplicated() -> SceneNode {
         var copy = self
         copy.id = UUID()
@@ -435,7 +437,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...17).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...18).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -480,6 +482,9 @@ struct LocalSceneSource: SceneSource {
             guard node.type == .particles || node.emitter == nil else { throw SceneError.invalid("Only particle nodes accept an emitter.") }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
+            guard manifest.version >= 18 || !(node.style?.effects.contains { $0.type == .displacement } ?? false) else {
+                throw SceneError.invalid("Displacement requires scene version 18.")
+            }
             guard (node.style?.effects.isEmpty ?? true) || manifest.version >= 15 else { throw SceneError.invalid("Ordered effects require scene version 15.") }
             guard manifest.version < 6 || node.id != nil else { throw SceneError.invalid("Every v6 node needs a UUID id.") }
             var decodedStyle = node.style ?? .plain
@@ -695,7 +700,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)

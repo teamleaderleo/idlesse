@@ -366,3 +366,18 @@ time with the same evaluated properties reproduces the same result. Stateful
 smoothing retains its existing seek-reset semantics.
 
 `Examples/Fireflies.idlesse` is a six-second looping particle scene with bloom.
+
+## V18 wave displacement
+
+`{ "id": "…", "type": "displacement", "amount": 0.04 }` warps the preceding
+effect output with two perpendicular sine fields. Amount is 0–0.1 of canvas
+height, with aspect correction on the horizontal axis. The wave phase repeats
+every eight scene seconds; seeking and authored transport use SceneClock.
+Edges clamp to the node canvas. This first displacement implementation is a
+procedural wave, not an imported displacement-map asset.
+
+It is one additional sampling pass and reuses the effect node's existing three
+targets. No extra texture pool is allocated. Nonzero displacement animates a
+still image or static group; zero returns otherwise-static scenes to event-driven
+rendering. Bind its identified amount to parameters, keyframes, or input signals
+using V16 targets. `Examples/Ripple.idlesse` exposes Ripple Strength as a control.

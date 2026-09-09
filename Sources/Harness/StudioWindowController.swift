@@ -289,8 +289,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         heading.spacing = 4
         let open = NSButton(title: "Open Scene…", target: self, action: #selector(choose))
         let sample = NSPopUpButton(frame: .zero, pullsDown: true)
-        sample.addItems(withTitles: ["Samples", "Aurora", "Audio Aurora", "Fireflies"])
+        sample.addItems(withTitles: ["Samples", "Aurora", "Audio Aurora", "Fireflies", "Ripple"])
         sample.item(at: 1)?.target = self; sample.item(at: 1)?.action = #selector(showSample)
+        sample.item(at: 4)?.target = self; sample.item(at: 4)?.action = #selector(showRippleSample)
         sample.item(at: 3)?.target = self; sample.item(at: 3)?.action = #selector(showParticleSample)
         sample.item(at: 2)?.target = self; sample.item(at: 2)?.action = #selector(showAudioSample)
         pauseButton.target = self
@@ -973,6 +974,17 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             node.content = .particles(emitter)
             self.editor.replaceSelected(node, name: "Change Emitter")
         }
+    }
+    @objc private func showRippleSample() {
+        guard mayDiscard() else { return }
+        showSample()
+        var node = SceneNode(name: "Ripple", content: .gradient)
+        node.style.effects = [.init(type: .displacement, amount: 0.04)]
+        let target = ScenePropertyAddress(nodeID: node.id, property: .effectAmount, effectID: node.style.effects[0].id)
+        let sample = SceneDescriptor(title: "Ripple", nodes: [node], parameters: [
+            "strength": .init(name: "Ripple Strength", value: 0.04, min: 0, max: 0.1)
+        ], bindings: [.init(target: target, parameter: "strength")])
+        _ = applyEdit(sample.nodes, selected: 0, name: "Create Ripple", controls: sample)
     }
     @objc private func showParticleSample() {
         guard mayDiscard() else { return }

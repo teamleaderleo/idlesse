@@ -209,6 +209,37 @@ enum WallpaperSmoke {
         gradient.releaseResources()
         precondition(gradient.diagnostics.activeResources == 0)
 
+        let checkerURL = folder.appendingPathComponent("checker.png")
+        let checker = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        for y in 0..<32 { for x in 0..<32 {
+            let offset = y * checker.bytesPerRow + x * 4
+            let value: UInt8 = ((x / 4 + y / 4) % 2 == 0) ? 240 : 20
+            for channel in 0..<3 { checker.bitmapData![offset + channel] = value }
+            checker.bitmapData![offset + 3] = 255
+        } }
+        try checker.representation(using: .png, properties: [:])!.write(to: checkerURL)
+        let rippleClock = SceneClock(now: { 0 })
+        var rippleNode = SceneNode(content: .image(checkerURL))
+        rippleNode.style.effects = [.init(type: .displacement, amount: 0.06)]
+        let ripple = try MetalSceneRenderer(playable: SceneDescriptor(title: "Ripple", nodes: [rippleNode]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: rippleClock) { errors.append($0) }
+        precondition(ripple.diagnostics.animated)
+        try rippleClock.seek(to: 1)
+        let rippleA = try ripple.renderProbe()
+        try rippleClock.seek(to: 3)
+        let rippleB = try ripple.renderProbe()
+        try rippleClock.seek(to: 1)
+        let rippleAgain = try ripple.renderProbe()
+        precondition(rippleA != rippleB && rippleA == rippleAgain, "Displacement must animate static pixels and seek deterministically")
+        rippleNode.style.effects[0].amount = 0
+        precondition(ripple.updateScene(SceneDescriptor(title: "Still", nodes: [rippleNode])) && !ripple.diagnostics.animated)
+        let stillA = try ripple.renderProbe()
+        try rippleClock.seek(to: 5)
+        let stillB = try ripple.renderProbe()
+        precondition(stillA == stillB && stillA != rippleA)
+        ripple.releaseResources()
         let particleClock = SceneClock(now: { 0 })
         var particleNode = SceneNode(content: .particles(.init(size: 0.04)))
         particleNode.style.effects = [.init(type: .bloom, amount: 0.7)]

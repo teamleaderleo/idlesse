@@ -160,7 +160,7 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
     private let rangeLabel = NSTextField(labelWithString: "")
     private let addButton = NSButton(title: "+ Effect", target: nil, action: nil)
     private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
-    private let kinds: [SceneNode.Style.Effect.Kind] = [.bloom, .blur, .exposure, .saturation, .vignette]
+    private let kinds: [SceneNode.Style.Effect.Kind] = [.bloom, .blur, .exposure, .saturation, .vignette, .displacement]
     private let dragType = NSPasteboard.PasteboardType("app.idlesse.effect-row")
     private let owner = UUID().uuidString
     private var effects: [SceneNode.Style.Effect]
@@ -235,7 +235,7 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
         guard effects.indices.contains(table.selectedRow) else { return }
         let index = table.selectedRow
         effects[index].type = kinds[kind.indexOfSelectedItem]
-        effects[index].amount = effects[index].type == .blur ? 8 : effects[index].type == .exposure ? 0 : 1
+        effects[index].amount = effects[index].type == .displacement ? 0.02 : effects[index].type == .blur ? 8 : effects[index].type == .exposure ? 0 : 1
         if let id = effects[index].id { drafts.removeValue(forKey: id) }
         table.reloadData(); table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         updateSelection()
