@@ -200,7 +200,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         if selected != nil { preview() }
     }
     private func allItems() -> [Item] {
-        let names = [("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
+        let names = [("AfterHours", "After Hours"), ("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
                      ("AudioAurora", "Audio Aurora"), ("Gradient", "Aurora"), ("BreathingAurora", "Breathing Aurora")]
         let builtins = names.compactMap { name, title -> Item? in
             guard let url = Bundle.main.resourceURL?.appendingPathComponent("Scenes/\(name).idlesse"),
@@ -323,13 +323,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 let image: NSImage
-                let note = "Still preview at 2s · Open in Studio for playback · Pointer/audio access off"
+                let previewTime = scene.metadata?.previewTime ?? 2
+                let note = "Still preview at \(String(format: "%g", previewTime))s · Open in Studio for playback · Pointer/audio access off"
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
-                try clock.seek(to: 2)
+                try clock.seek(to: previewTime)
                 let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 512), scale: 1, clock: clock, onError: { _ in })
                 defer { renderer.releaseResources() }
-                try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : 2,
+                try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : previewTime,
                                                        size: CGSize(width: 512, height: 512))
                 try Task.checkCancellation()
                 let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 512, height: 512, sampleVideo: false)
@@ -587,7 +588,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
         precondition(controller.droppedURLs(pasteboard) == [raw])
-        precondition(controller.items.count == 6)
+        precondition(controller.items.count == 7)
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]

@@ -1,0 +1,24 @@
+{
+  "version": 21,
+  "title": "After Hours",
+  "capabilities": [],
+  "features": [
+    "motion",
+    "particles",
+    "shapes",
+    "text",
+    "typed-controls"
+  ],
+  "metadata": {
+    "author": "Idlesse",
+    "description": "Quiet geometric orbits and editable typography. Entirely procedural; no image or video assets.",
+    "tags": [
+      "night",
+      "typography",
+      "procedural"
+    ],
+    "license": "CC0-1.0",
+    "createdWith": "Idlesse",
+    "previewTime": 3
+  }
+}

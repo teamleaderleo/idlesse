@@ -1,5 +1,7 @@
 # Creative runtime, scene format v2
 
+Historical v2 design notes. For the current additions see [revision 21](reusable-scenes.md) and [scene format](scenes.md).
+
 Version 1 packages keep their existing `layers` format. Version 2 uses `nodes`:
 
 ```json

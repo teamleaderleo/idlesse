@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import MetalKit
 import CoreVideo
+import CoreText
 
 /// Experimental SDR compositor. One drawable per display; groups use bounded offscreen passes.
 /// Keep the layer renderer as the default until color and power parity are measured.
@@ -147,6 +148,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         for node in playable.allNodes {
             let input = Input(node)
             switch node.content {
+            case .text, .shape:
+                input.texture = try Self.upload(Self.rasterize(node, pixelLimit: SceneBudget.imagePixels(playable.nodes)), device: device)
             case .image(let url):
                 guard let image = DisplayImageDecoder.load(url, target: metal.drawableSize, mode: .fill, pixelLimit: CGFloat(SceneBudget.imagePixels(playable.nodes))),
                       let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
@@ -336,8 +339,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 guard node.kind == .gradient || node.kind == .particles || source != nil else { continue }
                 let aspect = sceneAspect
                 let mediaAspect = node.kind == .group ? aspect : source.map { Float($0.width) / Float($0.height) } ?? aspect
+                let fit = node.kind == .text || node.kind == .shape
                 guard effectPass(source: source, destination: scratch[0], mode: 0, amount: 0, gradient: node.kind == .gradient, emitter: node.emitter,
-                                 crop: SIMD2(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect))) else { return false }
+                                 crop: SIMD2(fit ? max(1, aspect / mediaAspect) : min(1, aspect / mediaAspect), fit ? max(1, mediaAspect / aspect) : min(1, mediaAspect / aspect))) else { return false }
                 var current = scratch[0]
                 for effect in node.style.effects {
                     let available = scratch.filter { $0 !== current }
@@ -369,9 +373,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 guard gradient || node.kind == .particles || texture != nil else { continue }
                 let aspect = sceneAspect
                 let mediaAspect = (node.kind == .group || outputs[node.id] != nil) ? aspect : texture.map { Float($0.width) / Float($0.height) } ?? aspect
+                let fit = node.kind == .text || node.kind == .shape
                 let t = node.transform
                 var u = Uniforms(transform: SIMD4(Float(t.x ?? 0), Float(t.y ?? 0), Float(t.scale ?? 1), Float((t.rotation ?? 0) * .pi / 180)),
-                    media: SIMD4(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
+                    media: SIMD4(fit ? max(1, aspect / mediaAspect) : min(1, aspect / mediaAspect), fit ? max(1, mediaAspect / aspect) : min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
                     viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0),
                     style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), Float(node.style.vignette)))
                 if outputs[node.id] == nil, let emitter = node.emitter { configureEmitter(emitter, uniforms: &u); if node.sprite != nil, let texture { u.media.w = 3; u.viewport.z = Float(texture.width) / Float(texture.height) } }
@@ -562,6 +567,28 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         needsFrame = true
     }
     static func smokeTestGroupTextureBudget() throws {
+        let shapeScene = SceneDescriptor(title: "Shape Test", nodes: [SceneNode(content: .shape(.init(primitive: .rectangle, fill: "#00FF00", width: 128, height: 128)))])
+        let shape = try MetalSceneRenderer(playable: shapeScene, bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
+        defer { shape.releaseResources() }
+        let pixels = try shape.renderProbe(dimension: 64)
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            precondition(pixels[index] <= 1 && pixels[index + 1] >= 254 && pixels[index + 2] <= 1, "Shape fill must preserve green through Metal")
+        }
+        var wideNode = SceneNode(content: .shape(.init(primitive: .rectangle, fill: "#00FF00", width: 128, height: 64)))
+        wideNode.style.effects = [.init(id: UUID(), type: .exposure, amount: 0)]
+        let wide = try MetalSceneRenderer(playable: .init(title: "Fit", nodes: [wideNode]), bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
+        defer { wide.releaseResources() }
+        let fit = try wide.renderProbe(dimension: 64)
+        precondition(fit[(8 * 64 + 32) * 4 + 1] == 0 && fit[(32 * 64 + 32) * 4 + 1] >= 254,
+            "Wide shapes must fit without cropping, including through effect passes")
+        let textScene = SceneDescriptor(title: "Text Test", nodes: [SceneNode(content: .text(.init(text: "Hello", size: 80, width: 512, height: 256)))])
+        let text = try MetalSceneRenderer(playable: textScene, bounds: NSRect(x: 0, y: 0, width: 256, height: 128), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
+        defer { text.releaseResources() }
+        let letters = try text.renderFrame(width: 256, height: 128)
+        let lit = stride(from: 0, to: letters.count, by: 4).filter { letters[$0] > 16 }.count
+        precondition(lit > 100 && lit < 16384, "CoreText should draw visible glyphs with a transparent surrounding canvas")
+        let repeated = try text.renderFrame(width: 256, height: 128)
+        precondition(repeated == letters, "Static text must be deterministic")
         guard let device = MTLCreateSystemDefaultDevice() else { throw SceneError.invalid("Metal unavailable") }
         let pool = GroupTexturePool()
         let size = CGSize(width: 7680, height: 4320)
@@ -807,7 +834,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             return styled(float4(mix(float3(0.025,0.035,0.12),high,smoothstep(0.0,1.2,wave*(1.0-uv.y*0.5))),1), v.uv, u);
         }
         constexpr sampler sample(filter::linear, address::clamp_to_edge);
-        return styled(image.sample(sample, (v.uv-0.5)*u.media.xy+0.5), v.uv, u);
+        float2 mediaUV = (v.uv-0.5)*u.media.xy+0.5;
+        if (any(mediaUV < 0.0) || any(mediaUV > 1.0)) return float4(0);
+        return styled(image.sample(sample, mediaUV), v.uv, u);
     }
     """
 }
@@ -876,5 +905,61 @@ private final class GroupTexturePool {
         disposed = true
         bytes -= free.reduce(0) { $0 + $1.bytes }
         free.removeAll()
+    }
+}
+
+
+extension MetalSceneRenderer {
+    /// Static authored content is rasterized once, never on the animation timer.
+    private static func rasterize(_ node: SceneNode, pixelLimit: Int) throws -> CGImage {
+        let width = node.typography?.width ?? node.shape?.width ?? 1024
+        let height = node.typography?.height ?? node.shape?.height ?? 512
+        let scale = min(1, sqrt(Double(pixelLimit) / Double(width * height)))
+        let pixelsWide = max(1, Int(Double(width) * scale))
+        let pixelsHigh = max(1, Int(Double(height) * scale))
+        guard let context = CGContext(data: nil, width: pixelsWide, height: pixelsHigh, bitsPerComponent: 8,
+            bytesPerRow: pixelsWide * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw SceneError.invalid("Could not allocate the text or shape texture.")
+        }
+        context.scaleBy(x: scale, y: scale)
+        func color(_ hex: String) -> CGColor {
+            let digits = hex.dropFirst(), value = UInt64(digits, radix: 16) ?? 0
+            let rgb = digits.count == 8 ? value >> 8 : value
+            return CGColor(srgbRed: CGFloat((rgb >> 16) & 255) / 255,
+                green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255,
+                alpha: digits.count == 8 ? CGFloat(value & 255) / 255 : 1)
+        }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        if let text = node.typography {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = text.alignment == .left ? .left : text.alignment == .right ? .right : .center
+            paragraph.lineSpacing = text.lineSpacing
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: CTFontCreateWithName(text.font as CFString, text.size, nil),
+                .foregroundColor: NSColor(cgColor: color(text.fill))!,
+                .paragraphStyle: paragraph]
+            let string = NSAttributedString(string: text.text, attributes: attributes)
+            let setter = CTFramesetterCreateWithAttributedString(string)
+            let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0),
+                CGPath(rect: rect.insetBy(dx: 4, dy: 4), transform: nil), nil)
+            CTFrameDraw(frame, context)
+        } else if let shape = node.shape {
+            context.setFillColor(color(shape.fill)); context.setStrokeColor(color(shape.fill))
+            switch shape.primitive {
+            case .rectangle: context.fill(rect)
+            case .ellipse: context.fillEllipse(in: rect)
+            case .roundedRectangle:
+                let radius = min(shape.cornerRadius, Double(min(width, height)) / 2)
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                context.fillPath()
+            case .line:
+                context.setLineWidth(min(shape.lineWidth, Double(height)))
+                context.move(to: CGPoint(x: 0, y: height / 2))
+                context.addLine(to: CGPoint(x: width, y: height / 2)); context.strokePath()
+            }
+        }
+        guard let image = context.makeImage() else { throw SceneError.invalid("Could not finish the text or shape texture.") }
+        return image
     }
 }

@@ -137,7 +137,7 @@ build_app() {
 
   cp "$ROOT/Sources/Harness/Info.plist" "$APP/Contents/Info.plist"
   mkdir -p "$APP/Contents/Resources/Scenes"
-  for scene in Undertow Fireflies Ripple AudioAurora Gradient BreathingAurora; do
+  for scene in AfterHours Undertow Fireflies Ripple AudioAurora Gradient BreathingAurora; do
     cp -R "$ROOT/Examples/$scene.idlesse" "$APP/Contents/Resources/Scenes/"
   done
   chmod +x "$APP/Contents/MacOS/Idlesse"

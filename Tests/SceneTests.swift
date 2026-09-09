@@ -572,6 +572,72 @@ import Foundation
         do { try SceneBudget.validate([maskNode]); fatalError("Accepted sprite on image") } catch is SceneError {}
         try Data(#"{"version":19,"title":"Old","capabilities":[]}"#.utf8).write(to: compositionPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(compositionPackage); fatalError("Accepted v20 features in v19") } catch is SceneError {}
-        print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
+        var typed = SceneDescriptor(title: "Typed", nodes: [SceneNode(content: .gradient)])
+        typed.parameters = ["strength": .init(name: "Strength", value: 0.5, min: 0, max: 1),
+            "show": .init(name: "Show", type: .boolean, boolean: true),
+            "color": .init(name: "Color", type: .color, text: "#ff00aa80"),
+            "mode": .init(name: "Mode", type: .choice, text: "Calm", choices: ["Calm", "Lively"]),
+            "title": .init(name: "Title", type: .string, text: "Hello 🌙")]
+        typed.metadata = SceneMetadata(author: "Leo", description: "Reusable", tags: ["night"], license: "CC0", createdWith: "Idlesse", previewTime: 4)
+        let typedPackage = root.appendingPathComponent("Typed.idlesse")
+        try ScenePackageWriter.write(typed, to: typedPackage)
+        let typedRead = try await source.resolve(typedPackage)
+        precondition(typedRead.parameters == typed.parameters && typedRead.metadata == typed.metadata)
+        precondition(typedRead.replacingNodes(typedRead.nodes).metadata == typed.metadata)
+        let typedManifest = typedPackage.appendingPathComponent("manifest.json")
+        var manifestObject = try JSONSerialization.jsonObject(with: Data(contentsOf: typedManifest)) as! [String: Any]
+        precondition(manifestObject["version"] as? Int == 21)
+        manifestObject["features"] = ["future-custom-runtime"]
+        try JSONSerialization.data(withJSONObject: manifestObject).write(to: typedManifest)
+        do { _ = try await source.resolve(typedPackage); fatalError("Accepted unknown feature") } catch is SceneError {}
+        manifestObject["features"] = []
+        try JSONSerialization.data(withJSONObject: manifestObject).write(to: typedManifest)
+        do { _ = try await source.resolve(typedPackage); fatalError("Accepted undeclared typed controls") } catch is SceneError {}
+        typed.bindings = [.init(target: .init(nodeID: typed.nodes[0].id, property: .opacity), parameter: "show")]
+        do { _ = try typed.evaluated(); fatalError("Accepted boolean motion source") } catch is SceneError {}
+        typed.bindings[0].parameter = "strength"
+        typed.bindings[0].modifiers = [.init(operation: .multiply, parameter: "color")]
+        do { _ = try typed.evaluated(); fatalError("Accepted color modifier") } catch is SceneError {}
+        precondition(!SceneParameter(name: "Bad", type: .color, text: "red").isValid)
+        precondition(!SceneParameter(name: "Bad", type: .choice, text: "a", choices: ["a", "a"]).isValid)
+        let lettering = SceneNode(content: .text(.init(text: "Moonlight")))
+        var graphics = SceneDescriptor(title: "Graphics", nodes: [lettering, SceneNode(content: .shape(.init()))])
+        var ink = SceneParameter(name: "Ink", type: .color, text: "#00FF00")
+        ink.targets = [.init(nodeID: lettering.id, property: .fill)]
+        graphics.parameters["ink"] = ink
+        var label = SceneParameter(name: "Words", type: .string, text: "Good night")
+        label.targets = [.init(nodeID: lettering.id, property: .text)]
+        graphics.parameters["words"] = label
+        let graphicNodes = try graphics.evaluated().nodes
+        precondition(graphicNodes[0].typography?.text == "Good night")
+        precondition(graphicNodes[0].typography?.fill == "#00FF00")
+        precondition(!graphics.animated && graphics.requiresMetal)
+        let preset = try SceneComponent.capture(lettering, from: graphics)
+        let presetID = UUID().uuidString
+        graphics.components = [presetID: preset]
+        let inserted = try preset.inserting(into: graphics, id: presetID)
+        precondition(inserted.nodes.count == 3 && inserted.parameters.count == 4)
+        precondition(inserted.nodes.last!.id != lettering.id)
+        let clonedKeys = Set(inserted.parameters.keys).subtracting(graphics.parameters.keys)
+        precondition(clonedKeys.count == 2)
+        var changedInstance = inserted
+        changedInstance.parameters["words"]?.text = "Only original"
+        let changedNodes = try changedInstance.evaluated().nodes
+        precondition(changedNodes[0].typography?.text == "Only original" && changedNodes[2].typography?.text == "Good night")
+        let graphicsPackage = root.appendingPathComponent("Graphics.idlesse")
+        try ScenePackageWriter.write(inserted, to: graphicsPackage)
+        let graphicsRead = try await source.resolve(graphicsPackage)
+        precondition(graphicsRead.components?.count == 1 && graphicsRead.nodes[2].componentID == presetID)
+        precondition(graphicsRead.nodes[0].typography == lettering.typography)
+        let twice = try graphicsRead.components![presetID]!.inserting(into: graphicsRead, id: presetID)
+        precondition(twice.nodes.count == 4 && twice.parameters.count == 6)
+        var full = SceneDescriptor(title: "Full", nodes: (0..<16).map { _ in SceneNode(content: .shape(.init())) }, components: [presetID: preset])
+        do { _ = try preset.inserting(into: full, id: presetID); fatalError("Preset bypassed node budget") } catch is SceneError {}
+        full.components?[presetID]?.node.componentID = presetID
+        do { _ = try full.evaluated(); fatalError("Accepted recursive preset provenance") } catch is SceneError {}
+        var modifiedText = lettering; modifiedText.content = .text(.init(text: "Different"))
+        precondition(sceneResourceOrder(from: [lettering], to: [modifiedText]) == nil)
+        precondition(SceneBudget.imagePixels([lettering, modifiedText]) == 16_000_000)
+        print("Scene tests passed: legacy formats, typed controls, features, text, shapes, independent presets, budgets and audio capabilities")
     }
 }
