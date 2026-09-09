@@ -8,6 +8,22 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
+    private var library: SceneLibraryController?
+    @objc private func showLibrary() {
+        do {
+            if library == nil {
+                library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url) },
+                    onEdit: { [weak self] url, asCopy in self?.scenePreview.openLibraryScene(url, asCopy: asCopy) })
+            }
+            saverView?.stopAnimation()
+            library?.show()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn’t open the Library"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
     private var pendingSceneURL: URL?
     private lazy var scenePreview = StudioWindowController { [weak self] url in self?.wallpaper.select(url) }
     @objc private func showScenePreview() {
@@ -70,7 +86,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaperButton.bezelStyle = .rounded
         let sceneButton = NSButton(title: "Studio…", target: self, action: #selector(showScenePreview))
         sceneButton.bezelStyle = .rounded
-        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton])
+        let libraryButton = NSButton(title: "Library…", target: self, action: #selector(showLibrary))
+        libraryButton.bezelStyle = .rounded
+        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton, libraryButton])
         controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         for button in [pauseButton!, nextButton, revealButton, settingsButton!] {
@@ -241,6 +259,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
+        let libraryItem = wallpaperMenu.addItem(withTitle: "Library…", action: #selector(showLibrary), keyEquivalent: "l")
+        libraryItem.target = self
         wallpaperMenu.addItem(.separator())
         let bedtime = wallpaperMenu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
         bedtime.target = comfort
@@ -252,6 +272,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 }
 
 let app = NSApplication.shared
+
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-library"), CommandLine.arguments.count > index + 1 {
+    do {
+        let video = CommandLine.arguments.count > index + 2 ? URL(fileURLWithPath: CommandLine.arguments[index + 2]) : nil
+        try SceneLibraryController.smokeTest(outputURL: URL(fileURLWithPath: CommandLine.arguments[index + 1]), videoURL: video)
+        exit(0)
+    }
+    catch { fputs("Library check failed: \(error.localizedDescription)\n", stderr); exit(1) }
+}
 
 // Deterministic, offscreen preview: no desktop windows, input grants, or UI activation.
 if let index = CommandLine.arguments.firstIndex(of: "--render-scene") {

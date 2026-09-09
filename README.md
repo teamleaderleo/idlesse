@@ -1,8 +1,13 @@
 # Idlesse
 
-A native macOS picture screensaver for people who want an image to stay on screen long enough to actually look at it.
+A native macOS app for creating and playing animated desktop scenes, with a picture screensaver and optional bedtime dimming.
 
-Current prototype features:
+- **Library:** browse built-in scenes and imported references, search, favorite, preview, and open scenes in Studio or on the desktop. Originals stay in their existing folders. [Library details](docs/library.md)
+- **Studio:** arrange layers, animate properties, add effects and particles, and save editable `.idlesse` packages. [Studio details](docs/scene-preview.md)
+- **Wallpaper:** play image, video, and procedural scenes on your displays. Metal handles creative scenes; Standard remains the compatibility path.
+- **Desktop Comfort:** optional dimming and daily quiet-display schedules, independent of the scene format. [Bedtime controls](docs/desktop-comfort.md)
+
+Screensaver features:
 
 - choose a folder of images
 - optionally include subfolders
@@ -17,7 +22,7 @@ Current prototype features:
 
 ## Current status
 
-Early prototype. The shipping artifact is **Idlesse.saver**, a classic ScreenSaver-framework bundle. A standalone development preview is also built for iteration, but it is not the source of truth for the installed saver.
+Under active development. The build produces **Idlesse.app** (Library, Studio, wallpaper, and Desktop Comfort) and **Idlesse.saver**, a separate ScreenSaver-framework bundle. The app does not replace the installed saver's own preferences or host lifecycle.
 
 Idlesse stores installed-saver preferences with Apple's `ScreenSaverDefaults`. The selected folder is represented by a read-only security-scoped bookmark created from inside the screen-saver host, so the sandboxed `legacyScreenSaver` process can reopen it later.
 

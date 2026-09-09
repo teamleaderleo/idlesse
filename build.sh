@@ -122,6 +122,8 @@ build_app() {
     "$ROOT/Sources/Harness/SceneCanvasInteraction.swift" \
     "$ROOT/Sources/Harness/SceneEditorController.swift" \
     "$ROOT/Sources/Harness/SceneDocument.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryStore.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryController.swift" \
     "$ROOT/Sources/Harness/StudioWindowController.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \
     "$ROOT/Sources/Harness/AudioSmoke.swift" \
@@ -133,6 +135,10 @@ build_app() {
     -o "$APP/Contents/MacOS/Idlesse"
 
   cp "$ROOT/Sources/Harness/Info.plist" "$APP/Contents/Info.plist"
+  mkdir -p "$APP/Contents/Resources/Scenes"
+  for scene in Undertow Fireflies Ripple AudioAurora Gradient BreathingAurora; do
+    cp -R "$ROOT/Examples/$scene.idlesse" "$APP/Contents/Resources/Scenes/"
+  done
   chmod +x "$APP/Contents/MacOS/Idlesse"
   codesign --force --sign - "$APP" >/dev/null
 

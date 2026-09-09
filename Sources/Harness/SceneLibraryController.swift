@@ -1,0 +1,341 @@
+import AppKit
+import AVFoundation
+import UniformTypeIdentifiers
+
+/// Native reference library with one on-demand poster, never a grid of live renderers.
+final class SceneLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
+    struct Item {
+        let id: String
+        let title: String
+        let builtin: URL?
+        let entry: SceneLibraryStore.Entry?
+    }
+    private let store: SceneLibraryStore
+    private let table = NSTableView()
+    private let search = NSSearchField()
+    private let filter = NSPopUpButton()
+    private let sort = NSPopUpButton()
+    private let poster = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "Choose a scene")
+    private let detail = NSTextField(wrappingLabelWithString: "")
+    private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
+    private let apply = NSButton(title: "Use on Desktop", target: nil, action: nil)
+    private let edit = NSButton(title: "Open in Studio", target: nil, action: nil)
+    private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
+    private var cache: [String: (image: NSImage, note: String)] = [:]
+    private var cacheOrder: [String] = []
+    private var items: [Item] = []
+    private var selected: Item?
+    private var task: Task<Void, Never>?
+    private var generation = 0
+    private var onUse: (URL) -> Void
+    private var onEdit: (URL, Bool) -> Void
+
+    init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
+        self.onUse = onUse
+        self.onEdit = onEdit
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        store = try SceneLibraryStore(file: indexURL ?? support.appendingPathComponent("Idlesse/Library/index.json"))
+        super.init(window: NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
+                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false))
+        window?.title = "Idlesse Library"
+        window?.minSize = NSSize(width: 840, height: 520)
+        window?.isReleasedWhenClosed = false
+        window?.delegate = self
+        window?.center()
+        setup()
+        reload()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func setup() {
+        guard let root = window?.contentView else { return }
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        search.placeholderString = "Search scenes"
+        search.delegate = self
+        filter.addItems(withTitles: ["All Scenes", "Built-in", "Imported", "Favorites"])
+        filter.target = self; filter.action = #selector(filterChanged)
+        sort.addItems(withTitles: ["Name", "Recently Opened"])
+        sort.target = self; sort.action = #selector(filterChanged)
+        let add = NSButton(title: "Add Scenes…", target: self, action: #selector(addScenes))
+        let toolbar = NSStackView(views: [search, filter, sort, add])
+        toolbar.spacing = 10
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.rowHeight = 44
+        table.style = .sourceList
+        table.delegate = self; table.dataSource = self
+        table.target = self; table.doubleAction = #selector(useScene)
+        table.setAccessibilityLabel("Scenes")
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        poster.imageScaling = .scaleProportionallyUpOrDown
+        poster.wantsLayer = true
+        poster.layer?.backgroundColor = NSColor.black.cgColor
+        poster.layer?.cornerRadius = 10
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        detail.textColor = .secondaryLabelColor
+        favorite.target = self; favorite.action = #selector(toggleFavorite)
+        apply.target = self; apply.action = #selector(useScene)
+        edit.target = self; edit.action = #selector(editScene)
+        remove.target = self; remove.action = #selector(removeScene)
+        let refresh = NSButton(title: "Refresh Preview", target: self, action: #selector(refreshPreview))
+        let actions = NSStackView(views: [favorite, refresh, remove])
+        let duplicate = NSButton(title: "Make a Copy in Studio", target: self, action: #selector(duplicateScene))
+        let primary = NSStackView(views: [edit, duplicate, apply])
+        for button in [add, favorite, apply, edit, remove, refresh, duplicate] { button.bezelStyle = .rounded }
+        let right = NSStackView(views: [titleLabel, poster, detail, actions, primary])
+        right.orientation = .vertical
+        right.alignment = .leading
+        right.spacing = 12
+        for view in [toolbar, scroll, right] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(view)
+        }
+        poster.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
+            search.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            scroll.widthAnchor.constraint(equalToConstant: 250),
+            right.topAnchor.constraint(equalTo: scroll.topAnchor),
+            right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
+            right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            right.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
+            poster.widthAnchor.constraint(equalTo: right.widthAnchor),
+            poster.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            detail.widthAnchor.constraint(equalTo: right.widthAnchor)
+        ])
+    }
+
+    func show() {
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if selected != nil, poster.image == nil { preview() }
+    }
+    private func allItems() -> [Item] {
+        let names = [("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
+                     ("AudioAurora", "Audio Aurora"), ("Gradient", "Aurora"), ("BreathingAurora", "Breathing Aurora")]
+        let builtins = names.compactMap { name, title -> Item? in
+            guard let url = Bundle.main.resourceURL?.appendingPathComponent("Scenes/\(name).idlesse"),
+                  FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return Item(id: "builtin.\(name)", title: title, builtin: url, entry: nil)
+        }
+        return builtins + store.catalog.entries.map { Item(id: $0.id, title: $0.title, builtin: nil, entry: $0) }
+    }
+    @objc private func filterChanged() { reload() }
+    func controlTextDidChange(_ obj: Notification) { reload() }
+    private func reload() {
+        let previous = selected?.id
+        items = allItems().filter { item in
+            let matches = search.stringValue.isEmpty || item.title.localizedCaseInsensitiveContains(search.stringValue)
+            switch filter.indexOfSelectedItem {
+            case 1: return matches && item.builtin != nil
+            case 2: return matches && item.entry != nil
+            case 3: return matches && store.catalog.favorites.contains(item.id)
+            default: return matches
+            }
+        }.sorted {
+            if sort.indexOfSelectedItem == 1 {
+                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                if a != b { return a > b }
+            }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        table.reloadData()
+        if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        } else {
+            table.deselectAll(nil)
+            selected = nil
+            preview()
+        }
+    }
+    func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let item = items[row]
+        let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
+        text.lineBreakMode = .byTruncatingTail
+        return text
+    }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        preview()
+    }
+    private func url(_ item: Item) throws -> URL {
+        if let builtin = item.builtin { return builtin }
+        guard let entry = item.entry else { throw CocoaError(.fileNoSuchFile) }
+        return try store.resolve(entry)
+    }
+    @objc private func refreshPreview() {
+        if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
+        preview()
+    }
+    private func preview() {
+        task?.cancel(); task = nil; generation += 1
+        let token = generation
+        poster.image = nil
+        favorite.isEnabled = selected != nil
+        apply.isEnabled = selected != nil
+        edit.isEnabled = selected != nil
+        remove.isEnabled = selected?.entry != nil
+        guard let selected else { titleLabel.stringValue = "No scenes"; detail.stringValue = "Add a scene or change the search/filter."; return }
+        titleLabel.stringValue = selected.title
+        favorite.title = store.catalog.favorites.contains(selected.id) ? "★ Favorited" : "☆ Favorite"
+        detail.stringValue = "Preparing still preview…"
+        if let cached = cache[selected.id] {
+            poster.image = cached.image
+            detail.stringValue = cached.note
+            return
+        }
+        task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { if token == self.generation { self.task = nil } }
+            do {
+                let url = try self.url(selected)
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                let scene = try await LocalSceneSource().resolve(url)
+                try Task.checkCancellation()
+                guard token == self.generation else { return }
+                let image: NSImage
+                var note = "Still preview at 2s · Open in Studio for playback · Pointer/audio access off"
+                if let video = scene.allNodes.first(where: { $0.kind == .video })?.assetURL {
+                    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: video))
+                    generator.appliesPreferredTrackTransform = true
+                    generator.maximumSize = CGSize(width: 512, height: 512)
+                    let (frame, _) = try await generator.image(at: .zero)
+                    image = NSImage(cgImage: frame, size: .zero)
+                    note = "Video thumbnail · Open in Studio to preview the full composition"
+                } else {
+                    let clock = SceneClock(now: { 0 })
+                    try clock.configure(timeline: scene.timeline)
+                    try clock.seek(to: 2)
+                    let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 512), scale: 1, clock: clock, onError: { _ in })
+                    defer { renderer.releaseResources() }
+                    let bytes = try renderer.renderProbe(signals: .init(time: clock.time), dimension: 512)
+                    guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+                          let frame = CGImage(width: 512, height: 512, bitsPerComponent: 8, bitsPerPixel: 32,
+                            bytesPerRow: 2048, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+                    else { throw SceneError.invalid("Could not prepare the Library preview.") }
+                    image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 512))
+                }
+                try Task.checkCancellation()
+                guard token == self.generation else { return }
+                self.cacheOrder.removeAll { $0 == selected.id }
+                while self.cacheOrder.count >= 8 { self.cache.removeValue(forKey: self.cacheOrder.removeFirst()) }
+                self.cacheOrder.append(selected.id)
+                self.cache[selected.id] = (image, note)
+                self.poster.image = image
+                self.detail.stringValue = note
+            } catch {
+                guard token == self.generation, !Task.isCancelled else { return }
+                self.detail.stringValue = "Preview unavailable: \(error.localizedDescription). Try Open in Studio, or re-add a moved file."
+            }
+        }
+    }
+
+    @objc private func addScenes() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .movie, UTType(filenameExtension: "idlesse") ?? .package]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Add references to scenes or media. Originals stay in their current folder."
+        panel.beginSheetModal(for: window!) { [weak self] response in
+            guard let self, response == .OK else { return }
+            do {
+                for url in panel.urls { _ = try self.store.add(url) }
+                self.reload()
+            } catch { self.reload(); self.detail.stringValue = error.localizedDescription }
+        }
+    }
+    @objc private func toggleFavorite() {
+        guard let selected else { return }
+        do { try store.favorite(selected.id); reload() } catch { detail.stringValue = error.localizedDescription }
+    }
+    @objc private func removeScene() {
+        guard let selected, selected.entry != nil else { return }
+        do { try store.remove(selected.id); cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id }; reload() }
+        catch { detail.stringValue = error.localizedDescription }
+    }
+    @objc private func useScene() { act(editing: false) }
+    @objc private func editScene() { act(editing: true) }
+    @objc private func duplicateScene() { act(editing: true, asCopy: true) }
+    private func act(editing: Bool, asCopy: Bool = false) {
+        guard let selected else { return }
+        do {
+            let url = try url(selected)
+            try store.used(selected.id)
+            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { onUse(url); window?.orderOut(nil) }
+        } catch { detail.stringValue = error.localizedDescription }
+    }
+    func windowWillClose(_ notification: Notification) {
+        task?.cancel(); generation += 1
+        cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
+    }
+    deinit { task?.cancel() }
+
+    static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var copied = false
+        let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
+            onUse: { _ in }, onEdit: { _, asCopy in copied = asCopy })
+        precondition(controller.items.count == 6)
+        let index = controller.items.firstIndex { $0.title == "Undertow" }!
+        controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        controller.selected = controller.items[index]
+        controller.preview()
+        let deadline = Date().addingTimeInterval(10)
+        while controller.task != nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(controller.poster.image != nil, controller.detail.stringValue)
+        let colors = NSBitmapImageRep(data: controller.poster.image!.tiffRepresentation!)!
+        var hasWarmColor = false
+        for y in stride(from: 0, to: colors.pixelsHigh, by: 32) {
+            for x in stride(from: 0, to: colors.pixelsWide, by: 32) {
+                if let color = colors.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.redComponent - color.blueComponent > 0.2 {
+                    hasWarmColor = true
+                }
+            }
+        }
+        precondition(hasWarmColor, "Undertow's copper poster must preserve BGRA channel order")
+        controller.editScene()
+        precondition(copied, "Built-in edits must become drafts")
+        controller.toggleFavorite()
+        controller.filter.selectItem(at: 3)
+        controller.reload()
+        precondition(controller.items.count == 1 && controller.items[0].title == "Undertow")
+        let root = controller.window!.contentView!
+        root.layoutSubtreeIfNeeded()
+        let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
+        root.cacheDisplay(in: root.bounds, to: bitmap)
+        try bitmap.representation(using: .png, properties: [:])!.write(to: outputURL, options: .withoutOverwriting)
+        controller.search.stringValue = "No matching scene"
+        controller.reload()
+        precondition(controller.items.isEmpty && !controller.apply.isEnabled)
+        if let videoURL {
+            let entry = try controller.store.add(videoURL)
+            controller.selected = Item(id: entry.id, title: entry.title, builtin: nil, entry: entry)
+            controller.preview()
+            let videoDeadline = Date().addingTimeInterval(10)
+            while controller.task != nil && Date() < videoDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Video thumbnail"), controller.detail.stringValue)
+        }
+        controller.window?.close()
+        print("Library UI checks passed: built-in poster/color, favorites, search, draft routing\(videoURL == nil ? "" : ", video thumbnail"); offscreen snapshot saved")
+    }
+}
