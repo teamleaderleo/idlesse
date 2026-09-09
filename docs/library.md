@@ -8,6 +8,9 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 - Open in Studio edits imported packages. Built-ins always become untitled drafts.
 - Make a Copy in Studio starts a draft without overwriting its source.
 - Remove from Library removes the reference and favorite/recent metadata, never the media.
+- Adding scenes clears the search, opens Imported, and selects the first added scene.
+  Each file is attempted independently; failed imports are reported together while
+  successful references remain available. Double-clicking empty list space does nothing.
 
 Imported files stay in their existing folder, including cloud-backed folders. The
 index keeps security-scoped bookmarks under Application Support/Idlesse/Library,

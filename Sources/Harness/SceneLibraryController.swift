@@ -67,7 +67,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         table.rowHeight = 44
         table.style = .sourceList
         table.delegate = self; table.dataSource = self
-        table.target = self; table.doubleAction = #selector(useScene)
+        table.target = self; table.doubleAction = #selector(doubleClickScene)
         table.setAccessibilityLabel("Scenes")
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -133,8 +133,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     @objc private func filterChanged() { reload() }
     func controlTextDidChange(_ obj: Notification) { reload() }
-    private func reload() {
-        let previous = selected?.id
+    private func reload(selecting id: String? = nil) {
+        let previous = id ?? selected?.id
         items = allItems().filter { item in
             let matches = search.stringValue.isEmpty || item.title.localizedCaseInsensitiveContains(search.stringValue)
             switch filter.indexOfSelectedItem {
@@ -153,6 +153,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         table.reloadData()
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            // Reloading can keep the same row number while changing its identity.
+            // AppKit need not send a selection notification in that case.
+            selected = items[index]
+            preview()
+            table.scrollRowToVisible(index)
         } else {
             table.deselectAll(nil)
             selected = nil
@@ -253,10 +258,28 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         panel.message = "Add references to scenes or media. Originals stay in their current folder."
         panel.beginSheetModal(for: window!) { [weak self] response in
             guard let self, response == .OK else { return }
+            self.importScenes(panel.urls)
+        }
+    }
+    private func importScenes(_ urls: [URL]) {
+        var firstID: String?
+        var failures: [String] = []
+        for url in urls {
             do {
-                for url in panel.urls { _ = try self.store.add(url) }
-                self.reload()
-            } catch { self.reload(); self.detail.stringValue = error.localizedDescription }
+                let entry = try store.add(url)
+                if firstID == nil { firstID = entry.id }
+            } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+        }
+        if firstID != nil {
+            search.stringValue = ""
+            filter.selectItem(at: 2)
+        }
+        reload(selecting: firstID)
+        if !failures.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Some scenes could not be added"
+            alert.informativeText = failures.joined(separator: "\n")
+            if let window { alert.beginSheetModal(for: window) }
         }
     }
     @objc private func toggleFavorite() {
@@ -269,6 +292,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { detail.stringValue = error.localizedDescription }
     }
     @objc private func useScene() { act(editing: false) }
+    @objc private func doubleClickScene() {
+        guard items.indices.contains(table.clickedRow) else { return }
+        selected = items[table.clickedRow]
+        act(editing: false)
+    }
     @objc private func editScene() { act(editing: true) }
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
@@ -289,8 +317,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
         var copied = false
+        var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
-            onUse: { _ in }, onEdit: { _, asCopy in copied = asCopy })
+            onUse: { _ in applied = true }, onEdit: { _, asCopy in copied = asCopy })
         precondition(controller.items.count == 6)
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -313,10 +342,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(hasWarmColor, "Undertow's copper poster must preserve BGRA channel order")
         controller.editScene()
         precondition(copied, "Built-in edits must become drafts")
+        controller.doubleClickScene()
+        precondition(!applied, "An empty-space double-click must not apply the selection")
         controller.toggleFavorite()
         controller.filter.selectItem(at: 3)
         controller.reload()
         precondition(controller.items.count == 1 && controller.items[0].title == "Undertow")
+        precondition(controller.selected?.id == controller.items[0].id)
         let root = controller.window!.contentView!
         root.layoutSubtreeIfNeeded()
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
@@ -326,9 +358,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.isEmpty && !controller.apply.isEnabled)
         if let videoURL {
-            let entry = try controller.store.add(videoURL)
-            controller.selected = Item(id: entry.id, title: entry.title, builtin: nil, entry: entry)
-            controller.preview()
+            controller.importScenes([videoURL])
+            precondition(controller.search.stringValue.isEmpty && controller.filter.indexOfSelectedItem == 2)
+            precondition(controller.items.count == 1 && controller.selected?.id == controller.items[0].id,
+                         "Import must reveal and select its scene despite previous search/filter")
             let videoDeadline = Date().addingTimeInterval(10)
             while controller.task != nil && Date() < videoDeadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
