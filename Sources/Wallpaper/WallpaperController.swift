@@ -104,10 +104,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onShowPreview: (() -> Void)?
     var presentingWindow: (() -> NSWindow?)?
     var onStateChange: (() -> Void)?
+    weak var comfort: DesktopComfortController?
+    private var dimmedForBedtime = false
 
     var isRunning: Bool { selectedURL != nil }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
-    private var shouldPause: Bool { pausedByUser || ProcessInfo.processInfo.isLowPowerModeEnabled }
+    private var shouldPause: Bool { pausedByUser || dimmedForBedtime || ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     override init() {
         super.init()
@@ -336,6 +338,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         updateMenu()
     }
 
+    func setDimmedForBedtime(_ value: Bool) {
+        dimmedForBedtime = value
+        clock.setPaused(suspended || shouldPause)
+        surfaces.forEach { $0.setPaused(shouldPause) }
+        updateMenu()
+    }
+
     @objc func togglePause() {
         pausedByUser.toggle()
         clock.setPaused(suspended || shouldPause)
@@ -406,6 +415,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         stop.isEnabled = isRunning || isLoading
         menu.addItem(.separator())
         addItem(menu, "Show Preview", #selector(showPreview))
+        if let comfort {
+            let item = menu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
+            item.target = comfort
+        }
         addItem(menu, "Quit Idlesse", #selector(quit))
         menu.autoenablesItems = false
         statusItem?.menu = menu

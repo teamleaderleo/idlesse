@@ -4,6 +4,14 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        let overnight = DimSchedule(start: 22 * 60, end: 7 * 60)
+        precondition(overnight.contains(minute: 22 * 60) && overnight.contains(minute: 0))
+        precondition(overnight.contains(minute: 7 * 60 - 1) && !overnight.contains(minute: 7 * 60))
+        precondition(!overnight.contains(minute: 12 * 60))
+        let daytime = DimSchedule(start: 9 * 60, end: 17 * 60)
+        precondition(daytime.contains(minute: 9 * 60) && !daytime.contains(minute: 17 * 60))
+        precondition(!DimSchedule(start: 10, end: 10).contains(minute: 10))
+        precondition(!DimSchedule(start: -1, end: 10).contains(minute: 0))
         var viewport = TimelineViewport()
         viewport.resize(to: 10)
         precondition(viewport.start == 0 && viewport.span == 10)

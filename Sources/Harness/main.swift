@@ -7,6 +7,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var settingsButton: NSButton!
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
+    private let comfort = DesktopComfortController()
     private var pendingSceneURL: URL?
     private lazy var scenePreview = StudioWindowController { [weak self] url in self?.wallpaper.select(url) }
     @objc private func showScenePreview() {
@@ -31,6 +32,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.onStop = { [weak self] in self?.showPreview() }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
         wallpaper.presentingWindow = { [weak self] in self?.window }
+        wallpaper.comfort = comfort
+        comfort.onDimmingChanged = { [weak self] value in self?.wallpaper.setDimmedForBedtime(value) }
+        comfort.start()
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
@@ -237,6 +241,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
+        wallpaperMenu.addItem(.separator())
+        let bedtime = wallpaperMenu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
+        bedtime.target = comfort
+        let dim = wallpaperMenu.addItem(withTitle: "Dim / Restore Display", action: #selector(DesktopComfortController.toggle), keyEquivalent: "")
+        dim.target = comfort
         NSApp.mainMenu = mainMenu
     }
 }
