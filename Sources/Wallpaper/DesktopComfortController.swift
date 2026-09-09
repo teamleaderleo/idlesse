@@ -23,9 +23,11 @@ private final class DimWindow: NSWindow {
 /// An opt-in visual shade, not a hardware brightness or display-sleep controller.
 final class DesktopComfortController: NSObject, NSMenuItemValidation {
     private let iconItems = NSHashTable<NSMenuItem>.weakObjects()
-    private var changingDesktopIcons = false
+    private(set) var changingDesktopIcons = false
+    var onDesktopIconsChanged: (() -> Void)?
+    var onShowSettings: (() -> Void)?
 
-    private var desktopIconsVisible: Bool {
+    var desktopIconsVisible: Bool {
         CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
         return !((CFPreferencesCopyAppValue("StandardHideDesktopIcons" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
     }
@@ -33,7 +35,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     func addDesktopIconsItem(to menu: NSMenu) {
         let item = menu.addItem(withTitle: "Show Desktop Icons", action: #selector(toggleDesktopIcons), keyEquivalent: "")
         item.target = self
-        item.toolTip = "Show or hide desktop files while keeping click-wallpaper-to-reveal-desktop. Files stay in place. Finder restarts to apply the change."
+        item.toolTip = "Hide icons without moving files. Restarts Finder."
         iconItems.add(item)
         updateDesktopIconsItems()
     }
@@ -44,6 +46,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
             item.state = visible ? .on : .off
             item.isEnabled = !changingDesktopIcons
         }
+        onDesktopIconsChanged?()
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -54,7 +57,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
         return true
     }
 
-    @objc private func toggleDesktopIcons() {
+    @objc func toggleDesktopIcons() {
         guard !changingDesktopIcons else { return }
         let visible = !desktopIconsVisible
         changingDesktopIcons = true
@@ -72,14 +75,14 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
                     write.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
                     write.arguments = arguments
                     try write.run(); write.waitUntilExit()
-                    guard write.terminationStatus == 0 else { throw SceneError.invalid("Could not change the desktop icon setting.") }
+                    guard write.terminationStatus == 0 else { throw NSError(domain: "Idlesse.Desktop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not change the desktop icon setting."]) }
                 }
                 if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").isEmpty {
                     let restart = Process()
                     restart.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
                     restart.arguments = ["Finder"]
                     try restart.run(); restart.waitUntilExit()
-                    guard restart.terminationStatus == 0 else { throw SceneError.invalid("The setting was saved, but Finder could not restart. Relaunch Finder to apply it.") }
+                    guard restart.terminationStatus == 0 else { throw NSError(domain: "Idlesse.Desktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "The setting was saved, but Finder could not restart. Relaunch Finder to apply it."]) }
                 }
             } catch { failure = error.localizedDescription }
             DispatchQueue.main.async { [weak self] in
@@ -215,57 +218,22 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
         }
     }
 
-    @objc func showSettings() {
-        let alert = NSAlert()
-        // Lift only this small panel above the shade; opening settings must not light up the room.
-        if isDimmed { alert.window.level = .mainMenu }
-        alert.messageText = "Bedtime Display"
-        alert.informativeText = "Dim every display and pause the wallpaper. Click Dimmed in the menu bar to restore the display. This does not turn off the backlight or prevent normal display sleep. Schedules run while Idlesse is open."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Dim Now")
-        let enabled = NSButton(checkboxWithTitle: "Dim automatically every day", target: nil, action: nil)
-        enabled.state = defaults.bool(forKey: "comfort.schedule") ? .on : .off
-        let slider = NSSlider(value: amount * 100, minValue: 20, maxValue: 98, target: nil, action: nil)
-        slider.setAccessibilityLabel("Dimming percentage")
-        let percent = NSTextField(labelWithString: "Dimming (20–98%)")
-        func picker(_ minutes: Int) -> NSDatePicker {
-            let picker = NSDatePicker()
-            picker.datePickerStyle = .textFieldAndStepper
-            picker.datePickerElements = [.hourMinute]
-            picker.dateValue = DimSchedule.pickerDate(minute: minutes, on: Date())
-            return picker
-        }
-        let from = picker(schedule.start), to = picker(schedule.end)
-        from.setAccessibilityLabel("Dim from")
-        to.setAccessibilityLabel("Restore at")
-        let times = NSStackView(views: [NSTextField(labelWithString: "From"), from,
-                                       NSTextField(labelWithString: "until"), to])
-        times.orientation = .horizontal
-        let stack = NSStackView(views: [percent, slider, enabled, times])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.frame = NSRect(x: 0, y: 0, width: 390, height: 135)
-        slider.widthAnchor.constraint(equalToConstant: 380).isActive = true
-        alert.accessoryView = stack
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
-        guard response != .alertSecondButtonReturn else { return }
-        func minutes(_ picker: NSDatePicker) -> Int {
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
-            return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-        }
-        let scheduleChanged = defaults.bool(forKey: "comfort.schedule") != (enabled.state == .on) ||
-            schedule.start != minutes(from) || schedule.end != minutes(to)
-        defaults.set(slider.doubleValue / 100, forKey: "comfort.amount")
-        defaults.set(enabled.state == .on, forKey: "comfort.schedule")
-        defaults.set(minutes(from), forKey: "comfort.start")
-        defaults.set(minutes(to), forKey: "comfort.end")
-        if scheduleChanged { manual = nil }
+    @objc func showSettings() { onShowSettings?() }
+
+    var bedtimeSettings: (amount: Double, enabled: Bool, start: Int, end: Int) {
+        (amount, defaults.bool(forKey: "comfort.schedule"), schedule.start, schedule.end)
+    }
+
+    func applyBedtime(amount: Double, enabled: Bool, start: Int, end: Int) {
+        let changed = defaults.bool(forKey: "comfort.schedule") != enabled ||
+            schedule.start != start || schedule.end != end
+        defaults.set(min(0.98, max(0.2, amount)), forKey: "comfort.amount")
+        defaults.set(enabled, forKey: "comfort.schedule")
+        defaults.set(start, forKey: "comfort.start")
+        defaults.set(end, forKey: "comfort.end")
+        if changed { manual = nil }
         refresh()
-        if response == .alertThirdButtonReturn { manual = true; refresh() }
-        windows.forEach { $0.alphaValue = amount }
+        windows.forEach { $0.alphaValue = self.amount }
         updateStatusMenu()
     }
 

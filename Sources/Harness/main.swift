@@ -8,6 +8,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
+    private lazy var appSettings = AppSettingsController(comfort: comfort, wallpaper: wallpaper,
+        showSaver: { [weak self] in self?.showSaverSettings(asSheet: true) })
     private var library: SceneLibraryController?
     private func prepareLibrary() throws {
         if library == nil {
@@ -54,7 +56,12 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
         wallpaper.presentingWindow = { [weak self] in self?.window }
         wallpaper.comfort = comfort
-        comfort.onDimmingChanged = { [weak self] value in self?.wallpaper.setDimmedForBedtime(value) }
+        comfort.onDimmingChanged = { [weak self] value in
+            self?.wallpaper.setDimmedForBedtime(value)
+            self?.appSettings.updateDimming()
+        }
+        comfort.onShowSettings = { [weak self] in self?.appSettings.present(tab: 1) }
+        wallpaper.onShowSettings = { [weak self] in self?.showSettings() }
         comfort.start()
 
         window = NSWindow(
@@ -125,7 +132,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self.pendingSceneURL = nil
         } else if IdlessePreferences.shared.folderDisplayPath == nil {
             DispatchQueue.main.async { [weak self] in
-                self?.showSettings()
+                self?.showSaverSettings()
             }
         }
     }
@@ -174,10 +181,17 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
-    @objc private func showSettings() {
+    @objc private func showSettings() { appSettings.present() }
+
+    private func showSaverSettings(asSheet: Bool = false) {
         settingsController.reload()
         let settingsWindow = settingsController.window
-
+        if asSheet, let parent = appSettings.window {
+            guard settingsWindow.sheetParent == nil else { return }
+            settingsWindow.orderOut(nil)
+            parent.beginSheet(settingsWindow)
+            return
+        }
         settingsWindow.center()
         settingsWindow.makeKeyAndOrderFront(nil)
         settingsWindow.orderFrontRegardless()
