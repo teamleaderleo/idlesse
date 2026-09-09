@@ -9,14 +9,18 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
     private var library: SceneLibraryController?
+    private func prepareLibrary() throws {
+        if library == nil {
+            library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
+                onEdit: { [weak self] url, asCopy in self?.scenePreview.openLibraryScene(url, asCopy: asCopy) })
+        }
+        wallpaper.onManualSelection = { [weak self] in self?.library?.stopRotation() }
+        library?.startSchedules()
+    }
     @objc private func showLibrary() {
         do {
-            if library == nil {
-                library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
-                    onEdit: { [weak self] url, asCopy in self?.scenePreview.openLibraryScene(url, asCopy: asCopy) })
-            }
+            try prepareLibrary()
             saverView?.stopAnimation()
-            wallpaper.onManualSelection = { [weak self] in self?.library?.stopRotation() }
             library?.show()
         } catch {
             let alert = NSAlert()
@@ -109,6 +113,12 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.makeKeyAndOrderFront(nil)
         saverView.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
+
+        do {
+            let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let catalog = try SceneLibraryStore(file: support.appendingPathComponent("Idlesse/Library/index.json")).catalog
+            if catalog.collections.contains(where: { $0.playback?.startMinute != nil }) { try prepareLibrary() }
+        } catch { NSLog("Idlesse: saved Library schedules unavailable: %@", error.localizedDescription) }
 
         if let pendingSceneURL {
             wallpaper.select(pendingSceneURL)

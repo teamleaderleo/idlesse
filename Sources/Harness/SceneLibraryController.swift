@@ -34,7 +34,43 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var rotationQueue = SceneRotationQueue()
     private var rotationShuffle = false
     private var rotationMinutes = 30
-    func stopRotation() {
+    private var scheduleTimer: Timer?
+    private var scheduleToken: String?
+    func startSchedules() {
+        guard scheduleTimer == nil else { return }
+        checkSchedule()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.checkSchedule() }
+        timer.tolerance = 3
+        RunLoop.main.add(timer, forMode: .common)
+        scheduleTimer = timer
+    }
+    private func checkSchedule(now: Date = Date()) {
+        let collection = store.scheduledCollection(at: now)
+        let calendar = Calendar.current
+        var day = calendar.startOfDay(for: now)
+        if let settings = collection?.playback, let start = settings.startMinute, let end = settings.endMinute,
+           start > end, calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now) < end {
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
+        }
+        let token = collection.map { "\($0.id):\(day.timeIntervalSince1970)" } ?? "outside"
+        guard token != scheduleToken else { return }
+        scheduleToken = token
+        stopRotation(manual: false)
+        if let collection { beginRotation(collection, shuffle: collection.playback?.shuffle ?? false) }
+    }
+    private func beginRotation(_ collection: SceneLibraryStore.Collection, shuffle: Bool) {
+        rotationCollectionID = collection.id
+        rotationShuffle = shuffle
+        rotationMinutes = collection.playback?.minutes ?? 30
+        rotationQueue = SceneRotationQueue()
+        advanceRotation()
+        if rotationCollectionID != nil { armRotationTimer() }
+    }
+    func stopRotation(manual: Bool = true) {
+        if manual {
+            // Record the current boundary before stopping, including before the first timer tick.
+            if scheduleTimer != nil { checkSchedule() }
+        }
         rotationTimer?.invalidate()
         rotationTimer = nil
         rotationCollectionID = nil
@@ -43,12 +79,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private func advanceRotation() {
         guard let id = rotationCollectionID,
               let collection = store.catalog.collections.first(where: { $0.id == id }) else {
-            stopRotation(); return
+            stopRotation(manual: false); return
         }
         let available = allItems()
         let ids = collection.sceneIDs.filter { id in available.contains { $0.id == id } }
         guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
-              let item = available.first(where: { $0.id == next }) else { stopRotation(); return }
+              let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
         do {
             let target = try url(item)
             try store.used(item.id)
@@ -239,7 +275,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
             collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
-                "Play Collection in Order", "Shuffle Collection"])
+                "Play Collection in Order", "Shuffle Collection", "Playback & Daily Schedule…"])
         }
         collectionActions.addItems(withTitles: ["Change Every 5 Minutes", "Change Every 15 Minutes", "Change Every 30 Minutes", "Change Every 60 Minutes"])
         if rotationTimer != nil {
@@ -353,10 +389,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func useScene() { act(editing: false) }
     @objc private func collectionAction() {
         guard let item = collectionActions.selectedItem else { return }
+        if item.title == "Playback & Daily Schedule…" { editPlayback(); return }
         if item.title == "Stop Collection Rotation" { stopRotation(); preview(); return }
         if item.title.hasPrefix("Change Every "), let minutes = Int(item.title.split(separator: " ")[2]) {
-            rotationMinutes = minutes
-            if rotationTimer != nil { armRotationTimer(); preview() }
+            if let id = filter.selectedItem?.representedObject as? String,
+               let collection = store.catalog.collections.first(where: { $0.id == id }) {
+                var settings = collection.playback ?? SceneLibraryStore.Playback()
+                settings.minutes = minutes
+                do { try store.setPlayback(id, settings) }
+                catch { detail.stringValue = error.localizedDescription; return }
+            }
+            let editedID = filter.selectedItem?.representedObject as? String
+            if rotationCollectionID == nil || editedID == rotationCollectionID {
+                rotationMinutes = minutes
+                if rotationTimer != nil { armRotationTimer(); preview() }
+            }
             detail.stringValue = "Collections change every \(minutes) minutes."
             return
         }
@@ -365,11 +412,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                   let collection = store.catalog.collections.first(where: { $0.id == id }),
                   !collection.sceneIDs.isEmpty else { detail.stringValue = "Add scenes to this collection first."; return }
             stopRotation()
-            rotationCollectionID = id
-            rotationShuffle = item.title == "Shuffle Collection"
-            rotationQueue = SceneRotationQueue()
-            advanceRotation()
-            if rotationCollectionID != nil { armRotationTimer() }
+            var settings = collection.playback ?? SceneLibraryStore.Playback()
+            settings.shuffle = item.title == "Shuffle Collection"
+            do { try store.setPlayback(id, settings) }
+            catch { detail.stringValue = error.localizedDescription; return }
+            beginRotation(store.catalog.collections.first { $0.id == id }!, shuffle: settings.shuffle)
             preview()
             return
         }
@@ -405,10 +452,62 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             } catch { self.detail.stringValue = error.localizedDescription }
         }
     }
+    private func editPlayback() {
+        guard let id = filter.selectedItem?.representedObject as? String,
+              let collection = store.catalog.collections.first(where: { $0.id == id }), let window else { return }
+        let settings = collection.playback ?? SceneLibraryStore.Playback()
+        let enabled = NSButton(checkboxWithTitle: "Play on a daily schedule", target: nil, action: nil)
+        enabled.state = settings.startMinute == nil ? .off : .on
+        let shuffle = NSButton(checkboxWithTitle: "Shuffle without repeats", target: nil, action: nil)
+        shuffle.state = settings.shuffle ? .on : .off
+        let interval = NSPopUpButton()
+        interval.addItems(withTitles: ["5 minutes", "15 minutes", "30 minutes", "60 minutes"])
+        interval.selectItem(at: [5, 15, 30, 60].firstIndex(of: settings.minutes) ?? 2)
+        func picker(_ minute: Int) -> NSDatePicker {
+            let view = NSDatePicker()
+            view.datePickerElements = .hourMinute
+            view.datePickerStyle = .textFieldAndStepper
+            view.dateValue = Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date())!
+            return view
+        }
+        let start = picker(settings.startMinute ?? 420)
+        let end = picker(settings.endMinute ?? 1320)
+        let stack = NSStackView(views: [enabled, NSTextField(labelWithString: "From"), start,
+            NSTextField(labelWithString: "Until"), end, NSTextField(labelWithString: "Change scene every"), interval, shuffle])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 270)
+        let alert = NSAlert()
+        alert.messageText = collection.name + " Playback"
+        alert.informativeText = "Daily local time, including overnight ranges. Manual wallpaper choices last until the next boundary. Bedtime dimming stays independent."
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] result in
+            guard let self, result == .alertFirstButtonReturn else { return }
+            func minute(_ picker: NSDatePicker) -> Int {
+                let c = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
+                return c.hour! * 60 + c.minute!
+            }
+            let updated = SceneLibraryStore.Playback(minutes: [5, 15, 30, 60][interval.indexOfSelectedItem],
+                shuffle: shuffle.state == .on, startMinute: enabled.state == .on ? minute(start) : nil,
+                endMinute: enabled.state == .on ? minute(end) : nil)
+            do {
+                try self.store.setPlayback(id, updated)
+                self.scheduleToken = nil
+                self.checkSchedule()
+                self.preview()
+            } catch { self.detail.stringValue = error.localizedDescription }
+        }
+    }
     private func armRotationTimer() {
         rotationTimer?.invalidate()
         let timer = Timer(timeInterval: TimeInterval(rotationMinutes * 60), repeats: true) { [weak self] _ in
-            self?.advanceRotation()
+            guard let self else { return }
+            let previous = self.scheduleToken
+            if self.scheduleTimer != nil { self.checkSchedule() }
+            if previous == self.scheduleToken { self.advanceRotation() }
         }
         timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
@@ -433,7 +532,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
     }
-    deinit { task?.cancel(); rotationTimer?.invalidate() }
+    deinit { task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate() }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
@@ -486,6 +585,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(applied, "Rotation timer must apply the next scene")
         controller.stopRotation()
         precondition(controller.rotationTimer == nil && controller.rotationCollectionID == nil)
+        try controller.store.setPlayback(collection.id, .init(startMinute: 0, endMinute: 720))
+        let today = Calendar.current.startOfDay(for: Date())
+        let morning = Calendar.current.date(byAdding: .hour, value: 1, to: today)!
+        applied = false
+        controller.checkSchedule(now: morning)
+        precondition(applied && controller.rotationTimer != nil)
+        controller.stopRotation()
+        applied = false
+        controller.checkSchedule(now: morning.addingTimeInterval(60))
+        precondition(!applied && controller.rotationTimer == nil, "Manual stop must last through this schedule window")
+        controller.checkSchedule(now: Calendar.current.date(byAdding: .day, value: 1, to: morning)!)
+        precondition(applied && controller.rotationTimer != nil, "A new daily boundary must resume scheduling even after a missed day")
+        controller.stopRotation()
+        try controller.store.setPlayback(collection.id, .init())
         controller.preview()
         let root = controller.window!.contentView!
         root.layoutSubtreeIfNeeded()
