@@ -520,6 +520,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         menu.addItem(.separator())
         addItem(menu, "Show Preview", #selector(showPreview))
         if let comfort {
+            comfort.addDesktopIconsItem(to: menu)
             let item = menu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
             item.target = comfort
         }

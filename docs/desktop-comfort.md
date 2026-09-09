@@ -40,3 +40,16 @@ To build and smoke-test changes without replacing a running dimmer's bundle:
 BUILD_DIR="$PWD/build/next" ./build.sh app
 BUILD_DIR="$PWD/build/next" ./test-wallpaper.sh
 ```
+# Desktop icons
+
+**Wallpaper → Show Desktop Icons** mirrors macOS Desktop & Dock → Show items →
+On Desktop. The same checked toggle is available in the wallpaper and dimming
+menu-bar menus. Uncheck it to hide files without moving or deleting them; check
+it to show them again. The setting persists independently of Idlesse.
+
+The toggle keeps Finder's desktop surface enabled, preserving click-wallpaper
+to reveal the desktop. It changes WindowManager's `StandardHideDesktopIcons`
+preference, not the destructive-to-interaction `CreateDesktop=false` workaround.
+Finder restarts when applying the change. Widget visibility, Stage Manager and
+the click-wallpaper preference are left unchanged. Controls refresh from the
+system preference; Idlesse does not store a competing copy of this setting.
