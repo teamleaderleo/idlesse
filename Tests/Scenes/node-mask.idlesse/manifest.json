@@ -1,0 +1,9 @@
+{
+  "version": 21,
+  "title": "node-mask",
+  "capabilities": [],
+  "features": [
+    "shapes",
+    "composition"
+  ]
+}

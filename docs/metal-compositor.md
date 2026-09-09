@@ -1,5 +1,8 @@
 # Metal creative renderer
 
+Qualification is tracked in [Runtime 1.0 qualification](runtime-qualification.md),
+including the permanent package corpus and explicit first-release SDR target.
+
 Metal is the creative renderer for styles/effects, audio and signal bindings,
 tracks, and authored transport. Plain scenes retain the Standard compatibility
 path; the preview workbench can compare engines. `IDLESSE_METAL_COMPOSITOR=1`

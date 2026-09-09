@@ -325,6 +325,19 @@ if let index = CommandLine.arguments.firstIndex(of: "--export-video") {
     exit(1)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--conformance") {
+    guard CommandLine.arguments.count == index + 2 else {
+        fputs("Usage: --conformance corpus.json\n", stderr); exit(1)
+    }
+    let corpus = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    Task { @MainActor in
+        do { try await SceneConformance.run(corpus); exit(0) }
+        catch { fputs("Conformance failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    }
+    RunLoop.main.run()
+    exit(1)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--render-scene") {
     guard CommandLine.arguments.count > index + 3,
           let seconds = Double(CommandLine.arguments[index + 3]), seconds.isFinite, (0...86400).contains(seconds) else {

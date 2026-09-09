@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "id": "DF489B51-1F05-4DE6-8293-1B1A71F502C0",
+      "type": "shape",
+      "shape": {
+        "primitive": "rectangle",
+        "fill": "#4080C0",
+        "width": 128,
+        "height": 128,
+        "cornerRadius": 0,
+        "lineWidth": 1
+      }
+    },
+    {
+      "id": "C0D151E5-A026-4493-A7AE-37224678AF57",
+      "type": "shape",
+      "shape": {
+        "primitive": "rectangle",
+        "fill": "#4080C0",
+        "width": 128,
+        "height": 128,
+        "cornerRadius": 0,
+        "lineWidth": 1
+      },
+      "opacity": 0.5,
+      "blend": "add"
+    }
+  ]
+}

@@ -1,0 +1,257 @@
+{
+  "cases": [
+    {
+      "name": "sdr-solid",
+      "path": "sdr-solid.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        },
+        {
+          "x": 4,
+          "y": 4,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "blend-normal",
+      "path": "blend-normal.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "blend-multiply",
+      "path": "blend-multiply.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            40,
+            96,
+            168
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "blend-screen",
+      "path": "blend-screen.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            88,
+            160,
+            216
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "blend-add",
+      "path": "blend-add.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            96,
+            192,
+            255
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "node-mask",
+      "path": "node-mask.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            64,
+            128,
+            192
+          ],
+          "tolerance": 2
+        },
+        {
+          "x": 4,
+          "y": 4,
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "nested-opacity",
+      "path": "nested-opacity.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": false,
+      "probes": [
+        {
+          "x": 32,
+          "y": 32,
+          "rgb": [
+            0,
+            64,
+            0
+          ],
+          "tolerance": 2
+        }
+      ]
+    },
+    {
+      "name": "AfterHours",
+      "path": "../../Examples/AfterHours.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    },
+    {
+      "name": "Fireflies",
+      "path": "../../Examples/Fireflies.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    },
+    {
+      "name": "Ripple",
+      "path": "../../Examples/Ripple.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    },
+    {
+      "name": "GroupedAurora",
+      "path": "../../Examples/GroupedAurora.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    },
+    {
+      "name": "AudioAurora",
+      "path": "../../Examples/AudioAurora.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    },
+    {
+      "name": "ControlledAurora",
+      "path": "../../Examples/ControlledAurora.idlesse",
+      "times": [
+        0,
+        0.5,
+        2,
+        2.9666666667
+      ],
+      "changes": true,
+      "probes": []
+    }
+  ]
+}

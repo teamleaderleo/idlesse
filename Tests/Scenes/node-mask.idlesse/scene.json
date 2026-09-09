@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "id": "B57B029B-7F22-446E-B21D-E162CCD1DF22",
+      "type": "shape",
+      "shape": {
+        "primitive": "rectangle",
+        "fill": "#4080C0",
+        "width": 128,
+        "height": 128,
+        "cornerRadius": 0,
+        "lineWidth": 1
+      },
+      "maskNodeID": "B9C89230-3DED-44D9-8B9D-944CFC9EEC5F"
+    },
+    {
+      "id": "B9C89230-3DED-44D9-8B9D-944CFC9EEC5F",
+      "type": "shape",
+      "shape": {
+        "primitive": "rectangle",
+        "fill": "#FFFFFF",
+        "width": 128,
+        "height": 128,
+        "cornerRadius": 0,
+        "lineWidth": 1
+      },
+      "visible": false,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "scale": 0.5,
+        "rotation": 0
+      }
+    }
+  ]
+}
