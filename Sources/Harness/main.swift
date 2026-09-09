@@ -273,6 +273,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let libraryItem = wallpaperMenu.addItem(withTitle: "Library…", action: #selector(showLibrary), keyEquivalent: "l")
         libraryItem.target = self
         wallpaperMenu.addItem(.separator())
+        comfort.addDesktopIconsItem(to: wallpaperMenu)
         let bedtime = wallpaperMenu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
         bedtime.target = comfort
         let dim = wallpaperMenu.addItem(withTitle: "Dim / Restore Display", action: #selector(DesktopComfortController.toggle), keyEquivalent: "d")

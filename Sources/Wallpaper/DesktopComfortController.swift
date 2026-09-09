@@ -21,7 +21,80 @@ private final class DimWindow: NSWindow {
 }
 
 /// An opt-in visual shade, not a hardware brightness or display-sleep controller.
-final class DesktopComfortController: NSObject {
+final class DesktopComfortController: NSObject, NSMenuItemValidation {
+    private let iconItems = NSHashTable<NSMenuItem>.weakObjects()
+    private var changingDesktopIcons = false
+
+    private var desktopIconsVisible: Bool {
+        CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
+        return !((CFPreferencesCopyAppValue("StandardHideDesktopIcons" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
+    }
+
+    func addDesktopIconsItem(to menu: NSMenu) {
+        let item = menu.addItem(withTitle: "Show Desktop Icons", action: #selector(toggleDesktopIcons), keyEquivalent: "")
+        item.target = self
+        item.toolTip = "Show or hide desktop files while keeping click-wallpaper-to-reveal-desktop. Files stay in place. Finder restarts to apply the change."
+        iconItems.add(item)
+        updateDesktopIconsItems()
+    }
+
+    private func updateDesktopIconsItems() {
+        let visible = desktopIconsVisible
+        for item in iconItems.allObjects {
+            item.state = visible ? .on : .off
+            item.isEnabled = !changingDesktopIcons
+        }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleDesktopIcons) {
+            updateDesktopIconsItems()
+            return !changingDesktopIcons
+        }
+        return true
+    }
+
+    @objc private func toggleDesktopIcons() {
+        guard !changingDesktopIcons else { return }
+        let visible = !desktopIconsVisible
+        changingDesktopIcons = true
+        updateDesktopIconsItems()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var failure: String?
+            do {
+                // Match Desktop & Dock > Show items > On Desktop. CreateDesktop=false
+                // removes Finder's desktop surface and breaks click-to-reveal.
+                for arguments in [
+                    ["write", "com.apple.finder", "CreateDesktop", "-bool", "true"],
+                    ["write", "com.apple.WindowManager", "StandardHideDesktopIcons", "-bool", visible ? "false" : "true"]
+                ] {
+                    let write = Process()
+                    write.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+                    write.arguments = arguments
+                    try write.run(); write.waitUntilExit()
+                    guard write.terminationStatus == 0 else { throw SceneError.invalid("Could not change the desktop icon setting.") }
+                }
+                if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").isEmpty {
+                    let restart = Process()
+                    restart.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+                    restart.arguments = ["Finder"]
+                    try restart.run(); restart.waitUntilExit()
+                    guard restart.terminationStatus == 0 else { throw SceneError.invalid("The setting was saved, but Finder could not restart. Relaunch Finder to apply it.") }
+                }
+            } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.changingDesktopIcons = false
+                self.updateDesktopIconsItems()
+                if let failure {
+                    let alert = NSAlert()
+                    alert.messageText = "Desktop Icons"
+                    alert.informativeText = failure
+                    alert.runModal()
+                }
+            }
+        }
+    }
     var onDimmingChanged: ((Bool) -> Void)?
     private let defaults = UserDefaults.standard
     private var windows: [NSWindow] = []
@@ -62,6 +135,7 @@ final class DesktopComfortController: NSObject {
     }
 
     private func refresh() {
+        updateDesktopIconsItems()
         let parts = Calendar.current.dateComponents([.hour, .minute], from: Date())
         let scheduled = defaults.bool(forKey: "comfort.schedule") &&
             schedule.contains(minute: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
@@ -93,6 +167,8 @@ final class DesktopComfortController: NSObject {
         statusItem?.button?.imagePosition = .imageLeading
         statusItem?.button?.toolTip = "Idlesse — Click to restore or adjust display dimming"
         let menu = NSMenu()
+        addDesktopIconsItem(to: menu)
+        menu.addItem(.separator())
         let restore = menu.addItem(withTitle: "Restore Display", action: #selector(toggle), keyEquivalent: "d")
         restore.keyEquivalentModifierMask = [.command, .option]
         restore.target = self
