@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="$ROOT/build"
+BUILD="${BUILD_DIR:-$ROOT/build}"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 MIN_MACOS="${MIN_MACOS:-14.0}"
 CONFIG="${CONFIG:-debug}"

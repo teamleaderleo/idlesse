@@ -6,8 +6,11 @@ as 22:00–07:00 crosses midnight; equal endpoints disable the interval. The sch
 is off by default and only runs while Idlesse is open.
 
 One click-through black window covers each attached screen, below the system menu
-bar. The moon status item restores the display. Opening the settings also restores
-it before showing the controls. Quit removes the shade. No hardware brightness,
+bar. The crescent status item is labeled **Dimmed**, with Restore Display and
+70/90/98% presets. Option-Command-D also toggles dimming while Idlesse is active
+(it is not a system-wide hotkey). Settings appear above the shade without restoring
+the rest of the desktop; Cancel preserves dimming, and changing the level does not
+discard a manual override. Quit removes the shade. No hardware brightness,
 display sleep, power assertions, or desktop files are changed.
 
 Manual overrides last until the next schedule boundary. With scheduling disabled,
@@ -20,10 +23,20 @@ This reduces wallpaper animation work, but the shade does not turn off an LCD
 backlight or promise the energy savings of display sleep. System UI above the
 shade remains visible. Exclusive fullscreen behavior needs separate validation.
 
-Validation: compiled app; native settings → 98% → Dim Now exercised. Core Graphics
+Initial validation: native settings → 98% → Dim Now exercised. Core Graphics
 reported two shade windows at alpha 0.98 matching the built-in and external screen
-bounds. Schedule boundary cases are part of the wallpaper smoke suite. A per-window
+bounds. The subsequent labeled controls/settings refinement is built and covered by
+the regression suites, but has not been activated on the sleeping user's desktop.
+Schedule boundary and daylight-saving picker cases run in `Tests/ComfortTests.swift`.
+A per-window
 app screenshot excludes the shade, so it is not evidence of final display brightness.
 
 Desktop clutter is separate: macOS Desktop & Dock settings can hide desktop items
 without moving the files. Idlesse does not rewrite Finder preferences or restart Finder.
+
+To build and smoke-test changes without replacing a running dimmer's bundle:
+
+```
+BUILD_DIR="$PWD/build/next" ./build.sh app
+BUILD_DIR="$PWD/build/next" ./test-wallpaper.sh
+```
