@@ -32,7 +32,27 @@ import Foundation
         try store.toggleMembership(sceneID: "builtin.Undertow", collectionID: collection.id)
         do { _ = try store.createCollection(name: "chill"); fatalError("Duplicate collection accepted") } catch {}
         do { _ = try store.createCollection(name: "  "); fatalError("Empty collection accepted") } catch {}
+        try store.setPlayback(collection.id, .init(minutes: 15, shuffle: true, startMinute: 1320, endMinute: 420))
+        let other = try store.createCollection(name: "Day")
+        do {
+            try store.setPlayback(other.id, .init(startMinute: 400, endMinute: 600))
+            fatalError("Overlapping schedule accepted")
+        } catch {}
+        try store.setPlayback(other.id, .init(startMinute: 420, endMinute: 1320))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        let base = calendar.date(from: DateComponents(year: 2026, month: 9, day: 9))!
+        for minute in 0..<1440 {
+            let date = calendar.date(byAdding: .minute, value: minute, to: base)!
+            let expected = minute < 420 || minute >= 1320 ? collection.id : other.id
+            precondition(store.scheduledCollection(at: date, calendar: calendar)?.id == expected)
+        }
+        do { try store.setPlayback(other.id, .init(startMinute: 0, endMinute: 0)); fatalError("Empty range accepted") } catch {}
+        do { try store.setPlayback(other.id, .init(minutes: 1)); fatalError("Invalid interval accepted") } catch {}
+        try store.removeCollection(other.id)
         let reopened = try SceneLibraryStore(file: file)
+        precondition(reopened.catalog.collections.first?.playback?.minutes == 15)
+        precondition(reopened.catalog.collections.first?.playback?.shuffle == true)
         precondition(reopened.catalog.collections.first?.sceneIDs == [entry.id, "builtin.Undertow"])
         try reopened.renameCollection(collection.id, name: "Evening")
         precondition(reopened.catalog.entries == [entry])

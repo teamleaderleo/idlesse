@@ -7,10 +7,21 @@ final class SceneLibraryStore {
         var title: String
         var bookmark: Data
     }
+    struct Playback: Codable, Equatable {
+        var minutes: Int = 30
+        var shuffle: Bool = false
+        var startMinute: Int?
+        var endMinute: Int?
+        func contains(_ minute: Int) -> Bool {
+            guard let start = startMinute, let end = endMinute else { return false }
+            return start < end ? minute >= start && minute < end : minute >= start || minute < end
+        }
+    }
     struct Collection: Codable, Equatable {
         var id: String = UUID().uuidString
         var name: String
         var sceneIDs: [String] = []
+        var playback: Playback?
     }
     struct Catalog: Codable {
         var entries: [Entry] = []
@@ -112,7 +123,32 @@ final class SceneLibraryStore {
         } else { next.collections[index].sceneIDs.append(sceneID) }
         try save(next)
     }
+    func setPlayback(_ id: String, _ playback: Playback) throws {
+        var next = catalog
+        guard let index = next.collections.firstIndex(where: { $0.id == id }) else { throw failure("Collection no longer exists.") }
+        next.collections[index].playback = playback
+        try save(next)
+    }
+    /// Daily local-time ranges; overlaps are rejected instead of using hidden priority.
+    func scheduledCollection(at date: Date, calendar: Calendar = .current) -> Collection? {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        return catalog.collections.first { $0.playback?.contains(minute) == true }
+    }
     private func validateCollections(_ value: Catalog) throws {
+        for collection in value.collections {
+            guard let settings = collection.playback else { continue }
+            guard [5, 15, 30, 60].contains(settings.minutes),
+                  (settings.startMinute == nil && settings.endMinute == nil) ||
+                  (settings.startMinute != nil && settings.endMinute != nil &&
+                   (0..<1440).contains(settings.startMinute!) && (0..<1440).contains(settings.endMinute!) &&
+                   settings.startMinute != settings.endMinute)
+            else { throw failure("Choose a supported interval and two different daily times.") }
+        }
+        for minute in 0..<1440 {
+            guard value.collections.filter({ $0.playback?.contains(minute) == true }).count <= 1
+            else { throw failure("Daily collection schedules cannot overlap. Adjust the other collection first.") }
+        }
         guard value.collections.count <= 32,
               Set(value.collections.map(\.id)).count == value.collections.count,
               Set(value.collections.map { $0.name.lowercased() }).count == value.collections.count,
