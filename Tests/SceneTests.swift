@@ -536,6 +536,17 @@ import Foundation
         do { try SceneBudget.validate((0..<5).map { _ in SceneNode(content: .particles(.init())) }); fatalError("Accepted too many emitters") } catch is SceneError {}
         try Data(#"{"version":16,"title":"Old","capabilities":["audio"]}"#.utf8).write(to: particlesPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(particlesPackage); fatalError("Accepted particles in v16") } catch is SceneError {}
+        var displaced = SceneNode(content: .gradient)
+        displaced.style.effects = [.init(type: .displacement, amount: 0.04)]
+        let displacementPackage = root.appendingPathComponent("Ripple.idlesse")
+        let displacementScene = SceneDescriptor(title: "Ripple", nodes: [displaced])
+        try ScenePackageWriter.write(displacementScene, to: displacementPackage)
+        let loadedDisplacement = try await source.resolve(displacementPackage)
+        precondition(loadedDisplacement.nodes[0].style.effects == displaced.style.effects)
+        displaced.style.effects[0].amount = 0.11
+        do { try SceneBudget.validate([displaced]); fatalError("Accepted excessive displacement") } catch is SceneError {}
+        try Data(#"{"version":17,"title":"Old","capabilities":[]}"#.utf8).write(to: displacementPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(displacementPackage); fatalError("Accepted displacement in v17") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }

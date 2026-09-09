@@ -50,9 +50,10 @@ still run. Probe readback is confined to tests.
 
 V15/V16 checks cover ordered blur/bloom output, effect order, 16 effect-bearing
 layers, 8K-requested target allocations under the cap, teardown, and direct audio
-modulation of bloom. Parameters, drivers, smoothing, keyframes, and ellipse masks
-are implemented. Asset/node masks, displacement, and broader blend modes remain
-separate features. Do not treat a windowed GPU timing sample as release-build
+modulation of bloom. Parameters, drivers, smoothing, keyframes, ellipse masks,
+deterministic particles, and V18 procedural wave displacement are implemented.
+Asset/node masks and broader blend modes remain separate features.
+Do not treat a windowed GPU timing sample as release-build
 energy evidence or HDR parity.
 
 API references: [AVPlayerItemVideoOutput](https://developer.apple.com/documentation/avfoundation/avplayeritemvideooutput)
