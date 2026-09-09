@@ -6,7 +6,7 @@ path; the preview workbench can compare engines. `IDLESSE_METAL_COMPOSITOR=1`
 also requests Metal for plain desktop scenes. This routing is not a claim that
 Metal has passed every color, power, and presentation gate below.
 
-Images, videos, gradients, and isolated groups feed one MTKView per display.
+Images, videos, gradients, text, shapes and isolated groups feed one MTKView per display.
 Groups and ordered effects use bounded offscreen passes; they share a 128 MiB
 target pool including cached and in-flight textures. Blur/bloom and ordered color
 effects are implemented. Static scenes are event-driven; animated scenes use the
@@ -28,6 +28,10 @@ uses actual GPU readback to check image translation/scale/opacity against expect
 pixel values, mixed image/gradient output, time-varying gradients, and nonblack
 changing video pixels across three queued loops and resume after pause. Existing default-host lifecycle and hot-reload checks
 still run. Probe readback is confined to tests.
+
+Text and shapes now also have GPU readback checks for color, visible glyphs,
+deterministic static output and aspect-fit through effect passes. These are SDR
+checks; they do not close the color/HDR or energy gates.
 
 ## Promotion gates
 

@@ -31,9 +31,11 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles }
+    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape }
     enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
     var canvas: Canvas? = nil
+    var metadata: SceneMetadata? = nil
+    var components: [String: SceneComponent]? = nil
     let title: String
     let nodes: [SceneNode]
     var parameters: [String: SceneParameter] = [:]
@@ -42,6 +44,7 @@ struct SceneDescriptor: Codable, Sendable {
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
+    var assetNodes: [SceneNode] { allNodes + (components?.values.flatMap { $0.node.descendants } ?? []) }
     var usesSmoothing: Bool { bindings.contains { $0.smoothing > 0 } }
     var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
     var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
@@ -49,7 +52,7 @@ struct SceneDescriptor: Codable, Sendable {
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool {
         if usesSignals || nodes.contains(where: { $0.animated }) { return true }
         let referenced = Set(allNodes.compactMap { $0.maskNodeID })
@@ -61,17 +64,24 @@ struct SceneDescriptor: Codable, Sendable {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components
     }
     func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
-        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas)
+        var controls = parameters
+        for key in controls.keys { controls[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
+        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components)
     }
     func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
         var result = self
         for (old, new) in pairs {
+            for key in parameters.keys {
+                for target in parameters[key]!.targets where target.nodeID == old.id {
+                    result.parameters[key]?.targets.append(.init(nodeID: new.id, property: target.property))
+                }
+            }
             let effectMap = Dictionary(uniqueKeysWithValues: zip(old.style.effects.compactMap(\.id), new.style.effects.compactMap(\.id)))
             for binding in bindings where binding.target.nodeID == old.id {
                 var cloned = binding
@@ -84,18 +94,31 @@ struct SceneDescriptor: Codable, Sendable {
     }
     func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
         if validating {
+            try metadata?.validate()
+            guard (components?.count ?? 0) <= 8 else { throw SceneError.invalid("Use at most eight package-local presets.") }
+            for (id, component) in components ?? [:] {
+                guard UUID(uuidString: id) != nil else { throw SceneError.invalid("Preset identities must be UUIDs.") }
+                try component.validate()
+            }
+            guard allNodes.allSatisfy({ $0.componentID == nil || components?[$0.componentID!] != nil }) else { throw SceneError.invalid("A layer references a missing local preset.") }
             try timeline?.validate()
             guard parameters.count <= 16, bindings.count <= 64 else { throw SceneError.invalid("Use at most 16 parameters and 64 bindings.") }
             for (id, parameter) in parameters {
                 guard !id.isEmpty, id.utf8.count <= 64, !parameter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parameter.name.count <= 80,
-                      [parameter.value, parameter.min, parameter.max].allSatisfy({ $0.isFinite }),
-                      (parameter.max - parameter.min).isFinite,
-                      parameter.min < parameter.max, (parameter.min...parameter.max).contains(parameter.value) else {
-                    throw SceneError.invalid("Parameters need a name, finite limits, and a default within their range.")
+                      parameter.isValid else {
+                    throw SceneError.invalid("Parameters need a name and a valid typed default within their limits.")
                 }
             }
         }
         var result = nodes
+        var controlTargets = Set<SceneControlTarget>()
+        for parameter in parameters.values {
+            guard parameter.targets.count <= 16 else { throw SceneError.invalid("Use at most 16 targets per control.") }
+            for target in parameter.targets {
+                guard controlTargets.insert(target).inserted else { throw SceneError.invalid("Each content property can have only one control.") }
+                try target.apply(parameter, to: &result)
+            }
+        }
         var targets = Set<ScenePropertyAddress>()
         for binding in bindings {
             guard binding.scale.isFinite, binding.offset.isFinite,
@@ -125,7 +148,7 @@ struct SceneDescriptor: Codable, Sendable {
                 case .audioTreble: source = signals.audio.treble
                 }
             } else {
-                guard let parameter = parameters[binding.parameter] else { throw SceneError.invalid("The binding parameter does not exist.") }
+                guard let parameter = parameters[binding.parameter], parameter.type == .number else { throw SceneError.invalid("Motion bindings require a numeric parameter.") }
                 source = parameter.value
             }
             var raw = source * binding.scale + binding.offset
@@ -134,7 +157,7 @@ struct SceneDescriptor: Codable, Sendable {
                 guard raw.isFinite else { throw SceneError.invalid("The binding result is not finite.") }
                 let operand: Double
                 if let key = modifier.parameter {
-                    guard modifier.value == nil, let parameter = parameters[key] else {
+                    guard modifier.value == nil, let parameter = parameters[key], parameter.type == .number else {
                         throw SceneError.invalid("A modifier needs one existing parameter or constant.")
                     }
                     operand = parameter.value
@@ -154,16 +177,203 @@ struct SceneDescriptor: Codable, Sendable {
             try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
         }
         if validating { try SceneBudget.validate(result) }
+        for id in result.flatMap({ $0.descendants }).map(\.id) {
+            _ = SceneTree.edit(id, in: &result) { siblings, index in siblings[index].componentID = nil }
+        }
         return SceneDescriptor(title: title, nodes: result, canvas: canvas)
     }
 }
 
+/// Package-local reusable snapshots. Insertion expands to ordinary nodes and independent
+/// controls; later edits do not silently propagate to another instance.
+struct SceneComponent: Codable, Sendable {
+    var name: String
+    var node: SceneNode
+    var parameters: [String: SceneParameter]
+    var bindings: [SceneParameterBinding]
+    var scene: SceneDescriptor { .init(title: name, nodes: [node], parameters: parameters, bindings: bindings) }
+    func validate() throws {
+        guard !name.isEmpty, name.count <= 120, node.descendants.allSatisfy({ $0.componentID == nil }) else {
+            throw SceneError.invalid("Presets need a name and cannot contain other preset references.")
+        }
+        _ = try scene.evaluated()
+    }
+    static func capture(_ node: SceneNode, from scene: SceneDescriptor) throws -> SceneComponent {
+        let ids = Set(node.descendants.map(\.id))
+        guard node.descendants.allSatisfy({ $0.maskNodeID.map(ids.contains) ?? true }) else {
+            throw SceneError.invalid("Include the mask layer in the selected group before creating a preset.")
+        }
+        func strip(_ node: SceneNode) -> SceneNode {
+            var result = node; result.componentID = nil
+            if node.kind == .group { result.content = .group(node.children.map(strip)) }
+            return result
+        }
+        let bindings = scene.bindings.filter { ids.contains($0.target.nodeID) }
+        let keys = Set(bindings.map(\.parameter) + bindings.flatMap { $0.modifiers.compactMap(\.parameter) })
+        var parameters = scene.parameters.filter { keys.contains($0.key) || $0.value.targets.contains { ids.contains($0.nodeID) } }
+        for key in parameters.keys { parameters[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
+        let component = SceneComponent(name: node.displayName, node: strip(node), parameters: parameters, bindings: bindings)
+        try component.validate(); return component
+    }
+    func inserting(into scene: SceneDescriptor, id: String) throws -> SceneDescriptor {
+        try validate()
+        guard scene.components?[id] != nil else { throw SceneError.invalid("This preset is not in the current package.") }
+        var root = node.duplicated(); root.componentID = id
+        let instanceNumber = scene.allNodes.filter { $0.componentID == id }.count + 1
+        root.name = String("\(name) \(instanceNumber)".prefix(120))
+        let pairs = Array(zip(node.descendants, root.descendants))
+        let nodes = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0.id, $0.1.id) })
+        let effects = Dictionary(uniqueKeysWithValues: pairs.flatMap { Array(zip($0.0.style.effects.compactMap(\.id), $0.1.style.effects.compactMap(\.id))) })
+        let keys = Dictionary(uniqueKeysWithValues: parameters.keys.map { ($0, UUID().uuidString) })
+        var next = scene.replacingNodes(scene.nodes + [root])
+        for (key, parameter) in parameters {
+            var cloned = parameter
+            cloned.name = String("\(root.displayName) · \(parameter.name)".prefix(80))
+            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: $0.property) }
+            next.parameters[keys[key]!] = cloned
+        }
+        for binding in bindings {
+            var cloned = binding
+            cloned.target = .init(nodeID: nodes[binding.target.nodeID]!, property: binding.target.property,
+                effectID: binding.target.effectID.flatMap { effects[$0] })
+            if !binding.parameter.isEmpty { cloned.parameter = keys[binding.parameter]! }
+            for index in cloned.modifiers.indices {
+                cloned.modifiers[index].parameter = binding.modifiers[index].parameter.flatMap { keys[$0] }
+            }
+            next.bindings.append(cloned)
+        }
+        _ = try next.evaluated() // Expanded instances share the existing scene budgets.
+        return next
+    }
+}
+
+struct SceneMetadata: Codable, Sendable, Equatable {
+    var author: String? = nil
+    var description: String? = nil
+    var tags: [String]? = nil
+    var license: String? = nil
+    var createdWith: String? = nil
+    var previewTime: Double? = nil
+    func validate() throws {
+        guard (author?.utf8.count ?? 0) <= 160, (description?.utf8.count ?? 0) <= 4096,
+              (license?.utf8.count ?? 0) <= 1024, (createdWith?.utf8.count ?? 0) <= 160,
+              (tags?.count ?? 0) <= 32, tags?.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) ?? true,
+              previewTime.map({ $0.isFinite && (0...86400).contains($0) }) ?? true else {
+            throw SceneError.invalid("Scene metadata exceeds its limits or has an invalid preview time.")
+        }
+    }
+}
+
+/// Revision 21 freezes the container; feature names describe subsequent additions.
+/// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
+enum SceneFormat {
+    static let revision = 21
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets"]
+    static func features(_ scene: SceneDescriptor) -> Set<String> {
+        var result = Set<String>()
+        if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
+        if scene.allNodes.contains(where: { $0.kind == .particles }) { result.insert("particles") }
+        if scene.allNodes.contains(where: { $0.style != .plain }) { result.insert("effects") }
+        if scene.allNodes.contains(where: { $0.needsComposition || $0.sprite != nil }) { result.insert("composition") }
+        if scene.canvas == .desktopSpan { result.insert("desktop-span") }
+        if !scene.bindings.isEmpty || scene.timeline != nil { result.insert("motion") }
+        if scene.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) { result.insert("typed-controls") }
+        if scene.allNodes.contains(where: { $0.kind == .text }) { result.insert("text") }
+        if scene.allNodes.contains(where: { $0.kind == .shape }) { result.insert("shapes") }
+        if !(scene.components?.isEmpty ?? true) { result.insert("local-presets") }
+        for component in scene.components?.values ?? Dictionary<String, SceneComponent>().values {
+            result.formUnion(features(component.scene))
+        }
+        return result
+    }
+}
+
+struct SceneControlTarget: Codable, Sendable, Hashable {
+    enum Property: String, Codable, Sendable { case visible, blend, text, fill }
+    var nodeID: UUID
+    var property: Property
+    func apply(_ parameter: SceneParameter, to nodes: inout [SceneNode]) throws {
+        guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else { throw SceneError.invalid("A control target is missing.") }
+        var replacement = node
+        switch property {
+        case .visible:
+            guard parameter.type == .boolean else { throw SceneError.invalid("Visibility needs a toggle control.") }
+            replacement.visible = parameter.boolean
+        case .blend:
+            guard parameter.type == .choice, parameter.choices.allSatisfy({ SceneNode.Blend(rawValue: $0) != nil }),
+                  let blend = SceneNode.Blend(rawValue: parameter.text) else { throw SceneError.invalid("Blend choices must be normal, add, multiply or screen.") }
+            replacement.blend = blend
+        case .text:
+            guard parameter.type == .string, var text = node.typography else { throw SceneError.invalid("Text controls need a text layer.") }
+            text.text = parameter.text; replacement.content = .text(text)
+        case .fill:
+            guard parameter.type == .color else { throw SceneError.invalid("Fill needs a color control.") }
+            if var text = node.typography { text.fill = parameter.text; replacement.content = .text(text) }
+            else if var shape = node.shape { shape.fill = parameter.text; replacement.content = .shape(shape) }
+            else { throw SceneError.invalid("Fill controls need a text or shape layer.") }
+        }
+        _ = SceneTree.edit(nodeID, in: &nodes) { siblings, index in siblings[index] = replacement }
+    }
+}
+
 struct SceneParameter: Codable, Sendable, Equatable {
+    enum ValueType: String, Codable, Sendable { case number, boolean, color, choice, string }
     var name: String
     var value: Double
     var min: Double
     var max: Double
-    enum CodingKeys: String, CodingKey { case name, value = "default", min, max }
+    var type: ValueType = .number
+    var text: String = ""
+    var boolean: Bool = false
+    var choices: [String] = []
+    var targets: [SceneControlTarget] = []
+    init(name: String, value: Double, min: Double, max: Double) {
+        self.name = name; self.value = value; self.min = min; self.max = max
+    }
+    init(name: String, type: ValueType, text: String = "", boolean: Bool = false, choices: [String] = []) {
+        self.init(name: name, value: 0, min: 0, max: 1)
+        self.type = type; self.text = text; self.boolean = boolean; self.choices = choices
+    }
+    var isValid: Bool {
+        switch type {
+        case .number: return [value, min, max, max - min].allSatisfy(\.isFinite) && min < max && (min...max).contains(value)
+        case .boolean: return choices.isEmpty
+        case .color: return text.range(of: "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$", options: .regularExpression) != nil && choices.isEmpty
+        case .string: return text.utf8.count <= 4096 && choices.isEmpty
+        case .choice: return (1...32).contains(choices.count) && Set(choices).count == choices.count && choices.allSatisfy { !$0.isEmpty && $0.utf8.count <= 120 } && choices.contains(text)
+        }
+    }
+    enum CodingKeys: String, CodingKey { case name, value = "default", min, max, type, choices, targets }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        type = try c.decodeIfPresent(ValueType.self, forKey: .type) ?? .number
+        value = 0; min = 0; max = 1
+        choices = try c.decodeIfPresent([String].self, forKey: .choices) ?? []
+        targets = try c.decodeIfPresent([SceneControlTarget].self, forKey: .targets) ?? []
+        switch type {
+        case .number:
+            value = try c.decode(Double.self, forKey: .value)
+            min = try c.decode(Double.self, forKey: .min); max = try c.decode(Double.self, forKey: .max)
+        case .boolean: boolean = try c.decode(Bool.self, forKey: .value)
+        case .color, .choice, .string: text = try c.decode(String.self, forKey: .value)
+        }
+        guard isValid else { throw SceneError.invalid("Invalid typed parameter default or limits.") }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        if !targets.isEmpty { try c.encode(targets, forKey: .targets) }
+        // Keep the original numeric encoding readable by older scene versions.
+        if type != .number { try c.encode(type, forKey: .type) }
+        switch type {
+        case .number:
+            try c.encode(value, forKey: .value); try c.encode(min, forKey: .min); try c.encode(max, forKey: .max)
+        case .boolean: try c.encode(boolean, forKey: .value)
+        case .color, .choice, .string: try c.encode(text, forKey: .value)
+        }
+        if type == .choice { try c.encode(choices, forKey: .choices) }
+    }
 }
 
 struct SceneKeyframeTrack: Codable, Sendable, Equatable {
@@ -260,6 +470,7 @@ struct SceneSignals: Sendable {
 
 struct SceneNode: Codable, Sendable {
     var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
+    var componentID: String? = nil // Provenance only; instances are independent editable snapshots.
     struct Emitter: Codable, Sendable, Equatable {
         var count: Int = 128
         var lifetime: Double = 6
@@ -279,7 +490,38 @@ struct SceneNode: Codable, Sendable {
             }
         }
     }
-    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]) }
+    struct Typography: Codable, Sendable, Equatable {
+        enum Alignment: String, Codable, Sendable { case left, center, right }
+        var text: String = "Hello, world"
+        var font: String = "HelveticaNeue"
+        var size: Double = 96
+        var alignment: Alignment = .center
+        var fill: String = "#FFFFFF"
+        var lineSpacing: Double = 8
+        var width: Int = 1024
+        var height: Int = 512
+        func validate() throws {
+            guard text.utf8.count <= 4096, !font.isEmpty, font.utf8.count <= 160,
+                  size.isFinite, (4...512).contains(size), lineSpacing.isFinite, (0...256).contains(lineSpacing),
+                  (32...4096).contains(width), (32...4096).contains(height),
+                  SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid text, typography, fill or canvas dimensions.") }
+        }
+    }
+    struct Shape: Codable, Sendable, Equatable {
+        enum Primitive: String, Codable, Sendable { case rectangle, ellipse, line, roundedRectangle }
+        var primitive: Primitive = .roundedRectangle
+        var fill: String = "#FF4FA3"
+        var width: Int = 1024
+        var height: Int = 512
+        var cornerRadius: Double = 64
+        var lineWidth: Double = 8
+        func validate() throws {
+            guard (32...4096).contains(width), (32...4096).contains(height),
+                  cornerRadius.isFinite, (0...2048).contains(cornerRadius), lineWidth.isFinite, (1...512).contains(lineWidth),
+                  SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid shape dimensions, fill or radius.") }
+        }
+    }
+    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]), text(Typography), shape(Shape) }
     struct Transform: Codable, Sendable {
         let x: Double?
         let y: Double?
@@ -334,20 +576,22 @@ struct SceneNode: Codable, Sendable {
     var assets: [URL] { [assetURL, maskAsset, sprite].compactMap { $0 } }
     var style: Style = .plain
     var name: String? = nil
-    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : kind == .particles ? "Particles" : "Gradient") }
+    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : kind == .particles ? "Particles" : kind == .text ? "Text" : kind == .shape ? "Shape" : "Gradient") }
     var content: Content
     var visible = true
     var locked = false
     var opacity: Double = 1
     var transform: Transform = .identity
     var kind: SceneDescriptor.Kind {
-        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles }
+        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles; case .text: return .text; case .shape: return .shape }
     }
+    var typography: Typography? { if case .text(let value) = content { return value }; return nil }
+    var shape: Shape? { if case .shape(let value) = content { return value }; return nil }
     var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
     var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
     var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
     var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
-    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : kind != .image)) }
+    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles].contains(kind))) }
     func duplicated() -> SceneNode {
         let identities = Dictionary(uniqueKeysWithValues: descendants.map { ($0.id, UUID()) })
         func copy(_ node: SceneNode) -> SceneNode {
@@ -361,7 +605,7 @@ struct SceneNode: Codable, Sendable {
         return copy(self)
     }
     var assetURL: URL? {
-        switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles: return nil }
+        switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles, .text, .shape: return nil }
     }
 }
 
@@ -381,6 +625,8 @@ struct LocalSceneSource: SceneSource {
         let version: Int
         let title: String
         let capabilities: [String]
+        let features: [String]?
+        let metadata: SceneMetadata?
     }
     private struct Scene: Decodable {
         let canvas: SceneDescriptor.Canvas?
@@ -389,8 +635,16 @@ struct LocalSceneSource: SceneSource {
         let timeline: SceneTimeline?
         let layers: [Node]?
         let nodes: [Node]?
+        let components: [String: Component]?
+        struct Component: Decodable {
+            let name: String
+            let node: Node
+            let parameters: [String: SceneParameter]
+            let bindings: [SceneParameterBinding]
+        }
         struct Node: Decodable {
             let id: UUID?
+            let componentID: String?
             let blend: SceneNode.Blend?
             let maskAsset: String?
             let maskNodeID: UUID?
@@ -400,6 +654,8 @@ struct LocalSceneSource: SceneSource {
             let children: [Node]?
             let name: String?
             let emitter: SceneNode.Emitter?
+            let typography: SceneNode.Typography?
+            let shape: SceneNode.Shape?
             let type: SceneDescriptor.Kind
             let asset: String?
             let visible: Bool?
@@ -465,7 +721,16 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...20).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...SceneFormat.revision).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        if manifest.version == SceneFormat.revision {
+            guard let features = manifest.features, features.count <= 32, Set(features).count == features.count else {
+                throw SceneError.invalid("Revision 21 needs a unique features list.")
+            }
+            let unsupported = Set(features).subtracting(SceneFormat.supported)
+            guard unsupported.isEmpty else { throw SceneError.invalid("Unsupported scene features: " + unsupported.sorted().joined(separator: ", ")) }
+        } else if manifest.features != nil || manifest.metadata != nil {
+            throw SceneError.invalid("Feature declarations and metadata require revision 21.")
+        }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -495,6 +760,13 @@ struct LocalSceneSource: SceneSource {
                 }
                 try emitter.validate()
                 content = .particles(emitter)
+            } else if node.type == .text || node.type == .shape {
+                guard manifest.version == SceneFormat.revision, node.asset == nil, node.children == nil else { throw SceneError.invalid("Text and shapes require revision 21 and no asset or children.") }
+                if node.type == .text, let typography = node.typography {
+                    try typography.validate(); content = .text(typography)
+                } else if node.type == .shape, let shape = node.shape {
+                    try shape.validate(); content = .shape(shape)
+                } else { throw SceneError.invalid("Text or shape content is missing.") }
             } else if node.type == .gradient {
                 guard node.children == nil, manifest.version >= 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
                 content = .gradient
@@ -508,6 +780,7 @@ struct LocalSceneSource: SceneSource {
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
             guard node.type == .particles || node.emitter == nil else { throw SceneError.invalid("Only particle nodes accept an emitter.") }
+            guard node.type == .text || node.typography == nil, node.type == .shape || node.shape == nil else { throw SceneError.invalid("Content fields must match the node type.") }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             guard manifest.version >= 18 || !(node.style?.effects.contains { $0.type == .displacement } ?? false) else {
@@ -523,6 +796,8 @@ struct LocalSceneSource: SceneSource {
                 if decodedStyle.effects[index].id == nil { decodedStyle.effects[index].id = UUID() }
             }
             var result = SceneNode(id: manifest.version >= 6 ? node.id! : UUID(), style: decodedStyle, name: node.name.map { String($0.prefix(120)) }, content: content, visible: node.visible ?? true, locked: node.locked ?? false, opacity: opacity, transform: transform)
+            guard manifest.version == SceneFormat.revision || node.componentID == nil else { throw SceneError.invalid("Local presets require revision 21.") }
+            result.componentID = node.componentID
             guard manifest.version >= 20 || (node.blend == nil && node.maskAsset == nil && node.maskNodeID == nil && node.maskChannel == nil && node.sprite == nil) else {
                 throw SceneError.invalid("Asset masks, blend modes and sprites require scene version 20.")
             }
@@ -543,7 +818,17 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version >= 7 || (scene.parameters == nil && scene.bindings == nil) else {
             throw SceneError.invalid("Parameters and bindings require scene version 7.")
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas)
+        var components: [String: SceneComponent]? = nil
+        if let definitions = scene.components {
+            guard manifest.version == SceneFormat.revision, definitions.count <= 8 else { throw SceneError.invalid("Use at most eight presets in revision 21.") }
+            components = try definitions.mapValues { .init(name: $0.name, node: try decode($0.node, depth: 0), parameters: $0.parameters, bindings: $0.bindings) }
+        }
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components)
+        if manifest.version == SceneFormat.revision {
+            guard SceneFormat.features(result).isSubset(of: Set(manifest.features ?? [])) else { throw SceneError.invalid("The manifest is missing required scene features.") }
+        } else if result.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) {
+            throw SceneError.invalid("Typed controls require revision 21.")
+        }
         guard scene.canvas == nil || manifest.version >= 19 else { throw SceneError.invalid("Canvas modes require scene version 19.") }
         guard scene.timeline == nil || manifest.version >= 11 else { throw SceneError.invalid("Authored playback requires scene version 11.") }
         guard result.timeline?.videosFollowScene != true || manifest.version >= 13 else { throw SceneError.invalid("Video transport requires scene version 13.") }
@@ -713,7 +998,10 @@ enum ScenePackageWriter {
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
             if let name = node.name { json["name"] = name }
+            if let component = node.componentID { json["componentID"] = component }
             if let emitter = node.emitter { json["emitter"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(emitter)) }
+            if let text = node.typography { json["typography"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(text)) }
+            if let shape = node.shape { json["shape"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(shape)) }
             if node.style != .plain {
                 json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
             }
@@ -743,6 +1031,13 @@ enum ScenePackageWriter {
         }
         let nodes = try scene.nodes.map(encode)
         var contents: [String: Any] = ["nodes": nodes]
+        if let components = scene.components {
+            contents["components"] = try components.mapValues { component -> [String: Any] in
+                ["name": component.name, "node": try encode(component.node),
+                 "parameters": try JSONSerialization.jsonObject(with: JSONEncoder().encode(component.parameters)),
+                 "bindings": try JSONSerialization.jsonObject(with: JSONEncoder().encode(component.bindings))]
+            }
+        }
         if let canvas = scene.canvas { contents["canvas"] = canvas.rawValue }
         if let timeline = scene.timeline {
             try timeline.validate()
@@ -753,8 +1048,13 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.needsComposition || $0.sprite != nil || $0.blend != nil || $0.maskChannel != nil } ? 20 : scene.canvas != nil ? 19 : scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
-                             ("scene.json", contents)] {
+        var manifest: [String: Any] = ["version": SceneFormat.revision, "title": scene.title,
+            "features": SceneFormat.features(scene).sorted(),
+            "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])]
+        if let metadata = scene.metadata {
+            manifest["metadata"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata))
+        }
+        for (name, json) in [("manifest.json", manifest), ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
         }
@@ -768,7 +1068,7 @@ enum ScenePackageWriter {
             // by this edit. Preserve ancillary files, previews, and unrelated assets.
             let previous = try LocalSceneSource.read(destination)
             let root = destination.resolvingSymlinksInPath().path + "/"
-            for asset in previous.allNodes.flatMap({ $0.assets }) {
+            for asset in previous.assetNodes.flatMap({ $0.assets }) {
                 let path = asset.resolvingSymlinksInPath().path
                 if path.hasPrefix(root) {
                     let relative = String(path.dropFirst(root.count))
@@ -799,7 +1099,8 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
     var order: [Int] = []
     for node in new {
         guard let index = old.firstIndex(where: { $0.id == node.id }),
-              old[index].kind == node.kind, old[index].assets == node.assets else { return nil }
+              old[index].kind == node.kind, old[index].assets == node.assets,
+              old[index].typography == node.typography, old[index].shape == node.shape else { return nil }
         if node.kind == .group, sceneResourceOrder(from: old[index].children, to: node.children) == nil { return nil }
         order.append(index)
     }
@@ -821,6 +1122,8 @@ enum SceneBudget {
             var result: [SceneNode] = []
             for node in nodes {
                 try node.emitter?.validate()
+                try node.typography?.validate()
+                try node.shape?.validate()
                 guard node.style.effects.count <= 8, node.style.effects.allSatisfy({ $0.amount.isFinite && $0.range.contains($0.amount) }) else {
                     throw SceneError.invalid("Use at most eight effects per layer, with amounts inside each effect's range.")
                 }
@@ -876,7 +1179,7 @@ enum SceneBudget {
     static func imagePixels(_ nodes: [SceneNode]) -> Int {
         var count = 0
         for node in nodes.flatMap({ $0.descendants }) {
-            if node.kind == .image { count += 1 }
+            if [.image, .text, .shape].contains(node.kind) { count += 1 }
             if node.maskAsset != nil { count += 1 }
             if node.sprite != nil { count += 1 }
         }

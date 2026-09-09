@@ -81,14 +81,14 @@ final class SceneDocument {
         }
         let recovery = Recovery(version: stored.version, edited: stored.edited,
             scene: SceneDescriptor(title: stored.scene.title, nodes: nodes, parameters: stored.scene.parameters,
-                                   bindings: stored.scene.bindings, timeline: stored.scene.timeline, canvas: stored.scene.canvas))
+                                   bindings: stored.scene.bindings, timeline: stored.scene.timeline, canvas: stored.scene.canvas, metadata: stored.scene.metadata, components: stored.scene.components))
         guard recovery.version == 1 else { throw SceneError.invalid("Unsupported recovery version.") }
         try SceneBudget.validate(recovery.scene.nodes)
         _ = try recovery.scene.evaluated()
-        for node in recovery.scene.allNodes {
+        for node in recovery.scene.assetNodes {
             for target in ScenePropertyAddress.targets(for: node) {
-                let value = try target.value(in: recovery.scene.nodes)
-                guard value.isFinite, try target.range(in: recovery.scene.nodes).contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
+                let value = try target.value(in: [node])
+                guard value.isFinite, try target.range(in: [node]).contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
             }
             for url in node.assets {
                 guard url.isFileURL, FileManager.default.isReadableFile(atPath: url.path) else {
@@ -127,7 +127,7 @@ final class SceneDocument {
             url.pathExtension.lowercased() == "idlesse" ? try ScenePackageWriter.revision(of: url) : nil
         }.value
         let scene = try await LocalSceneSource().resolve(url)
-        for node in scene.allNodes {
+        for node in scene.assetNodes {
             guard case .video(let videoURL) = node.content else { continue }
             let asset = AVURLAsset(url: videoURL)
             let playable = try await asset.load(.isPlayable)
@@ -184,7 +184,7 @@ final class SceneDocument {
     }
     func pruneAssets() {
         let scenes = [scene] + (savedScene.map { [$0] } ?? []) + (undoTargets + redoTargets).map { $0.scene }
-        let needed = Set(scenes.flatMap { $0.allNodes.flatMap { $0.assets } })
+        let needed = Set(scenes.flatMap { $0.assetNodes.flatMap { $0.assets } })
         workingAssets.removeAll { url in
             guard !needed.contains(url) else { return false }
             url.stopAccessingSecurityScopedResource()

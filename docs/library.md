@@ -45,7 +45,7 @@ with up to 128 imports and a 1 MiB index limit. A corrupt index is preserved and
 reported, not overwritten. A moved/unavailable file can be re-added through the picker.
 
 Posters are generated only for the selected scene. All compositions
-are rendered at scene time 2 seconds with pointer/audio grants off, then their GPU
+are rendered at the metadata previewTime (default 2 seconds) with pointer/audio grants off, then their GPU
 resources are released. Video frames are decoded at the same preview time and
 composited with layers, masks, blending, and effects. Authored video-following uses
 scene transport time; ordinary looping video uses elapsed preview time.

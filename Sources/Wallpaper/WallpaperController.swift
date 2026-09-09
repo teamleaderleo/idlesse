@@ -296,7 +296,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func watch(url: URL, scene: SceneDescriptor) {
         watcher = nil
         guard url.pathExtension.lowercased() == "idlesse" else { return }
-        watcher = SceneWatcher(package: url, assets: scene.allNodes.flatMap { $0.assets }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.assetNodes.flatMap { $0.assets }) { [weak self] in
             guard let self, self.selectedURL == url else { return }
             self.select(url, reloading: true)
         }

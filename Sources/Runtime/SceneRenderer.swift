@@ -219,7 +219,7 @@ final class LayeredSceneRenderer: SceneRenderer {
                     child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, onError: onError)
-                case .particles: throw SceneError.invalid("Particles require Metal.")
+                case .particles, .text, .shape: throw SceneError.invalid("This creative layer requires Metal.")
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
                 case .group(let nodes):
                     child = try LayeredSceneRenderer(playable: SceneDescriptor(title: node.displayName, nodes: nodes),

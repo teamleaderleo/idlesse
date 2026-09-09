@@ -134,7 +134,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let addMediaButton = NSButton(title: "+ Image / Video…", target: nil, action: nil)
     private let addParticlesButton = NSButton(title: "+ Particles", target: nil, action: nil)
     private let emitterButton = NSButton(title: "Emitter…", target: nil, action: nil)
-    private let addGradientButton = NSButton(title: "+ Gradient", target: nil, action: nil)
+    private let addGradientButton = NSButton(title: "+ Create…", target: nil, action: nil)
     private let removeNodeButton = NSButton(title: "Remove", target: nil, action: nil)
     private let reorderButton = NSButton(title: "Bring Forward", target: nil, action: nil)
     private let document = SceneDocument()
@@ -212,6 +212,17 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         editor.onError = { [weak self] message in self?.detailLabel.stringValue = message }
         editor.duplicateCommit = { [weak self] source, copy, nodes, selected in
             guard let self else { return false }
+            if let id = source.componentID {
+                do {
+                    let captured = try SceneComponent.capture(source, from: self.scene)
+                    var next = try captured.inserting(into: self.scene, id: id)
+                    var roots = next.nodes
+                    let instance = roots.removeLast()
+                    _ = SceneTree.edit(source.id, in: &roots) { siblings, index in siblings.insert(instance, at: index + 1) }
+                    next = next.replacingNodes(roots)
+                    return self.applyEdit(roots, selected: next.allNodes.firstIndex { $0.id == instance.id } ?? 0, name: "Duplicate Instance", controls: next)
+                } catch { self.detailLabel.stringValue = error.localizedDescription; return false }
+            }
             let next = self.scene.duplicatingBindings(from: source, to: copy)
             guard (try? next.replacingNodes(nodes).evaluated()) != nil else {
                 self.detailLabel.stringValue = "Duplicating this layer would exceed the scene binding budget."; return false
@@ -340,7 +351,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         redoButton.target = self
         redoButton.action = #selector(redoEdit)
         inspector.addArrangedSubview(NSStackView(views: [undoButton, redoButton]))
-        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(addGradient)), (addParticlesButton, #selector(addParticles)), (emitterButton, #selector(editEmitter)),
+        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(createMenu)), (addParticlesButton, #selector(addParticles)), (emitterButton, #selector(editEmitter)),
                                   (reorderButton, #selector(reorderNode)), (removeNodeButton, #selector(removeNode))] {
             button.target = self
             button.action = action
@@ -607,7 +618,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         nameField.isEditable = !saving
         duplicateButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addMediaButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
-        addGradientButton.isEnabled = addMediaButton.isEnabled
+        addGradientButton.isEnabled = !saving
         addParticlesButton.isEnabled = addMediaButton.isEnabled && scene.allNodes.filter { $0.kind == .particles }.count < 4
         emitterButton.isEnabled = !saving && editor.selectedNode?.emitter != nil && editor.selectedNode?.locked == false
         removeNodeButton.isEnabled = !saving && editor.siblings.count > 1
@@ -814,7 +825,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         property.selectItem(at: properties.firstIndex(where: { $0.property == .opacity })!)
         property.setAccessibilityLabel("Target property")
         let parameter = NSPopUpButton(frame: .zero, pullsDown: false)
-        let keys = scene.parameters.keys.sorted()
+        let keys = scene.parameters.keys.filter { scene.parameters[$0]?.type == .number }.sorted()
         let signals: [SceneParameterBinding.Signal] = [.time, .sine, .pointerX, .pointerY, .audioLevel, .audioBass, .audioMid, .audioTreble]
         parameter.addItems(withTitles: ["New control"] + keys.map { scene.parameters[$0]!.name } + ["Elapsed Time", "Sine Wave", "Pointer X", "Pointer Y", "Audio Level", "Audio Bass", "Audio Mid", "Audio Treble", "Existing Keyframes"])
         parameter.setAccessibilityLabel("Control")
@@ -1065,6 +1076,150 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let background = SceneNode(name: "Night", content: .gradient, opacity: 0.25)
         let sample = SceneDescriptor(title: "Fireflies", nodes: [background, particles], timeline: .init(duration: 6, mode: .loop))
         _ = applyEdit(sample.nodes, selected: 1, name: "Create Fireflies", controls: sample)
+    }
+    @objc private func createMenu() {
+        let menu = NSMenu()
+        for (title, action) in [("Gradient", #selector(addGradient)), ("Text", #selector(addText)),
+            ("Shape", #selector(addShape)), ("Edit Text / Shape…", #selector(editGraphic)),
+            ("New Control…", #selector(addControl)), ("Local Presets…", #selector(presetBrowser)), ("Scene Details…", #selector(editMetadata))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self; menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: addGradientButton.bounds.height), in: addGradientButton)
+    }
+    @objc private func presetBrowser() {
+        guard !saving else { return }
+        let dialog = NSAlert(); dialog.messageText = "Local Presets"
+        dialog.informativeText = "Capture a layer or group with its controls and motion. Insertions are independent editable copies, stored inside this scene package."
+        dialog.addButton(withTitle: "Insert"); dialog.addButton(withTitle: "Cancel")
+        dialog.addButton(withTitle: "Capture Selection"); dialog.addButton(withTitle: "Detach Selection")
+        let entries = (scene.components ?? [:]).sorted { $0.value.name.localizedStandardCompare($1.value.name) == .orderedAscending }
+        let picker = NSPopUpButton()
+        picker.addItems(withTitles: entries.map { "\($0.value.name) · \($0.value.node.descendants.count) layers · \($0.value.parameters.count) controls" })
+        picker.frame.size = NSSize(width: 380, height: 28)
+        dialog.accessoryView = picker
+        dialog.buttons[0].isEnabled = !entries.isEmpty
+        dialog.buttons[2].isEnabled = editor.selectedNode != nil && entries.count < 8
+        dialog.buttons[3].isEnabled = editor.selectedNode?.componentID != nil
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            do {
+                var next = self.scene
+                var selection = self.editor.selection
+                let action: String
+                if response == .alertFirstButtonReturn, entries.indices.contains(picker.indexOfSelectedItem) {
+                    let entry = entries[picker.indexOfSelectedItem]
+                    next = try entry.value.inserting(into: next, id: entry.key)
+                    selection = next.allNodes.firstIndex { $0.id == next.nodes.last!.id } ?? 0
+                    action = "Insert Preset"
+                } else if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2, let node = self.editor.selectedNode {
+                    let component = try SceneComponent.capture(node, from: next)
+                    let id = UUID().uuidString
+                    if next.components == nil { next.components = [:] }
+                    next.components?[id] = component
+                    var nodes = next.nodes
+                    _ = SceneTree.edit(node.id, in: &nodes) { siblings, index in siblings[index].componentID = id }
+                    next = next.replacingNodes(nodes); action = "Capture Preset"
+                } else if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3, let node = self.editor.selectedNode {
+                    var nodes = next.nodes
+                    _ = SceneTree.edit(node.id, in: &nodes) { siblings, index in siblings[index].componentID = nil }
+                    next = next.replacingNodes(nodes); action = "Detach Preset"
+                } else { return }
+                _ = try next.evaluated()
+                _ = self.applyEdit(next.nodes, selected: selection, name: action, controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+    }
+    @objc private func addText() {
+        guard !saving else { return }
+        if editor.add(SceneNode(content: .text(.init()), transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))) { editGraphic() }
+    }
+    @objc private func addShape() {
+        guard !saving else { return }
+        if editor.add(SceneNode(content: .shape(.init()), transform: .init(x: 0, y: 0, scale: 0.4, rotation: 0))) { editGraphic() }
+    }
+    @objc private func editGraphic() {
+        guard !saving, let original = editor.selectedNode, !original.locked,
+              original.typography != nil || original.shape != nil else { return }
+        let dialog = NSAlert()
+        dialog.messageText = original.typography != nil ? "Text Layer" : "Shape Layer"
+        dialog.informativeText = "Dimensions describe the layer’s own canvas. Use the canvas handles to place it in the scene."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
+        let names: [String], values: [String]
+        let picker = NSPopUpButton()
+        if let text = original.typography {
+            names = ["Text", "Font name", "Font size", "Fill (#RRGGBB or #RRGGBBAA)", "Line spacing", "Width", "Height"]
+            values = [text.text, text.font, String(text.size), text.fill, String(text.lineSpacing), String(text.width), String(text.height)]
+            picker.addItems(withTitles: ["Left", "Center", "Right"])
+            picker.selectItem(at: text.alignment == .left ? 0 : text.alignment == .center ? 1 : 2)
+        } else {
+            let shape = original.shape!
+            names = ["Fill (#RRGGBB or #RRGGBBAA)", "Width", "Height", "Corner radius", "Line width"]
+            values = [shape.fill, String(shape.width), String(shape.height), String(shape.cornerRadius), String(shape.lineWidth)]
+            picker.addItems(withTitles: ["Rectangle", "Ellipse", "Line", "Rounded Rectangle"])
+            picker.selectItem(at: [SceneNode.Shape.Primitive.rectangle, .ellipse, .line, .roundedRectangle].firstIndex(of: shape.primitive)!)
+        }
+        let fields = values.map { NSTextField(string: $0) }
+        for (name, field) in zip(names, fields) {
+            stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(field)
+            field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        }
+        stack.addArrangedSubview(picker); dialog.accessoryView = stack
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.editor.selectedNode?.id == original.id else { return }
+            var node = original
+            if var text = node.typography {
+                text.text = fields[0].stringValue; text.font = fields[1].stringValue
+                text.size = Double(fields[2].stringValue) ?? .nan; text.fill = fields[3].stringValue
+                text.lineSpacing = Double(fields[4].stringValue) ?? .nan
+                text.width = Int(fields[5].stringValue) ?? 0; text.height = Int(fields[6].stringValue) ?? 0
+                text.alignment = [SceneNode.Typography.Alignment.left, .center, .right][picker.indexOfSelectedItem]
+                node.content = .text(text)
+            } else {
+                var shape = node.shape!
+                shape.fill = fields[0].stringValue; shape.width = Int(fields[1].stringValue) ?? 0; shape.height = Int(fields[2].stringValue) ?? 0
+                shape.cornerRadius = Double(fields[3].stringValue) ?? .nan; shape.lineWidth = Double(fields[4].stringValue) ?? .nan
+                shape.primitive = [SceneNode.Shape.Primitive.rectangle, .ellipse, .line, .roundedRectangle][picker.indexOfSelectedItem]
+                node.content = .shape(shape)
+            }
+            do { try SceneBudget.validate([node]); self.editor.replaceSelected(node, name: "Edit Content") }
+            catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+    }
+    @objc private func addControl() {
+        guard !saving, scene.parameters.count < 16 else { return }
+        SceneParameterControls.create(window: window, node: editor.selectedNode) { [weak self] parameter in
+            guard let self else { return }
+            var next = self.scene
+            next.parameters[UUID().uuidString] = parameter
+            _ = self.applyEdit(next.nodes, selected: self.nodePicker.indexOfSelectedItem, name: "Add Control", controls: next)
+        }
+    }
+    @objc private func editMetadata() {
+        guard !saving else { return }
+        let current = scene.metadata ?? SceneMetadata()
+        let dialog = NSAlert(); dialog.messageText = "Scene Details"
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        let fields = [current.author ?? "", current.description ?? "", (current.tags ?? []).joined(separator: ", "),
+            current.license ?? "", String(current.previewTime ?? 2)].map { NSTextField(string: $0) }
+        for (name, field) in zip(["Author", "Description", "Tags (comma separated)", "License / attribution", "Poster time (seconds)"], fields) {
+            stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(field)
+            field.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        }
+        dialog.accessoryView = stack
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            let metadata = SceneMetadata(author: fields[0].stringValue, description: fields[1].stringValue,
+                tags: fields[2].stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                license: fields[3].stringValue, createdWith: "Idlesse", previewTime: Double(fields[4].stringValue) ?? .nan)
+            do {
+                try metadata.validate()
+                var next = self.scene; next.metadata = metadata
+                _ = self.applyEdit(next.nodes, selected: self.nodePicker.indexOfSelectedItem, name: "Edit Scene Details", controls: next)
+            } catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
     }
     @objc private func addGradient() {
         guard scene.allNodes.count < SceneBudget.maxNodes else { return }
@@ -1543,7 +1698,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private func watchPackage() {
         watcher = nil
         guard !draft, undoEdits.isEmpty, redoEdits.isEmpty, let url = selectedURL, url.pathExtension.lowercased() == "idlesse", window.isVisible else { return }
-        watcher = SceneWatcher(package: url, assets: scene.allNodes.flatMap { $0.assets }) { [weak self] in
+        watcher = SceneWatcher(package: url, assets: scene.assetNodes.flatMap { $0.assets }) { [weak self] in
             self?.load(url)
         }
     }

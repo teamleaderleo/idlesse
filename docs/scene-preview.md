@@ -1,5 +1,7 @@
 # Idlesse Studio
 
+Current revision 21 authoring additions: [typed controls, text/shapes, local presets and metadata](reusable-scenes.md).
+
 Open **Studio…** from the preview controls or Wallpaper menu (⌘O). Studio opens
 images, videos, and `.idlesse` packages without changing the desktop. Aurora is a
 built-in starter scene. Standard remains the default; Metal is an experimental

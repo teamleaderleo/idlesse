@@ -18,6 +18,15 @@ import AppKit
         precondition(recovered.scene.nodes[0].transform.rotation == 25)
         precondition(recovered.scene.nodes[0].style.vignette == 0.4)
         precondition(recovered.scene.timeline?.duration == 8)
+        let presetID = UUID().uuidString
+        let preset = try SceneComponent.capture(SceneNode(content: .text(.init(text: "Recovered preset"))), from: original.scene)
+        original.scene.components = [presetID: preset]
+        original.scene.metadata = .init(author: "Leo", previewTime: 5)
+        original.scheduleRecovery()
+        original.flushRecovery()
+        let withPreset = try reopened.readRecovery()!
+        precondition(withPreset.scene.components?[presetID]?.node.typography?.text == "Recovered preset")
+        precondition(withPreset.scene.metadata?.previewTime == 5)
         // A different document saving must not remove a deferred recovery.
         reopened.recoveryEnabled = true
         reopened.draft = false

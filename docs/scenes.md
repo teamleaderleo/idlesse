@@ -1,5 +1,7 @@
 # Idlesse scenes
 
+Current revision 21 authoring additions: [typed controls, text/shapes, local presets and metadata](reusable-scenes.md).
+
 ## Composable drivers (version 9)
 
 V9 bindings retain the v7/v8 primary source and `scale`/`offset`, then apply up to
