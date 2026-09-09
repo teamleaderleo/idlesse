@@ -1,6 +1,15 @@
+# Settings
+
+Open **Idlesse → Settings…** or press **⌘,**. The same window is available from
+the preview toolbar and wallpaper menu-bar menu. Changes apply immediately.
+
+- **Wallpaper:** desktop icons, frame rate, crossfade.
+- **Bedtime:** dimming level, daily schedule, Dim Now / Restore.
+- **Screen Saver:** opens the existing options as an attached sheet.
+
 # Bedtime display
 
-Wallpaper → Bedtime Display offers an adjustable software shade (20–98%), Dim Now,
+Settings → Bedtime offers an adjustable software shade (20–98%), Dim Now,
 and an optional daily interval using local clock time. An overnight interval such
 as 22:00–07:00 crosses midnight; equal endpoints disable the interval. The schedule
 is off by default and only runs while Idlesse is open.
@@ -9,7 +18,7 @@ One click-through black window covers each attached screen, below the system men
 bar. The crescent status item is labeled **Dimmed**, with Restore Display and
 70/90/98% presets. Option-Command-D also toggles dimming while Idlesse is active
 (it is not a system-wide hotkey). Settings appear above the shade without restoring
-the rest of the desktop; Cancel preserves dimming, and changing the level does not
+the rest of the desktop; closing Settings preserves dimming, and changing the level does not
 discard a manual override. Quit removes the shade. No hardware brightness,
 display sleep, power assertions, or desktop files are changed.
 
@@ -31,8 +40,6 @@ Schedule boundary and daylight-saving picker cases run in `Tests/ComfortTests.sw
 A per-window
 app screenshot excludes the shade, so it is not evidence of final display brightness.
 
-Desktop clutter is separate: macOS Desktop & Dock settings can hide desktop items
-without moving the files. Idlesse does not rewrite Finder preferences or restart Finder.
 
 To build and smoke-test changes without replacing a running dimmer's bundle:
 
@@ -49,7 +56,7 @@ it to show them again. The setting persists independently of Idlesse.
 
 The toggle keeps Finder's desktop surface enabled, preserving click-wallpaper
 to reveal the desktop. It changes WindowManager's `StandardHideDesktopIcons`
-preference, not the destructive-to-interaction `CreateDesktop=false` workaround.
+preference, not `CreateDesktop=false`, which disables desktop click handling.
 Finder restarts when applying the change. Widget visibility, Stage Manager and
 the click-wallpaper preference are left unchanged. Controls refresh from the
 system preference; Idlesse does not store a competing copy of this setting.

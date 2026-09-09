@@ -255,7 +255,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             self.updateInspector()
             self.nodePicker.selectItem(at: target.selected)
             self.selectNode()
-            self.detailLabel.stringValue = target.draft ? "Unsaved scene" : "Original scene · Redo is available"
+            self.detailLabel.stringValue = target.draft ? "Unsaved scene" : "Original scene"
         }
         let workspace = NSWorkspace.shared.notificationCenter
         for (name, inactive) in [(NSWorkspace.sessionDidResignActiveNotification, true), (NSWorkspace.sessionDidBecomeActiveNotification, false)] {
@@ -426,11 +426,6 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         exportButton.target = self; exportButton.action = #selector(exportVideo)
         inspector.addArrangedSubview(exportButton)
         inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
-        let hint = NSTextField(wrappingLabelWithString: "Expand groups to edit children. Drag rows to reorder siblings.")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        inspector.addArrangedSubview(hint)
         inspector.translatesAutoresizingMaskIntoConstraints = false
         let inspectorDocument = StudioInspectorView(frame: NSRect(x: 0, y: 0, width: 160, height: inspector.fittingSize.height))
         inspectorDocument.addSubview(inspector)
@@ -817,7 +812,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving, let node = editor.selectedNode, !node.locked else { return }
         let dialog = NSAlert()
         dialog.messageText = "Bind — " + node.displayName
-        dialog.informativeText = "Output = source × scale + offset, clamped to the property range. Sine runs from −1 to 1. Pointer response needs the enable switch. Remove restores the static value."
+        dialog.informativeText = ""
         dialog.addButton(withTitle: "Bind"); dialog.addButton(withTitle: "Remove Binding"); dialog.addButton(withTitle: "Cancel")
         let property = NSPopUpButton(frame: .zero, pullsDown: false)
         let properties = ScenePropertyAddress.targets(for: node)
@@ -968,7 +963,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving, var node = editor.selectedNode else { return }
         let dialog = NSAlert()
         dialog.messageText = "Appearance — " + node.displayName
-        dialog.informativeText = "Mask and color effects use Metal. Exposure: −2…2 stops. Saturation: 0…2 (1 is original). Vignette darkens the edges; 0 turns it off."
+        dialog.informativeText = ""
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
         let mask = NSPopUpButton(frame: .zero, pullsDown: false)
         mask.addItems(withTitles: ["No Mask", "Ellipse Mask"])
@@ -1019,7 +1014,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         guard !saving, var node = editor.selectedNode, !node.locked, let current = node.emitter else { return }
         let dialog = NSAlert()
         dialog.messageText = "Emitter — " + node.displayName
-        dialog.informativeText = "Seeded particles repeat every lifetime. Size, wind and speed can also use Bind or Keyframes."
+        dialog.informativeText = ""
         dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
         let names = ["Count (1–512)", "Lifetime (0.1–60 s)", "Speed (−1…1)", "Wind (−1…1)", "Gravity (−1…1)", "Size (0.001–0.05)", "Seed (0–65535)"]
         let values = [String(current.count), String(current.lifetime), String(current.speed), String(current.wind), String(current.gravity), String(current.size), String(current.seed)]
@@ -1090,7 +1085,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func presetBrowser() {
         guard !saving else { return }
         let dialog = NSAlert(); dialog.messageText = "Local Presets"
-        dialog.informativeText = "Capture a layer or group with its controls and motion. Insertions are independent editable copies, stored inside this scene package."
+        dialog.informativeText = "Presets insert as independent copies."
         dialog.addButton(withTitle: "Insert"); dialog.addButton(withTitle: "Cancel")
         dialog.addButton(withTitle: "Capture Selection"); dialog.addButton(withTitle: "Detach Selection")
         let entries = (scene.components ?? [:]).sorted { $0.value.name.localizedStandardCompare($1.value.name) == .orderedAscending }

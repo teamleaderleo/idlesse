@@ -327,7 +327,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 guard token == self.generation else { return }
                 let image: NSImage
                 let previewTime = scene.metadata?.previewTime ?? 2
-                let note = "Still preview at \(String(format: "%g", previewTime))s · Open in Studio for playback · Pointer/audio access off"
+                let note = "Preview · \(String(format: "%g", previewTime))s"
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
                 try clock.seek(to: previewTime)
@@ -697,7 +697,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             while controller.task != nil && Date() < videoDeadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
             }
-            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Still preview at 2s"), controller.detail.stringValue)
+            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Preview · 2s"), controller.detail.stringValue)
             // A transparent video must produce black, not a thumbnail of the raw asset.
             var video = SceneNode(content: .video(videoURL))
             video.opacity = 0

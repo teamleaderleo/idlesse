@@ -124,14 +124,6 @@ final class ConfigureSheetController: NSObject {
             root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
 
-        let title = NSTextField(labelWithString: "Idlesse")
-        title.font = NSFont.systemFont(ofSize: 28, weight: .semibold)
-        root.addArrangedSubview(title)
-
-        let subtitle = NSTextField(labelWithString: "Your pictures. A little room to breathe.")
-        subtitle.textColor = .secondaryLabelColor
-        root.addArrangedSubview(subtitle)
-
         root.addArrangedSubview(sectionTitle("Pictures"))
         let folderControls = NSStackView()
         folderControls.orientation = .horizontal
@@ -144,14 +136,11 @@ final class ConfigureSheetController: NSObject {
         root.addArrangedSubview(makeRow(label: "Image folder", control: folderControls))
 
         root.addArrangedSubview(subfoldersButton)
-        let sourceHint = NSTextField(wrappingLabelWithString: "Choose a local folder or downloaded cloud folder. Photos albums aren’t supported yet.")
-        sourceHint.font = .systemFont(ofSize: 11)
-        sourceHint.textColor = .secondaryLabelColor
-        root.addArrangedSubview(sourceHint)
+        chooseButton.toolTip = "Choose a local or downloaded folder."
         root.addArrangedSubview(sectionTitle("Pace"))
         let presets = NSStackView()
         presets.spacing = 8
-        for (index, title) in ["Calm · 5 min", "Gallery · 30 sec", "Quick · 5 sec"].enumerated() {
+        for (index, title) in ["5 min", "30 sec", "5 sec"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(applyPreset(_:)))
             button.bezelStyle = .rounded
             button.tag = index

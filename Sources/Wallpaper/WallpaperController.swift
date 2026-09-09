@@ -114,6 +114,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private var chooser: NSOpenPanel?
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
+    var onShowSettings: (() -> Void)?
     var onShowPreview: (() -> Void)?
     var presentingWindow: (() -> NSWindow?)?
     var onStateChange: (() -> Void)?
@@ -524,11 +525,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             let item = menu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
             item.target = comfort
         }
+        addItem(menu, "Settings…", #selector(showAppSettings))
         addItem(menu, "Quit Idlesse", #selector(quit))
         menu.autoenablesItems = false
         statusItem?.menu = menu
         onStateChange?()
     }
+
+    @objc private func showAppSettings() { onShowSettings?() }
 
     @discardableResult private func addItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
