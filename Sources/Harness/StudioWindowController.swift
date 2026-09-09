@@ -1343,7 +1343,12 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         }
     }
     private func cancelLoading() { generation += 1; loadTask?.cancel(); loadTask = nil }
-    private func load(_ url: URL) {
+    func openLibraryScene(_ url: URL, asCopy: Bool) {
+        show()
+        guard mayDiscard() else { return }
+        load(url, asCopy: asCopy)
+    }
+    private func load(_ url: URL, asCopy: Bool = false) {
         cancelLoading()
         let request = generation
         detailLabel.stringValue = "Opening \(url.lastPathComponent)…"
@@ -1372,15 +1377,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 self.scopedURL?.stopAccessingSecurityScopedResource()
                 self.scopedURL = accessed ? url : nil
                 adopted = true
-                self.draft = false
+                self.draft = asCopy
                 self.clearEditHistory()
                 self.savedScene = nil
                 self.updateInspector()
-                self.selectedURL = url
-                self.document.revision = contents.revision
+                self.selectedURL = asCopy ? nil : url
+                self.document.revision = asCopy ? nil : contents.revision
                 self.updateInspector()
-                self.window.representedURL = url.pathExtension.lowercased() == "idlesse" ? url : nil
-                self.applyButton.isEnabled = true
+                self.window.representedURL = !asCopy && url.pathExtension.lowercased() == "idlesse" ? url : nil
+                self.applyButton.isEnabled = !asCopy
+                if asCopy { self.document.scheduleRecovery() }
                 self.loadTask = nil
                 self.watchPackage()
             } catch {
