@@ -576,7 +576,23 @@ struct SceneNode: Codable, Sendable {
     var assets: [URL] { [assetURL, maskAsset, sprite].compactMap { $0 } }
     var style: Style = .plain
     var name: String? = nil
-    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : kind == .particles ? "Particles" : kind == .text ? "Text" : kind == .shape ? "Shape" : "Gradient") }
+    var displayName: String {
+        if let name { return name }
+        if let assetURL { return assetURL.deletingPathExtension().lastPathComponent }
+        if let typography {
+            let title = typography.text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            return title.isEmpty ? "Text" : String(title.prefix(48))
+        }
+        if let shape {
+            switch shape.primitive {
+            case .rectangle: return "Rectangle"
+            case .ellipse: return "Ellipse"
+            case .line: return "Line"
+            case .roundedRectangle: return "Rounded Rectangle"
+            }
+        }
+        return kind == .group ? "Group" : kind == .particles ? "Particles" : "Gradient"
+    }
     var content: Content
     var visible = true
     var locked = false
