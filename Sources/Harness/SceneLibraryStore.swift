@@ -67,7 +67,7 @@ final class SceneLibraryStore {
                        relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
-    @discardableResult func add(_ url: URL) throws -> Entry {
+    @discardableResult func add(_ url: URL, title: String? = nil) throws -> Entry {
         if let existing = catalog.entries.first(where: { (try? resolve($0).standardizedFileURL) == url.standardizedFileURL }) {
             return existing
         }
@@ -76,7 +76,7 @@ final class SceneLibraryStore {
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         let bookmark = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
         guard bookmark.count <= 16_384 else { throw failure("That file's access reference is too large.") }
-        let entry = Entry(id: UUID().uuidString, title: String(url.deletingPathExtension().lastPathComponent.prefix(200)), bookmark: bookmark)
+        let entry = Entry(id: UUID().uuidString, title: String((title ?? url.deletingPathExtension().lastPathComponent).prefix(200)), bookmark: bookmark)
         var next = catalog
         next.entries.append(entry)
         try save(next)

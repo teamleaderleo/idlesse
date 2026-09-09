@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
+import ImageIO
 
 /// Native reference library with one on-demand poster, never a grid of live renderers.
 final class SceneLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
@@ -39,6 +40,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var items: [Item] = []
     private var selected: Item?
     private var task: Task<Void, Never>?
+    private var conversionTask: Task<Void, Never>?
     private var generation = 0
     private var rotationTimer: Timer?
     private var rotationCollectionID: String?
@@ -141,7 +143,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 44
+        table.rowHeight = 28
         table.style = .sourceList
         table.delegate = self; table.dataSource = self
         table.target = self; table.doubleAction = #selector(doubleClickScene)
@@ -193,6 +195,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         ])
     }
 
+    weak var hostWindow: NSWindow?
+    private var presentationWindow: NSWindow? { hostWindow ?? window }
+    var embedded = false
+    func refreshEmbedded() {
+        if selected != nil { preview() }
+    }
     func show() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
@@ -263,7 +271,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let item = items[row]
         let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
         text.lineBreakMode = .byTruncatingTail
-        return text
+        let cell = NSTableCellView()
+        cell.textField = text
+        text.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(text)
+        NSLayoutConstraint.activate([
+            text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+            text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+        ])
+        return cell
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
@@ -327,7 +344,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 guard token == self.generation else { return }
                 let image: NSImage
                 let previewTime = scene.metadata?.previewTime ?? 2
-                let note = "Preview · \(String(format: "%g", previewTime))s"
+                let sourceDetails = try await Self.sourceDetails(url)
+                let note = "Preview · \(String(format: "%g", previewTime))s" + sourceDetails
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
                 try clock.seek(to: previewTime)
@@ -363,19 +381,40 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
     }
 
+    private static func sourceDetails(_ url: URL) async throws -> String {
+        let ext = url.pathExtension.lowercased()
+        if ["mp4", "mov"].contains(ext) {
+            let asset = AVURLAsset(url: url)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else { return "" }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let displayed = size.applying(transform)
+            let fps = try await track.load(.nominalFrameRate)
+            return " · \(Int(abs(displayed.width))) × \(Int(abs(displayed.height))) · \(String(format: "%g", fps)) fps"
+        }
+        guard ext != "idlesse" else { return "" }
+        return await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int else { return "" }
+            return " · \(width) × \(height)"
+        }.value
+    }
+
     @objc private func addScenes() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, .movie, UTType(filenameExtension: "idlesse") ?? .package]
+        panel.allowedContentTypes = [.item]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.message = "Add references to scenes or media. Originals stay in their current folder."
-        panel.beginSheetModal(for: window!) { [weak self] response in
+        panel.beginSheetModal(for: presentationWindow!) { [weak self] response in
             guard let self, response == .OK else { return }
             self.importScenes(panel.urls)
         }
     }
     private static func supportedImport(_ url: URL) -> Bool {
-        url.isFileURL && ["idlesse", "jpg", "jpeg", "png", "heic", "mp4", "mov"].contains(url.pathExtension.lowercased())
+        url.isFileURL && MediaImport.supports(url)
     }
     private func droppedURLs(_ pasteboard: NSPasteboard) -> [URL] {
         (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
@@ -395,11 +434,41 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return true
     }
     private func importScenes(_ urls: [URL]) {
+        let conversions = urls.filter { MediaImport.needsConversion($0) }
+        if !conversions.isEmpty {
+            guard conversionTask == nil else {
+                let alert = NSAlert(); alert.messageText = "A media import is already running"
+                alert.beginSheetModal(for: presentationWindow!)
+                return
+            }
+            conversionTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.conversionTask = nil }
+                for source in conversions {
+                    if Task.isCancelled { return }
+                    self.detail.stringValue = "Converting " + source.lastPathComponent + "…"
+                    do {
+                        let converted = try await MediaImport.convert(source)
+                        guard !Task.isCancelled else { return }
+                        let entry = try self.store.add(converted, title: source.deletingPathExtension().lastPathComponent)
+                        self.search.stringValue = ""; self.filter.selectItem(at: 2)
+                        self.reload(selecting: entry.id)
+                    } catch {
+                        if Task.isCancelled { return }
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn’t import " + source.lastPathComponent
+                        alert.informativeText = error.localizedDescription
+                        await alert.beginSheetModal(for: self.presentationWindow!)
+                        return
+                    }
+                }
+            }
+        }
         var firstID: String?
         var failures: [String] = []
-        for url in urls {
+        for url in urls where !conversions.contains(url) {
             do {
-                guard Self.supportedImport(url) else { throw SceneError.invalid("Choose an Idlesse package, JPG, PNG, HEIC, MP4, or MOV.") }
+                guard Self.supportedImport(url) else { throw SceneError.invalid("Choose a scene, image, or video. This file type is not supported.") }
                 let entry = try store.add(url)
                 if firstID == nil { firstID = entry.id }
             } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
@@ -413,7 +482,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let alert = NSAlert()
             alert.messageText = "Some scenes could not be added"
             alert.informativeText = failures.joined(separator: "\n")
-            if let window { alert.beginSheetModal(for: window) }
+            if let window = presentationWindow { alert.beginSheetModal(for: window) }
         }
     }
     @objc private func toggleFavorite() {
@@ -492,7 +561,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         if !deleting { alert.accessoryView = field }
         alert.addButton(withTitle: deleting ? "Delete Collection" : "Save")
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window!) { [weak self] result in
+        alert.beginSheetModal(for: presentationWindow!) { [weak self] result in
             guard let self, result == .alertFirstButtonReturn else { return }
             do {
                 if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0) }
@@ -509,7 +578,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private func editPlayback() {
         guard let id = filter.selectedItem?.representedObject as? String,
-              let collection = store.catalog.collections.first(where: { $0.id == id }), let window else { return }
+              let collection = store.catalog.collections.first(where: { $0.id == id }), let window = presentationWindow else { return }
         let settings = collection.playback ?? SceneLibraryStore.Playback()
         let enabled = NSButton(checkboxWithTitle: "Play on a schedule", target: nil, action: nil)
         enabled.state = settings.startMinute == nil ? .off : .on
@@ -589,14 +658,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         do {
             let url = try url(selected)
             try store.used(selected.id)
-            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { stopRotation(); onUse(url); window?.orderOut(nil) }
+            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { stopRotation(); onUse(url); if !embedded { window?.orderOut(nil) } }
         } catch { detail.stringValue = error.localizedDescription }
     }
     func windowWillClose(_ notification: Notification) {
+        conversionTask?.cancel()
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
     }
-    deinit { task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate() }
+    deinit { conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate() }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")

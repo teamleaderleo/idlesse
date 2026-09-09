@@ -23,7 +23,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         do {
             try prepareLibrary()
             saverView?.stopAnimation()
-            library?.show()
+            window?.orderOut(nil)
+            if let library, let content = library.window?.contentView {
+                library.embedded = true
+                library.hostWindow = appSettings.window
+                appSettings.installLibrary(content)
+                appSettings.onLibraryVisible = { [weak library] in library?.refreshEmbedded() }
+                appSettings.onClose = { [weak library] in library?.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+            }
+            appSettings.present(tab: 3)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Couldn’t open the Library"
@@ -36,7 +44,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func showScenePreview() {
         saverView?.stopAnimation()
         window?.orderOut(nil)
-        scenePreview.onClose = { [weak self] in self?.showPreview() }
+        scenePreview.onClose = { [weak self] in self?.showLibrary() }
         scenePreview.show()
     }
 
@@ -52,15 +60,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.saverView?.stopAnimation()
             self?.window?.orderOut(nil)
         }
-        wallpaper.onStop = { [weak self] in self?.showPreview() }
+        wallpaper.onStop = { [weak self] in self?.showLibrary() }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
-        wallpaper.presentingWindow = { [weak self] in self?.window }
+        wallpaper.presentingWindow = { [weak self] in self?.appSettings.window }
         wallpaper.comfort = comfort
         comfort.onDimmingChanged = { [weak self] value in
             self?.wallpaper.setDimmedForBedtime(value)
             self?.appSettings.updateDimming()
         }
-        comfort.onShowSettings = { [weak self] in self?.appSettings.present(tab: 1) }
+        comfort.onShowSettings = { [weak self] in self?.showLibrary(); self?.appSettings.present(tab: 1) }
         wallpaper.onShowSettings = { [weak self] in self?.showSettings() }
         comfort.start()
 
@@ -71,7 +79,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             defer: false
         )
         window.delegate = self
-        window.title = "Idlesse Preview"
+        window.title = "Screen Saver Preview"
         window.center()
 
         guard let contentView = window.contentView else { return }
@@ -117,8 +125,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         ])
         window.minSize = NSSize(width: 900, height: 360)
 
-        window.makeKeyAndOrderFront(nil)
-        saverView.startAnimation()
+        showLibrary()
         NSApp.activate(ignoringOtherApps: true)
 
         do {
@@ -130,11 +137,12 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         if let pendingSceneURL {
             wallpaper.select(pendingSceneURL)
             self.pendingSceneURL = nil
-        } else if IdlessePreferences.shared.folderDisplayPath == nil {
-            DispatchQueue.main.async { [weak self] in
-                self?.showSaverSettings()
-            }
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showLibrary() }
+        return true
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -148,6 +156,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        library?.windowWillClose(notification)
         wallpaper.onStop = nil
         wallpaper.stop()
         saverView?.stopAnimation()
@@ -181,7 +190,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
-    @objc private func showSettings() { appSettings.present() }
+    @objc private func showSettings() { showLibrary() }
 
     private func showSaverSettings(asSheet: Bool = false) {
         settingsController.reload()
@@ -278,7 +287,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             item.target = wallpaper
             wallpaperMenu.addItem(item)
         }
-        let show = NSMenuItem(title: "Show Preview", action: #selector(showPreview), keyEquivalent: "")
+        let show = NSMenuItem(title: "Screen Saver Preview", action: #selector(showPreview), keyEquivalent: "")
         show.target = self
         wallpaperMenu.addItem(show)
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")

@@ -123,6 +123,7 @@ build_app() {
     "$ROOT/Sources/Harness/SceneCanvasInteraction.swift" \
     "$ROOT/Sources/Harness/SceneEditorController.swift" \
     "$ROOT/Sources/Harness/SceneDocument.swift" \
+    "$ROOT/Sources/Harness/MediaImport.swift" \
     "$ROOT/Sources/Harness/SceneLibraryStore.swift" \
     "$ROOT/Sources/Harness/SceneLibraryController.swift" \
     "$ROOT/Sources/Harness/StudioWindowController.swift" \

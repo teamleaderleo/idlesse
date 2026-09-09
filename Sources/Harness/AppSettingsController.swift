@@ -5,6 +5,31 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let wallpaper: WallpaperController
     private let showSaver: () -> Void
     private let tabs = NSTabView()
+    private let status = NSTextField(labelWithString: "")
+    private let pause = NSButton(title: "Pause", target: nil, action: nil)
+    private var navigation: [NSButton] = []
+    var onLibraryVisible: (() -> Void)?
+    var onClose: (() -> Void)?
+    func installLibrary(_ view: NSView) {
+        guard tabs.numberOfTabViewItems == 3 else { return }
+        let item = NSTabViewItem(identifier: "Library"); item.view = view
+        tabs.addTabViewItem(item)
+    }
+    func updateStatus() {
+        status.stringValue = "Wallpaper: " + wallpaper.statusDescription
+        pause.title = wallpaper.pausedByUser ? "Resume" : "Pause"
+        pause.isEnabled = wallpaper.isRunning
+    }
+    @objc private func togglePlayback() { wallpaper.togglePause(); updateStatus() }
+    @objc private func navigate(_ sender: NSButton) { selectPage(sender.tag) }
+    private func selectPage(_ index: Int) {
+        guard index < tabs.numberOfTabViewItems else { return }
+        tabs.selectTabViewItem(at: index)
+        for button in navigation { button.state = button.tag == index ? .on : .off }
+        if index == 3 { onLibraryVisible?() }
+    }
+    func windowWillClose(_ notification: Notification) { onClose?() }
+
     private let icons = NSButton(checkboxWithTitle: "Show desktop icons", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
@@ -17,15 +42,39 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     init(comfort: DesktopComfortController, wallpaper: WallpaperController, showSaver: @escaping () -> Void) {
         self.comfort = comfort; self.wallpaper = wallpaper; self.showSaver = showSaver
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 510, height: 310),
-            styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Settings"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "Idlesse"
+        window.minSize = NSSize(width: 1100, height: 680)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
         window.center()
-        tabs.frame = NSRect(x: 20, y: 20, width: 470, height: 270)
-        window.contentView?.addSubview(tabs)
+        guard let root = window.contentView else { return }
+        let sidebar = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 180, height: 720))
+        sidebar.material = .sidebar; sidebar.blendingMode = .behindWindow
+        sidebar.autoresizingMask = [.height]
+        root.addSubview(sidebar)
+        for (row, entry) in [(3, "Wallpapers"), (0, "Playback & Desktop"), (1, "Bedtime"), (2, "Screen Saver")].enumerated() {
+            let button = NSButton(title: entry.1, target: self, action: #selector(navigate(_:)))
+            button.tag = entry.0; button.setButtonType(.pushOnPushOff); button.bezelStyle = .rounded
+            button.frame = NSRect(x: 12, y: 660 - row * 42, width: 156, height: 32)
+            button.autoresizingMask = [.minYMargin]
+            sidebar.addSubview(button); navigation.append(button)
+        }
+        status.frame = NSRect(x: 202, y: 670, width: 750, height: 24)
+        status.autoresizingMask = [.width, .minYMargin]
+        status.lineBreakMode = .byTruncatingMiddle
+        root.addSubview(status)
+        pause.frame = NSRect(x: 1060, y: 665, width: 96, height: 32)
+        pause.autoresizingMask = [.minXMargin, .minYMargin]
+        pause.bezelStyle = .rounded; pause.target = self; pause.action = #selector(togglePlayback)
+        root.addSubview(pause)
+        tabs.tabViewType = .noTabsNoBorder
+        tabs.frame = NSRect(x: 180, y: 0, width: 1000, height: 645)
+        tabs.autoresizingMask = [.width, .height]
+        root.addSubview(tabs)
+        wallpaper.onStateChange = { [weak self] in self?.updateStatus() }
         icons.target = self; icons.action = #selector(changeIcons)
         comfort.onDesktopIconsChanged = { [weak self] in self?.updateIcons() }
         rate.addItems(withTitles: SceneFrameRate.allCases.map { $0 == .automatic ? "Auto" : $0.title })
@@ -79,7 +128,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     }
     func present(tab: Int? = nil) {
         reload()
-        if let tab { tabs.selectTabViewItem(at: tab) }
+        selectPage(tab ?? 3)
         window?.level = comfort.isDimmed ? .mainMenu : .normal
         showWindow(nil); NSApp.activate(ignoringOtherApps: true)
     }
@@ -89,6 +138,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         icons.isEnabled = !comfort.changingDesktopIcons
     }
     private func reload() {
+        updateStatus()
         updateIcons()
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
