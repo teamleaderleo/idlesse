@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "id": "58828938-2f03-46e9-ad5a-5e8294a8c9c9",
+      "type": "group",
+      "children": [
+        {
+          "id": "a7bee1d7-66d1-4f8c-b178-6cc2597b3ef5",
+          "type": "group",
+          "children": [
+            {
+              "id": "340380CC-02C6-49BA-9005-A0AA2E539C3F",
+              "type": "shape",
+              "shape": {
+                "primitive": "rectangle",
+                "fill": "#00FF00",
+                "width": 128,
+                "height": 128,
+                "cornerRadius": 0,
+                "lineWidth": 1
+              }
+            }
+          ],
+          "opacity": 0.5
+        }
+      ],
+      "opacity": 0.5
+    }
+  ]
+}

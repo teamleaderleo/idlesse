@@ -7,8 +7,16 @@ final class SceneParameterControls: NSView {
     private var typedControls: [String: NSControl] = [:]
     init(parameters: [String: SceneParameter]) {
         let keys = parameters.keys.sorted()
-        let heights = keys.map { parameters[$0]?.type == .string ? 112 : 64 }
-        super.init(frame: NSRect(x: 0, y: 0, width: 340, height: max(50, heights.reduce(0, +))))
+        // Keep the pre-super layout calculation explicit: Swift's optimized
+        // ownership pass crashes on the map/reduce expression in this initializer.
+        var heights: [Int] = []
+        var totalHeight = 0
+        for key in keys {
+            let height = parameters[key]?.type == .string ? 112 : 64
+            heights.append(height)
+            totalHeight += height
+        }
+        super.init(frame: NSRect(x: 0, y: 0, width: 340, height: max(50, totalHeight)))
         var y = bounds.height
         for (index, key) in keys.enumerated() {
             let parameter = parameters[key]!
