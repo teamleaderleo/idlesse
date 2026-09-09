@@ -1161,15 +1161,57 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             picker.selectItem(at: [SceneNode.Shape.Primitive.rectangle, .ellipse, .line, .roundedRectangle].firstIndex(of: shape.primitive)!)
         }
         let fields = values.map { NSTextField(string: $0) }
-        for (name, field) in zip(names, fields) {
-            stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(field)
-            field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        let textEditor = NSTextView()
+        textEditor.isRichText = false
+        textEditor.isAutomaticQuoteSubstitutionEnabled = false
+        textEditor.isAutomaticDashSubstitutionEnabled = false
+        textEditor.font = .systemFont(ofSize: 14)
+        textEditor.textContainerInset = NSSize(width: 6, height: 6)
+        textEditor.string = original.typography?.text ?? ""
+        let fillIndex = original.typography != nil ? 3 : 0
+        let fill = NSColorWell()
+        let hex = String(values[fillIndex].dropFirst())
+        let rgba = UInt64(hex, radix: 16) ?? 0
+        let rgb = hex.count == 8 ? rgba >> 8 : rgba
+        fill.color = NSColor(srgbRed: CGFloat((rgb >> 16) & 255) / 255,
+            green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255,
+            alpha: hex.count == 8 ? CGFloat(rgba & 255) / 255 : 1)
+        for (index, pair) in zip(names, fields).enumerated() {
+            let (name, field) = pair
+            stack.addArrangedSubview(NSTextField(labelWithString: index == fillIndex ? "Fill color" : name))
+            if original.typography != nil && index == 0 {
+                let scroll = NSScrollView()
+                scroll.borderType = .bezelBorder
+                scroll.hasVerticalScroller = true
+                scroll.documentView = textEditor
+                textEditor.isVerticallyResizable = true
+                textEditor.isHorizontallyResizable = false
+                textEditor.autoresizingMask = [.width]
+                textEditor.textContainer?.widthTracksTextView = true
+                textEditor.frame = NSRect(x: 0, y: 0, width: 340, height: 90)
+                stack.addArrangedSubview(scroll)
+                scroll.widthAnchor.constraint(equalToConstant: 340).isActive = true
+                scroll.heightAnchor.constraint(equalToConstant: 90).isActive = true
+            } else if index == fillIndex {
+                stack.addArrangedSubview(fill)
+            } else {
+                stack.addArrangedSubview(field)
+                field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            }
         }
-        stack.addArrangedSubview(picker); dialog.accessoryView = stack
+        stack.addArrangedSubview(NSTextField(labelWithString: original.typography != nil ? "Alignment" : "Shape"))
+        stack.addArrangedSubview(picker)
+        stack.frame = NSRect(x: 0, y: 0, width: 340, height: original.typography != nil ? 490 : 350)
+        dialog.accessoryView = stack
         dialog.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn, self.editor.selectedNode?.id == original.id else { return }
             var node = original
+            guard let color = fill.color.usingColorSpace(.sRGB) else { return }
+            func byte(_ value: CGFloat) -> Int { Int((min(1, max(0, value)) * 255).rounded()) }
+            fields[fillIndex].stringValue = String(format: "#%02X%02X%02X%02X",
+                byte(color.redComponent), byte(color.greenComponent), byte(color.blueComponent), byte(color.alphaComponent))
             if var text = node.typography {
+                fields[0].stringValue = textEditor.string
                 text.text = fields[0].stringValue; text.font = fields[1].stringValue
                 text.size = Double(fields[2].stringValue) ?? .nan; text.fill = fields[3].stringValue
                 text.lineSpacing = Double(fields[4].stringValue) ?? .nan
