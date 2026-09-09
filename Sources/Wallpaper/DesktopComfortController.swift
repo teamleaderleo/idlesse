@@ -1,0 +1,169 @@
+import AppKit
+
+/// Local wall-clock schedule. Equal endpoints disable the interval rather than dimming all day.
+struct DimSchedule {
+    var start: Int
+    var end: Int
+    func contains(minute: Int) -> Bool {
+        guard (0..<1440).contains(start), (0..<1440).contains(end), start != end else { return false }
+        return start < end ? minute >= start && minute < end : minute >= start || minute < end
+    }
+}
+
+private final class DimWindow: NSWindow {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// An opt-in visual shade, not a hardware brightness or display-sleep controller.
+final class DesktopComfortController: NSObject {
+    var onDimmingChanged: ((Bool) -> Void)?
+    private let defaults = UserDefaults.standard
+    private var windows: [NSWindow] = []
+    private var statusItem: NSStatusItem?
+    private var timer: Timer?
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var manual: Bool?
+    private var previousScheduled = false
+    private var inactive = false
+    private(set) var isDimmed = false
+    private var schedule: DimSchedule {
+        DimSchedule(start: defaults.object(forKey: "comfort.start") as? Int ?? 1320,
+                    end: defaults.object(forKey: "comfort.end") as? Int ?? 420)
+    }
+    private var amount: Double {
+        let value = defaults.object(forKey: "comfort.amount") as? Double ?? 0.9
+        return value.isFinite ? min(0.98, max(0.2, value)) : 0.9
+    }
+
+    func start() {
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.refresh() }
+        timer?.tolerance = 5
+        observe(.default, NSApplication.didChangeScreenParametersNotification) { $0.rebuild() }
+        let workspace = NSWorkspace.shared.notificationCenter
+        observe(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.inactive = true; $0.refresh() }
+        observe(workspace, NSWorkspace.sessionDidBecomeActiveNotification) { $0.inactive = false; $0.refresh() }
+        observe(workspace, NSWorkspace.didWakeNotification) { $0.refresh() }
+        refresh()
+    }
+
+    private func observe(_ center: NotificationCenter, _ name: Notification.Name,
+                         _ action: @escaping (DesktopComfortController) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            if let self { action(self) }
+        }
+        observers.append((center, token))
+    }
+
+    private func refresh() {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        let scheduled = defaults.bool(forKey: "comfort.schedule") &&
+            schedule.contains(minute: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
+        // A manual restore lasts until the next schedule boundary, not just the next timer tick.
+        if scheduled != previousScheduled { manual = nil }
+        previousScheduled = scheduled
+        let next = !inactive && (manual ?? scheduled)
+        guard next != isDimmed else { return }
+        isDimmed = next
+        rebuild()
+        onDimmingChanged?(next)
+    }
+
+    @objc func toggle() {
+        manual = !isDimmed
+        refresh()
+    }
+
+    private func rebuild() {
+        windows.forEach { $0.close() }
+        windows.removeAll()
+        if isDimmed {
+            for screen in NSScreen.screens {
+                let window = DimWindow(contentRect: screen.frame, styleMask: .borderless,
+                                       backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.backgroundColor = .black
+                window.isOpaque = true
+                window.alphaValue = amount
+                window.hasShadow = false
+                window.ignoresMouseEvents = true
+                // Keep the system menu bar and its Restore action above the shade.
+                window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
+                window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+                window.isExcludedFromWindowsMenu = true
+                window.orderFrontRegardless()
+                windows.append(window)
+            }
+            if statusItem == nil { statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength) }
+            statusItem?.button?.image = NSImage(systemSymbolName: "moon.fill", accessibilityDescription: "Restore Display")
+            statusItem?.button?.toolTip = "Idlesse — Display dimmed"
+            let menu = NSMenu()
+            let restore = menu.addItem(withTitle: "Restore Display", action: #selector(toggle), keyEquivalent: "")
+            restore.target = self
+            let settings = menu.addItem(withTitle: "Bedtime Display…", action: #selector(showSettings), keyEquivalent: "")
+            settings.target = self
+            statusItem?.menu = menu
+        } else if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+        }
+    }
+
+    @objc func showSettings() {
+        // Restore before presenting controls so users never have to configure through a dark shade.
+        if isDimmed { manual = false; refresh() }
+        let alert = NSAlert()
+        alert.messageText = "Bedtime Display"
+        alert.informativeText = "Dim every display and pause the wallpaper. The moon in the menu bar restores the display. This does not turn off the backlight or prevent normal display sleep. Schedules run while Idlesse is open."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Dim Now")
+        let enabled = NSButton(checkboxWithTitle: "Dim automatically every day", target: nil, action: nil)
+        enabled.state = defaults.bool(forKey: "comfort.schedule") ? .on : .off
+        let slider = NSSlider(value: amount * 100, minValue: 20, maxValue: 98, target: nil, action: nil)
+        slider.setAccessibilityLabel("Dimming percentage")
+        let percent = NSTextField(labelWithString: "Dimming (20–98%)")
+        func picker(_ minutes: Int) -> NSDatePicker {
+            let picker = NSDatePicker()
+            picker.datePickerStyle = .textFieldAndStepper
+            picker.datePickerElements = [.hourMinute]
+            picker.dateValue = Calendar.current.startOfDay(for: Date()).addingTimeInterval(Double(minutes * 60))
+            return picker
+        }
+        let from = picker(schedule.start), to = picker(schedule.end)
+        from.setAccessibilityLabel("Dim from")
+        to.setAccessibilityLabel("Restore at")
+        let times = NSStackView(views: [NSTextField(labelWithString: "From"), from,
+                                       NSTextField(labelWithString: "until"), to])
+        times.orientation = .horizontal
+        let stack = NSStackView(views: [percent, slider, enabled, times])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.frame = NSRect(x: 0, y: 0, width: 390, height: 135)
+        slider.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        alert.accessoryView = stack
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        guard response != .alertSecondButtonReturn else { return }
+        func minutes(_ picker: NSDatePicker) -> Int {
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
+            return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }
+        defaults.set(slider.doubleValue / 100, forKey: "comfort.amount")
+        defaults.set(enabled.state == .on, forKey: "comfort.schedule")
+        defaults.set(minutes(from), forKey: "comfort.start")
+        defaults.set(minutes(to), forKey: "comfort.end")
+        manual = nil
+        refresh()
+        if response == .alertThirdButtonReturn { manual = true; refresh() }
+    }
+
+    deinit {
+        timer?.invalidate()
+        observers.forEach { $0.0.removeObserver($0.1) }
+        windows.forEach { $0.close() }
+        if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+    }
+}

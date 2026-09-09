@@ -113,6 +113,7 @@ build_app() {
     "$ROOT/Sources/Runtime/GradientRenderer.swift" \
     "$ROOT/Sources/Runtime/MetalSceneRenderer.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
+    "$ROOT/Sources/Wallpaper/DesktopComfortController.swift" \
     "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
     "$ROOT/Sources/Harness/SceneTimelineView.swift" \
     "$ROOT/Sources/Harness/ScenePreviewHost.swift" \
