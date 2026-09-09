@@ -323,29 +323,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 let image: NSImage
-                var note = "Still preview at 2s · Open in Studio for playback · Pointer/audio access off"
-                if let video = scene.allNodes.first(where: { $0.kind == .video })?.assetURL {
-                    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: video))
-                    generator.appliesPreferredTrackTransform = true
-                    generator.maximumSize = CGSize(width: 512, height: 512)
-                    let (frame, _) = try await generator.image(at: .zero)
-                    image = NSImage(cgImage: frame, size: .zero)
-                    note = "Video thumbnail · Open in Studio to preview the full composition"
-                } else {
-                    let clock = SceneClock(now: { 0 })
-                    try clock.configure(timeline: scene.timeline)
-                    try clock.seek(to: 2)
-                    let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 512), scale: 1, clock: clock, onError: { _ in })
-                    defer { renderer.releaseResources() }
-                    let bytes = try renderer.renderProbe(signals: .init(time: clock.time), dimension: 512)
-                    guard let provider = CGDataProvider(data: Data(bytes) as CFData),
-                          let frame = CGImage(width: 512, height: 512, bitsPerComponent: 8, bitsPerPixel: 32,
-                            bytesPerRow: 2048, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
-                            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-                    else { throw SceneError.invalid("Could not prepare the Library preview.") }
-                    image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 512))
-                }
+                let note = "Still preview at 2s · Open in Studio for playback · Pointer/audio access off"
+                let clock = SceneClock(now: { 0 })
+                try clock.configure(timeline: scene.timeline)
+                try clock.seek(to: 2)
+                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 512), scale: 1, clock: clock, onError: { _ in })
+                defer { renderer.releaseResources() }
+                try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : 2,
+                                                       size: CGSize(width: 512, height: 512))
+                try Task.checkCancellation()
+                let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 512, height: 512, sampleVideo: false)
+                guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+                      let frame = CGImage(width: 512, height: 512, bitsPerComponent: 8, bitsPerPixel: 32,
+                        bytesPerRow: 2048, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                        provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+                else { throw SceneError.invalid("Could not prepare the Library preview.") }
+                image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 512))
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 let after = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
@@ -674,9 +668,28 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             while controller.task != nil && Date() < videoDeadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
             }
-            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Video thumbnail"), controller.detail.stringValue)
+            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Still preview at 2s"), controller.detail.stringValue)
+            // A transparent video must produce black, not a thumbnail of the raw asset.
+            var video = SceneNode(content: .video(videoURL))
+            video.opacity = 0
+            let package = folder.appendingPathComponent("Transparent Video.idlesse")
+            try ScenePackageWriter.write(SceneDescriptor(title: "Transparent Video", nodes: [video]), to: package)
+            controller.importScenes([package])
+            let compositionDeadline = Date().addingTimeInterval(10)
+            while controller.task != nil && Date() < compositionDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(controller.poster.image != nil, controller.detail.stringValue)
+            let pixels = NSBitmapImageRep(data: controller.poster.image!.tiffRepresentation!)!
+            for y in stride(from: 0, to: pixels.pixelsHigh, by: 32) {
+                for x in stride(from: 0, to: pixels.pixelsWide, by: 32) {
+                    let color = pixels.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+                    precondition(max(color.redComponent, color.greenComponent, color.blueComponent) < 0.01,
+                                 "Video posters must respect scene opacity instead of exposing the raw frame")
+                }
+            }
         }
         controller.window?.close()
-        print("Library UI checks passed: built-in poster/color, favorites, search, draft routing\(videoURL == nil ? "" : ", video thumbnail"); offscreen snapshot saved")
+        print("Library UI checks passed: built-in poster/color, favorites, search, draft routing\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
     }
 }
