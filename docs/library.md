@@ -10,6 +10,15 @@ Open Library from the preview window or Wallpaper menu (Command-L).
   and removal of the selected scene. These operations never delete source media.
   Up to 32 collections hold up to 256 distinct scene references each; old indexes
   open with no collections. Names must be unique, ignoring case.
+- In a collection, choose Play Collection in Order or Shuffle Collection. Playback
+  begins immediately and changes every 5, 15, 30 (default), or 60 minutes. Ordered
+  playback follows membership insertion order, independent of the Library sort.
+  Shuffle exhausts the collection before repeating and avoids an immediate repeat
+  between cycles. Stop Collection Rotation, a manual wallpaper choice, or stopping
+  the wallpaper ends rotation. Closing Library leaves rotation running.
+  Rotation is session-only and does not restart automatically after quitting.
+  Missing references are omitted; load failures keep the existing wallpaper and
+  the next timer tick tries the next member. There is no catch-up burst after sleep.
 - Select a scene for a still poster. Double-click or Use on Desktop applies it.
 - Open in Studio edits imported packages. Built-ins always become untitled drafts.
 - Make a Copy in Studio starts a draft without overwriting its source.
@@ -35,7 +44,7 @@ memory uses the existing scene budgets during generation. Refresh Preview update
 a poster after external edits. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: scheduled scene rotation, collection playback/reordering, drag-and-drop import,
+Still missing: daily schedules, collection reordering, drag-and-drop import,
 automatic preview invalidation, and full video-composition posters. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 

@@ -29,6 +29,32 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selected: Item?
     private var task: Task<Void, Never>?
     private var generation = 0
+    private var rotationTimer: Timer?
+    private var rotationCollectionID: String?
+    private var rotationQueue = SceneRotationQueue()
+    private var rotationShuffle = false
+    private var rotationMinutes = 30
+    func stopRotation() {
+        rotationTimer?.invalidate()
+        rotationTimer = nil
+        rotationCollectionID = nil
+        collectionActions.item(at: 0)?.title = "Collections"
+    }
+    private func advanceRotation() {
+        guard let id = rotationCollectionID,
+              let collection = store.catalog.collections.first(where: { $0.id == id }) else {
+            stopRotation(); return
+        }
+        let available = allItems()
+        let ids = collection.sceneIDs.filter { id in available.contains { $0.id == id } }
+        guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
+              let item = available.first(where: { $0.id == next }) else { stopRotation(); return }
+        do {
+            let target = try url(item)
+            try store.used(item.id)
+            onUse(target)
+        } catch { detail.stringValue = "Rotation: " + error.localizedDescription }
+    }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
 
@@ -210,9 +236,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
         collectionActions.removeAllItems()
-        collectionActions.addItems(withTitles: ["Collections", "New Collection…"])
+        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
-            collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…"])
+            collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
+                "Play Collection in Order", "Shuffle Collection"])
+        }
+        collectionActions.addItems(withTitles: ["Change Every 5 Minutes", "Change Every 15 Minutes", "Change Every 30 Minutes", "Change Every 60 Minutes"])
+        if rotationTimer != nil {
+            collectionActions.addItem(withTitle: "Stop Collection Rotation")
         }
         if let selected {
             for collection in store.catalog.collections {
@@ -322,6 +353,26 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func useScene() { act(editing: false) }
     @objc private func collectionAction() {
         guard let item = collectionActions.selectedItem else { return }
+        if item.title == "Stop Collection Rotation" { stopRotation(); preview(); return }
+        if item.title.hasPrefix("Change Every "), let minutes = Int(item.title.split(separator: " ")[2]) {
+            rotationMinutes = minutes
+            if rotationTimer != nil { armRotationTimer(); preview() }
+            detail.stringValue = "Collections change every \(minutes) minutes."
+            return
+        }
+        if item.title == "Play Collection in Order" || item.title == "Shuffle Collection" {
+            guard let id = filter.selectedItem?.representedObject as? String,
+                  let collection = store.catalog.collections.first(where: { $0.id == id }),
+                  !collection.sceneIDs.isEmpty else { detail.stringValue = "Add scenes to this collection first."; return }
+            stopRotation()
+            rotationCollectionID = id
+            rotationShuffle = item.title == "Shuffle Collection"
+            rotationQueue = SceneRotationQueue()
+            advanceRotation()
+            if rotationCollectionID != nil { armRotationTimer() }
+            preview()
+            return
+        }
         if let id = item.representedObject as? String, let selected {
             do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
             catch { detail.stringValue = error.localizedDescription }
@@ -354,6 +405,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             } catch { self.detail.stringValue = error.localizedDescription }
         }
     }
+    private func armRotationTimer() {
+        rotationTimer?.invalidate()
+        let timer = Timer(timeInterval: TimeInterval(rotationMinutes * 60), repeats: true) { [weak self] _ in
+            self?.advanceRotation()
+        }
+        timer.tolerance = 5
+        RunLoop.main.add(timer, forMode: .common)
+        rotationTimer = timer
+    }
     @objc private func doubleClickScene() {
         guard items.indices.contains(table.clickedRow) else { return }
         selected = items[table.clickedRow]
@@ -366,14 +426,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         do {
             let url = try url(selected)
             try store.used(selected.id)
-            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { onUse(url); window?.orderOut(nil) }
+            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { stopRotation(); onUse(url); window?.orderOut(nil) }
         } catch { detail.stringValue = error.localizedDescription }
     }
     func windowWillClose(_ notification: Notification) {
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
     }
-    deinit { task?.cancel() }
+    deinit { task?.cancel(); rotationTimer?.invalidate() }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
@@ -418,6 +478,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
         precondition(controller.collectionActions.itemArray.contains { $0.title == "Rename Collection…" })
+        controller.collectionActions.selectItem(withTitle: "Shuffle Collection")
+        controller.collectionAction()
+        precondition(applied && controller.rotationTimer != nil)
+        applied = false
+        controller.rotationTimer?.fire()
+        precondition(applied, "Rotation timer must apply the next scene")
+        controller.stopRotation()
+        precondition(controller.rotationTimer == nil && controller.rotationCollectionID == nil)
+        controller.preview()
         let root = controller.window!.contentView!
         root.layoutSubtreeIfNeeded()
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!

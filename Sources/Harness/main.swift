@@ -12,10 +12,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func showLibrary() {
         do {
             if library == nil {
-                library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url) },
+                library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
                     onEdit: { [weak self] url, asCopy in self?.scenePreview.openLibraryScene(url, asCopy: asCopy) })
             }
             saverView?.stopAnimation()
+            wallpaper.onManualSelection = { [weak self] in self?.library?.stopRotation() }
             library?.show()
         } catch {
             let alert = NSAlert()

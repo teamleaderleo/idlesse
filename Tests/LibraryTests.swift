@@ -2,6 +2,19 @@ import Foundation
 
 @main struct LibraryTests {
     static func main() throws {
+        var ordered = SceneRotationQueue()
+        precondition((0..<7).compactMap { _ in ordered.next(["a", "b", "c"], shuffle: false) } == ["a", "b", "c", "a", "b", "c", "a"])
+        var shuffled = SceneRotationQueue()
+        var previous: String?
+        for _ in 0..<100 {
+            let cycle = (0..<3).compactMap { _ in shuffled.next(["a", "b", "c"], shuffle: true) }
+            precondition(Set(cycle) == Set(["a", "b", "c"]))
+            precondition(cycle.first != previous)
+            previous = cycle.last
+        }
+        precondition(shuffled.next([], shuffle: true) == nil)
+        precondition(shuffled.next(["only"], shuffle: true) == "only")
+        precondition(shuffled.next(["only"], shuffle: true) == "only")
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-library-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
