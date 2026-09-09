@@ -131,3 +131,23 @@ final class SceneLibraryStore {
     }
     private func failure(_ text: String) -> NSError { NSError(domain: "IdlesseLibrary", code: 1, userInfo: [NSLocalizedDescriptionKey: text]) }
 }
+
+/// Session-only rotation. A shuffle bag exhausts every member before repeating.
+struct SceneRotationQueue {
+    private var remaining: [String] = []
+    private var members: [String] = []
+    private var last: String?
+    mutating func next(_ ids: [String], shuffle: Bool) -> String? {
+        if ids != members { members = ids; remaining = [] }
+        guard !ids.isEmpty else { return nil }
+        if remaining.isEmpty {
+            remaining = shuffle ? ids.shuffled() : ids
+            if shuffle, remaining.count > 1, remaining.first == last {
+                remaining.swapAt(0, 1)
+            }
+        }
+        let result = remaining.removeFirst()
+        last = result
+        return result
+    }
+}

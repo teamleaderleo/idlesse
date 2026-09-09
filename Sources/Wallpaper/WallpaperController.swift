@@ -182,7 +182,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    func select(_ url: URL, reloading: Bool = false) {
+    var onManualSelection: (() -> Void)?
+    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false) {
+        if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
         generation += 1
         let request = generation
@@ -353,6 +355,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc func stop() {
+        onManualSelection?()
         let wasActive = isRunning || isLoading
         watcher = nil
         lastReloadError = nil
