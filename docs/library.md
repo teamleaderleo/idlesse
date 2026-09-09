@@ -59,7 +59,7 @@ Revision checks run off the main thread, without a background folder scan or tim
 Edits during generation discard the result. Refresh Preview forces regeneration. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: weekday rules, crossfades, collection reordering, and full video-composition posters. Imported
+Still missing: weekday rules, collection reordering, and full video-composition posters. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 
 Validation includes index round trips/removal preservation, generated Metal posters,

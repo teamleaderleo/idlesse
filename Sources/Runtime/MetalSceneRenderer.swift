@@ -11,6 +11,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var texture: MTLTexture?
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
+        var maskTexture: MTLTexture?
+        var offlineGenerator: AVAssetImageGenerator?
+        var offlineDuration: Double = 0
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
         var followsClock = false
@@ -85,7 +88,19 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         func visit(_ nodes: [SceneNode]) -> [UUID] {
             nodes.filter { $0.visible }.flatMap { [$0.id] + visit($0.children) }
         }
-        return Set(visit(roots))
+        var ids = Set(visit(roots))
+        let nodes = roots.flatMap { $0.descendants }
+        var changed = true
+        while changed {
+            let before = ids
+            for node in nodes where ids.contains(node.id) {
+                if let mask = node.maskNodeID, let source = nodes.first(where: { $0.id == mask }) {
+                    ids.formUnion(source.descendants.map { $0.id })
+                }
+            }
+            changed = before != ids
+        }
+        return ids
     }
     private var needsFrame = true
     private let gate = DispatchSemaphore(value: 2)
@@ -137,23 +152,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                       let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                     throw SceneError.invalid("That image could not be opened.")
                 }
-                // Explicit sRGB, premultiplied RGBA upload; release CPU pixels after upload.
-                let width = cg.width, height = cg.height
-                guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                    bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue), let pixels = context.data else {
-                    throw SceneError.invalid("Could not prepare the image texture.")
-                }
-                context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
-                    width: width, height: height, mipmapped: false)
-                descriptor.usage = .shaderRead
-                guard let texture = device.makeTexture(descriptor: descriptor) else {
-                    throw SceneError.invalid("Could not allocate the image texture.")
-                }
-                texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
-                    withBytes: pixels, bytesPerRow: width * 4)
-                input.texture = texture
+                input.texture = try Self.upload(cg, device: device)
             case .video(let url):
                 let item = AVPlayerItem(url: url)
                 item.preferredForwardBufferDuration = 2
@@ -187,13 +186,25 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 }
             case .gradient, .group, .particles: break
             }
+            for (url, isMask) in [(node.maskAsset, true), (node.sprite, false)] {
+                guard let url else { continue }
+                guard let image = DisplayImageDecoder.load(url, target: metal.drawableSize, mode: .fill,
+                    pixelLimit: CGFloat(SceneBudget.imagePixels(playable.nodes))),
+                    let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                    throw SceneError.invalid("Could not open a mask or sprite image.")
+                }
+                let texture = try Self.upload(cg, device: device)
+                if isMask { input.maskTexture = texture } else { input.texture = texture }
+            }
             inputs.append(input)
         }
         diagnostics.animated = playable.animated || authored.usesTime || (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
         diagnostics.activeResources = inputs.count
         // Fail preparation before the host replaces the last working renderer.
         guard let preparedTargets = targets.acquire(device: device, size: metal.drawableSize,
-            count: playable.allNodes.filter { $0.kind == .group }.count) else {
+            count: playable.allNodes.filter { $0.kind == .group }.count +
+                3 * playable.allNodes.filter { !$0.style.effects.isEmpty }.count +
+                (playable.allNodes.contains { $0.needsComposition } ? playable.allNodes.count + 2 : 0)) else {
             throw SceneError.invalid("Could not prepare the group render targets within the texture budget.")
         }
         targets.recycle(preparedTargets)
@@ -260,8 +271,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         guard let pipeline, let device = metal.device else { return false }
         let world = sourceScene?.canvas == .desktopSpan ? desktopFrame : nil
         let sceneAspect = Float((world?.width ?? size.width) / max(1, world?.height ?? size.height))
+        let allNodes = roots.flatMap { $0.descendants }
+        let advanced = allNodes.contains { $0.needsComposition }
         let groups = roots.flatMap { $0.descendants }.filter { $0.kind == .group }
-        guard let lease = targets.acquire(device: device, size: size, count: groups.count + 3 * roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }.count) else { return false }
+        guard let lease = targets.acquire(device: device, size: size, count: groups.count + 3 * roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }.count + (advanced ? allNodes.count + 2 : 0)) else { return false }
         let groupTextures = Dictionary(uniqueKeysWithValues: zip(groups.map { $0.id }, lease.textures))
         let effected = roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }
         var effectTargets: [UUID: [MTLTexture]] = [:]
@@ -269,6 +282,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             let start = groups.count + index * 3
             effectTargets[node.id] = Array(lease.textures[start..<(start + 3)])
         }
+        let extraStart = groups.count + effected.count * 3
+        let nodeFrames: [UUID: MTLTexture] = advanced ? Dictionary(uniqueKeysWithValues:
+            zip(allNodes.map { $0.id }, lease.textures[extraStart..<(extraStart + allNodes.count)])) : [:]
+        let blendScratch = advanced ? lease.textures[lease.textures.count - 2] : nil
+        let worldFrame = advanced ? lease.textures.last : nil
         var outputs: [UUID: MTLTexture] = [:]
         let byID = Dictionary(uniqueKeysWithValues: inputs.map { ($0.node.id, $0) })
         func renderPass(_ texture: MTLTexture) -> MTLRenderPassDescriptor {
@@ -291,7 +309,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(crop.x, crop.y, 1, gradient ? 1 : 0),
                 viewport: SIMD4(sceneAspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), mode, amount),
                 style: SIMD4(0, 0, 1, 0))
-            if let emitter { configureEmitter(emitter, uniforms: &u) }
+            if let emitter { configureEmitter(emitter, uniforms: &u); if let source { u.media.w = 3; u.viewport.z = Float(source.width) / Float(source.height) } }
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -301,9 +319,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
-        func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor, root: Bool = false) -> Bool {
+        func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor, root: Bool = false, isolated: Bool = false) -> Bool {
             // Children finish their offscreen passes before their parent encoder begins.
-            for node in nodes where node.visible && node.kind == .group {
+            for node in nodes where node.visible && node.kind == .group && !isolated {
                 guard let texture = groupTextures[node.id] else { return false }
                 let childPass = MTLRenderPassDescriptor()
                 childPass.colorAttachments[0].texture = texture
@@ -356,7 +374,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                     media: SIMD4(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect), Float(node.opacity), gradient ? 1 : 0),
                     viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0),
                     style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), Float(node.style.vignette)))
-                if outputs[node.id] == nil, let emitter = node.emitter { configureEmitter(emitter, uniforms: &u) }
+                if outputs[node.id] == nil, let emitter = node.emitter { configureEmitter(emitter, uniforms: &u); if node.sprite != nil, let texture { u.media.w = 3; u.viewport.z = Float(texture.width) / Float(texture.height) } }
                 if root, let world, let display = displayFrame {
                     u.world = SIMD4(Float(world.width / display.width), Float(world.height / display.height),
                         Float((world.midX - display.midX) * 2 / display.width),
@@ -370,7 +388,71 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
-        guard encodeNodes(roots, into: pass, root: true) else { targets.recycle(lease); return false }
+        var rendered = Set<UUID>()
+        let metadata = Dictionary(uniqueKeysWithValues: allNodes.map { ($0.id, $0) })
+        func renderNode(_ authored: SceneNode) -> Bool {
+            if rendered.contains(authored.id) { return true }
+            guard let frame = nodeFrames[authored.id], let scratch = blendScratch else { return false }
+            if authored.kind == .group {
+                guard let group = groupTextures[authored.id], renderList(authored.children, into: group) else { return false }
+            }
+            var node = authored
+            node.visible = true // A hidden layer can still be explicitly used as a mask.
+            guard encodeNodes([node], into: renderPass(frame), isolated: true) else { return false }
+            let mask: MTLTexture?
+            if let id = node.maskNodeID {
+                guard let source = metadata[id], renderNode(source) else { return false }
+                mask = nodeFrames[id]
+            } else { mask = byID[node.id]?.maskTexture }
+            if let mask {
+                guard effectPass(source: frame, destination: scratch, mode: 0, amount: 0),
+                      effectPass(source: scratch, original: mask, destination: frame,
+                                 mode: node.maskChannel == .luma ? 10 : 9, amount: 0) else { return false }
+            }
+            rendered.insert(node.id)
+            return true
+        }
+        func renderList(_ nodes: [SceneNode], into destination: MTLTexture) -> Bool {
+            // Initialize even an empty/fully hidden subtree to transparent.
+            guard let clear = command.makeRenderCommandEncoder(descriptor: renderPass(destination)) else { return false }
+            clear.endEncoding()
+            for node in nodes where node.visible {
+                guard renderNode(node), let source = nodeFrames[node.id], let scratch = blendScratch else { return false }
+                if node.blend == nil || node.blend == .normal {
+                    let target = renderPass(destination); target.colorAttachments[0].loadAction = .load
+                    guard let encoder = command.makeRenderCommandEncoder(descriptor: target) else { return false }
+                    var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(1, 1, 1, 0),
+                        viewport: SIMD4(sceneAspect, 0, 0, 0), style: SIMD4(0, 0, 1, 0))
+                    encoder.setRenderPipelineState(pipeline)
+                    encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+                    encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+                    encoder.setFragmentTexture(source, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    encoder.endEncoding()
+                } else {
+                    guard effectPass(source: destination, destination: scratch, mode: 0, amount: 0),
+                          effectPass(source: source, original: scratch, destination: destination,
+                            mode: node.blend == .add ? 11 : node.blend == .multiply ? 12 : 13, amount: 0) else { return false }
+                }
+            }
+            return true
+        }
+        if advanced {
+            guard let worldFrame, renderList(roots, into: worldFrame),
+                  let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { targets.recycle(lease); return false }
+            var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(1, 1, 1, 0),
+                viewport: SIMD4(sceneAspect, 0, 0, 0), style: SIMD4(0, 0, 1, 0))
+            if let world, let display = displayFrame {
+                u.world = SIMD4(Float(world.width / display.width), Float(world.height / display.height),
+                    Float((world.midX - display.midX) * 2 / display.width), Float((world.midY - display.midY) * 2 / display.height))
+            }
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.setFragmentTexture(worldFrame, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
+        } else if !encodeNodes(roots, into: pass, root: true) { targets.recycle(lease); return false }
         // Hold both the Core Video buffers and this frame's group targets through completion.
         let videoLifetime = VideoFrameLifetime(cache: cache, wrappers: inputs.compactMap { $0.videoTexture },
                                                buffers: inputs.compactMap { $0.pixelBuffer })
@@ -534,6 +616,47 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
         return bytes
     }
+    private static func upload(_ cg: CGImage, device: MTLDevice) throws -> MTLTexture {
+        let width = cg.width, height = cg.height
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue), let pixels = context.data else {
+            throw SceneError.invalid("Could not prepare image pixels.")
+        }
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let spec = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false)
+        spec.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: spec) else { throw SceneError.invalid("Could not allocate image texture.") }
+        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width * 4)
+        return texture
+    }
+
+    /// Offline decoding has no dependency on AVPlayer wall-clock delivery.
+    @MainActor func prepareOfflineVideo(at time: Double, size: CGSize) async throws {
+        guard let device = metal.device else { throw SceneError.invalid("Renderer disposed.") }
+        for input in inputs where input.node.kind == .video {
+            try Task.checkCancellation()
+            if input.offlineGenerator == nil, let url = input.node.assetURL {
+                input.player?.pause()
+                let asset = AVURLAsset(url: url)
+                let duration = try await asset.load(.duration).seconds
+                guard duration.isFinite, duration > 0 else { throw SceneError.invalid("Offline export needs finite video durations.") }
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = size
+                generator.requestedTimeToleranceBefore = .zero
+                generator.requestedTimeToleranceAfter = .zero
+                input.offlineGenerator = generator
+                input.offlineDuration = duration
+            }
+            guard let generator = input.offlineGenerator else { throw SceneError.invalid("Missing video source.") }
+            let sample = max(0, time).truncatingRemainder(dividingBy: input.offlineDuration)
+            let (frame, _) = try await generator.image(at: CMTime(seconds: sample, preferredTimescale: 60000))
+            try Task.checkCancellation()
+            input.texture = try Self.upload(frame, device: device)
+        }
+    }
+
     func setPreferredFrameRate(_ rate: Int?) {
         guard diagnostics.state != .disposed else { return }
         metal.preferredFramesPerSecond = rate ?? 60
@@ -590,7 +713,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             float2 origin = float2(randomUnit(seed) * 1.8 - 0.9, randomUnit(seed + 1u) * 1.8 - 0.9);
             float2 velocity = float2(u.motion.x, u.emitter.y * (0.5 + randomUnit(seed + 2u)));
             local = origin + velocity * age + float2(0, 0.5 * u.motion.y * age * age);
-            local += float2(p.x / u.viewport.x, p.y) * u.emitter.z * (0.6 + randomUnit(seed + 3u));
+            local += float2(p.x * (u.media.w > 2.5 ? u.viewport.z : 1.0) / u.viewport.x, p.y) * u.emitter.z * (0.6 + randomUnit(seed + 3u));
         }
         float2 q = local * float2(u.viewport.x, 1.0) * u.transform.z;
         float c = cos(u.transform.w), s = sin(u.transform.w);
@@ -617,6 +740,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     fragment float4 shade(V v [[stage_in]], constant U &u [[buffer(0)]], texture2d<float> image [[texture(0)]], texture2d<float> original [[texture(1)]]) {
 
         if (u.media.w > 1.5) {
+            if (u.media.w > 2.5) {
+                constexpr sampler spriteSample(filter::linear, address::clamp_to_zero);
+                return styled(image.sample(spriteSample, v.uv) * v.fade, v.canvasUV, u);
+            }
             float r = length(v.uv * 2 - 1);
             float alpha = (1.0 - smoothstep(0.05, 1.0, r)) * v.fade;
             return styled(float4(float3(1.0, 0.72, 0.22) * alpha, alpha), v.canvasUV, u);
@@ -624,6 +751,20 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         constexpr sampler effectSample(filter::linear, address::clamp_to_edge);
         int mode = int(u.viewport.z);
         float amount = u.viewport.w;
+        if (mode == 9 || mode == 10) {
+            float4 base = image.sample(effectSample, v.uv);
+            float4 mask = original.sample(effectSample, v.uv);
+            float coverage = mode == 9 ? mask.a : dot(mask.rgb, float3(0.2126, 0.7152, 0.0722));
+            return base * clamp(coverage, 0.0, 1.0);
+        }
+        if (mode >= 11 && mode <= 13) {
+            float4 s = image.sample(effectSample, v.uv), d = original.sample(effectSample, v.uv);
+            float a = s.a + d.a * (1.0 - s.a);
+            float3 color = mode == 11 ? s.rgb + d.rgb :
+                mode == 12 ? s.rgb * (1.0 - d.a) + d.rgb * (1.0 - s.a) + s.rgb * d.rgb :
+                s.rgb + d.rgb - s.rgb * d.rgb;
+            return float4(clamp(color, 0.0, a), a);
+        }
         if (mode == 1 || mode == 2 || mode == 7) {
             float2 step = mode == 2 ? float2(0, amount / 4) : float2(amount / (4 * u.viewport.x), 0);
             float4 result = 0;

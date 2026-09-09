@@ -547,6 +547,31 @@ import Foundation
         do { try SceneBudget.validate([displaced]); fatalError("Accepted excessive displacement") } catch is SceneError {}
         try Data(#"{"version":17,"title":"Old","capabilities":[]}"#.utf8).write(to: displacementPackage.appendingPathComponent("manifest.json"))
         do { _ = try await source.resolve(displacementPackage); fatalError("Accepted displacement in v17") } catch is SceneError {}
+        var maskNode = SceneNode(content: .image(root.appendingPathComponent("picture.png")), visible: false)
+        var spriteNode = SceneNode(content: .particles(.init()))
+        spriteNode.sprite = root.appendingPathComponent("picture.png")
+        spriteNode.maskNodeID = maskNode.id; spriteNode.blend = .screen
+        var assetMasked = SceneNode(content: .gradient)
+        assetMasked.maskAsset = root.appendingPathComponent("picture.png"); assetMasked.maskChannel = .luma
+        let maskedComposition = SceneDescriptor(title: "Compositing", nodes: [maskNode, spriteNode, assetMasked], canvas: .desktopSpan)
+        let compositionPackage = root.appendingPathComponent("Compositing.idlesse")
+        try ScenePackageWriter.write(maskedComposition, to: compositionPackage)
+        let assetFiles = try FileManager.default.contentsOfDirectory(atPath: compositionPackage.appendingPathComponent("assets").path)
+        precondition(assetFiles.count == 1, "One source used as media, mask and sprite should be stored once")
+        let restored = try await source.resolve(compositionPackage)
+        precondition(restored.canvas == .desktopSpan && restored.nodes[1].maskNodeID == maskNode.id)
+        precondition(restored.nodes[1].sprite != nil && restored.nodes[1].blend == .screen && restored.nodes[2].maskChannel == .luma)
+        precondition(restored.allNodes.flatMap { $0.assets }.allSatisfy { $0.path.hasPrefix(compositionPackage.path + "/") })
+        let copied = SceneNode(content: .group([maskNode, spriteNode])).duplicated()
+        precondition(copied.children[1].maskNodeID == copied.children[0].id && copied.children[0].id != maskNode.id)
+        maskNode.maskNodeID = spriteNode.id
+        do { try SceneBudget.validate([maskNode, spriteNode]); fatalError("Accepted cyclic masks") } catch is SceneError {}
+        maskNode.maskNodeID = UUID()
+        do { try SceneBudget.validate([maskNode, spriteNode]); fatalError("Accepted missing mask target") } catch is SceneError {}
+        maskNode.maskNodeID = nil; maskNode.sprite = root.appendingPathComponent("picture.png")
+        do { try SceneBudget.validate([maskNode]); fatalError("Accepted sprite on image") } catch is SceneError {}
+        try Data(#"{"version":19,"title":"Old","capabilities":[]}"#.utf8).write(to: compositionPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(compositionPackage); fatalError("Accepted v20 features in v19") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }

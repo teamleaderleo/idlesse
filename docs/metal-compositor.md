@@ -52,7 +52,7 @@ V15/V16 checks cover ordered blur/bloom output, effect order, 16 effect-bearing
 layers, 8K-requested target allocations under the cap, teardown, and direct audio
 modulation of bloom. Parameters, drivers, smoothing, keyframes, ellipse masks,
 deterministic particles, and V18 procedural wave displacement are implemented.
-Asset/node masks and broader blend modes remain separate features.
+V20 adds alpha/luminance image and node-output masks, plus normal/add/multiply/screen blending. Scenes using these operations compose isolated node outputs inside the same 128 MiB target budget. See docs/scenes.md.
 Do not treat a windowed GPU timing sample as release-build
 energy evidence or HDR parity.
 

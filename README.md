@@ -200,3 +200,10 @@ procedural time; independent video players are not yet synchronized to it.
 If the system Options button stops responding, check `./build.sh installed-status`.
 Building or pushing does not update the installed saver. Close System Settings
 before installing and reopen it afterward. See [the verified recovery](docs/options-recovery-2026-09-08.md).
+
+
+Studio now includes **Span Desktop** canvases and global pointer coordinates,
+**Mask & Blend** controls (image/node alpha or luminance masks, normal/add/multiply/screen),
+and image sprites in **Emitter**. **Export Video** produces cancellable silent HEVC
+clips at 1080p/4K and 30/60 fps. The wallpaper menu offers optional 0.5/1/2-second
+crossfades; Instant is the default. See [format, budgets, and export limits](docs/scenes.md).

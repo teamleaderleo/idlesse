@@ -294,6 +294,37 @@ if let index = CommandLine.arguments.firstIndex(of: "--smoke-library"), CommandL
 }
 
 // Deterministic, offscreen preview: no desktop windows, input grants, or UI activation.
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-export"), CommandLine.arguments.count > index + 1 {
+    let video = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    Task { @MainActor in
+        do { try await SceneVideoExporter.smokeTest(videoURL: video); exit(0) }
+        catch { fputs("Export checks failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    }
+    RunLoop.main.run()
+    exit(1)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--export-video") {
+    guard CommandLine.arguments.count > index + 5,
+          let seconds = Double(CommandLine.arguments[index + 3]),
+          let fps = Int(CommandLine.arguments[index + 4]),
+          let width = Int(CommandLine.arguments[index + 5]), [1920, 3840].contains(width) else {
+        fputs("Usage: --export-video input.idlesse output.mp4 seconds fps width(1920|3840)\n", stderr); exit(1)
+    }
+    let input = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    let output = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+    Task { @MainActor in
+        do {
+            let scene = try await LocalSceneSource().resolve(input)
+            try await SceneVideoExporter.export(scene, to: output, width: width, height: width * 9 / 16,
+                                                fps: fps, duration: seconds, progress: { _ in })
+            print("Exported " + output.path); exit(0)
+        } catch { fputs("Export failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    }
+    RunLoop.main.run()
+    exit(1)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--render-scene") {
     guard CommandLine.arguments.count > index + 3,
           let seconds = Double(CommandLine.arguments[index + 3]), seconds.isFinite, (0...86400).contains(seconds) else {
