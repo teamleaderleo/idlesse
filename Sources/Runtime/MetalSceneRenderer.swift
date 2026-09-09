@@ -59,6 +59,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var viewport: SIMD4<Float> // width/height aspect, time, reserved
         var style: SIMD4<Float> // ellipse mask, exposure, saturation, vignette
         var emitter: SIMD4<Float> = .zero // lifetime, speed, size, seed
+        var world: SIMD4<Float> = SIMD4(1, 1, 0, 0) // scene-to-display scale and offset
         var motion: SIMD4<Float> = .zero // wind, gravity, count, wrapped emitter time
     }
     private let presentations = PresentedFrameCounter()
@@ -66,6 +67,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
     let view: NSView
     private let metal: MTKView
+    var desktopFrame: CGRect?
+    var displayFrame: CGRect?
     private let clock: SceneClock
     private let onError: (String) -> Void
     private var queue: MTLCommandQueue?
@@ -255,6 +258,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     private func encode(_ command: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, size: CGSize) -> Bool {
         guard let pipeline, let device = metal.device else { return false }
+        let world = sourceScene?.canvas == .desktopSpan ? desktopFrame : nil
+        let sceneAspect = Float((world?.width ?? size.width) / max(1, world?.height ?? size.height))
         let groups = roots.flatMap { $0.descendants }.filter { $0.kind == .group }
         guard let lease = targets.acquire(device: device, size: size, count: groups.count + 3 * roots.flatMap { $0.descendants }.filter { !$0.style.effects.isEmpty }.count) else { return false }
         let groupTextures = Dictionary(uniqueKeysWithValues: zip(groups.map { $0.id }, lease.textures))
@@ -284,7 +289,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                         mode: Float, amount: Float, gradient: Bool = false, emitter: SceneNode.Emitter? = nil, crop: SIMD2<Float> = SIMD2(1, 1)) -> Bool {
             guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(destination)) else { return false }
             var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(crop.x, crop.y, 1, gradient ? 1 : 0),
-                viewport: SIMD4(Float(size.width / max(1, size.height)), Float(clock.time.truncatingRemainder(dividingBy: 3600)), mode, amount),
+                viewport: SIMD4(sceneAspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), mode, amount),
                 style: SIMD4(0, 0, 1, 0))
             if let emitter { configureEmitter(emitter, uniforms: &u) }
             encoder.setRenderPipelineState(pipeline)
@@ -296,7 +301,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
-        func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor) -> Bool {
+        func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor, root: Bool = false) -> Bool {
             // Children finish their offscreen passes before their parent encoder begins.
             for node in nodes where node.visible && node.kind == .group {
                 guard let texture = groupTextures[node.id] else { return false }
@@ -311,7 +316,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 guard let scratch = effectTargets[node.id] else { return false }
                 let source = node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture
                 guard node.kind == .gradient || node.kind == .particles || source != nil else { continue }
-                let aspect = Float(size.width / max(1, size.height))
+                let aspect = sceneAspect
                 let mediaAspect = node.kind == .group ? aspect : source.map { Float($0.width) / Float($0.height) } ?? aspect
                 guard effectPass(source: source, destination: scratch[0], mode: 0, amount: 0, gradient: node.kind == .gradient, emitter: node.emitter,
                                  crop: SIMD2(min(1, aspect / mediaAspect), min(1, mediaAspect / aspect))) else { return false }
@@ -344,7 +349,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 let gradient = node.kind == .gradient && outputs[node.id] == nil
                 let texture = outputs[node.id] ?? (node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture)
                 guard gradient || node.kind == .particles || texture != nil else { continue }
-                let aspect = Float(size.width / max(1, size.height))
+                let aspect = sceneAspect
                 let mediaAspect = (node.kind == .group || outputs[node.id] != nil) ? aspect : texture.map { Float($0.width) / Float($0.height) } ?? aspect
                 let t = node.transform
                 var u = Uniforms(transform: SIMD4(Float(t.x ?? 0), Float(t.y ?? 0), Float(t.scale ?? 1), Float((t.rotation ?? 0) * .pi / 180)),
@@ -352,6 +357,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                     viewport: SIMD4(aspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, 0),
                     style: SIMD4(node.style.mask == .ellipse ? 1 : 0, Float(node.style.exposure), Float(node.style.saturation), Float(node.style.vignette)))
                 if outputs[node.id] == nil, let emitter = node.emitter { configureEmitter(emitter, uniforms: &u) }
+                if root, let world, let display = displayFrame {
+                    u.world = SIMD4(Float(world.width / display.width), Float(world.height / display.height),
+                        Float((world.midX - display.midX) * 2 / display.width),
+                        Float((world.midY - display.midY) * 2 / display.height))
+                }
                 encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
@@ -360,7 +370,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
-        guard encodeNodes(roots, into: pass) else { targets.recycle(lease); return false }
+        guard encodeNodes(roots, into: pass, root: true) else { targets.recycle(lease); return false }
         // Hold both the Core Video buffers and this frame's group targets through completion.
         let videoLifetime = VideoFrameLifetime(cache: cache, wrappers: inputs.compactMap { $0.videoTexture },
                                                buffers: inputs.compactMap { $0.pixelBuffer })
@@ -442,6 +452,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var signals = SceneSignals(time: clock.time)
         if sourceScene?.usesAudio == true, clock.audioEnabled { signals.audio = clock.audioLevels() }
         if sourceScene?.usesPointer == true, clock.pointerEnabled, let window = metal.window {
+            if sourceScene?.canvas == .desktopSpan, let world = desktopFrame {
+                let point = NSEvent.mouseLocation
+                signals.pointerX = min(1, max(-1, Double((point.x - world.minX) / max(1, world.width) * 2 - 1)))
+                signals.pointerY = min(1, max(-1, Double((point.y - world.minY) / max(1, world.height) * 2 - 1)))
+                return signals
+            }
             let point = metal.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
             signals.pointerX = min(1, max(-1, Double(point.x / max(1, metal.bounds.width) * 2 - 1)))
             let y = Double(point.y / max(1, metal.bounds.height) * 2 - 1)
@@ -491,11 +507,14 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     /// Small GPU readback for tests; never used by the display loop.
     func renderProbe(signals: SceneSignals? = nil, dimension: Int = 32) throws -> [UInt8] {
-        guard (32...2048).contains(dimension) else { throw SceneError.invalid("Preview size must be 32–2048 pixels.") }
+        try renderFrame(signals: signals, width: dimension, height: dimension)
+    }
+    func renderFrame(signals: SceneSignals? = nil, width: Int, height: Int, sampleVideo: Bool = true) throws -> [UInt8] {
+        guard (32...3840).contains(width), (32...2160).contains(height) else { throw SceneError.invalid("Frame size must be 32–3840 by 32–2160 pixels.") }
         if let signals { updateSignals(signals) }
         guard let device = metal.device, let queue else { throw SceneError.invalid("Renderer disposed.") }
-        updateVideos()
-        let spec = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: dimension, height: dimension, mipmapped: false)
+        if sampleVideo { updateVideos() }
+        let spec = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
         spec.storageMode = .shared
         spec.usage = .renderTarget
         guard let texture = device.makeTexture(descriptor: spec), let command = queue.makeCommandBuffer() else {
@@ -506,13 +525,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-        guard encode(command, pass, size: CGSize(width: dimension, height: dimension)) else { throw SceneError.invalid("Probe encoding failed.") }
+        guard encode(command, pass, size: CGSize(width: width, height: height)) else { throw SceneError.invalid("Probe encoding failed.") }
         command.commit()
         command.waitUntilCompleted()
         guard command.status == .completed else { throw SceneError.invalid("Probe GPU execution failed.") }
-        var bytes = [UInt8](repeating: 0, count: dimension * dimension * 4)
-        bytes.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: dimension * 4,
-            from: MTLRegionMake2D(0, 0, dimension, dimension), mipmapLevel: 0) }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: width * 4,
+            from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
         return bytes
     }
     func setPreferredFrameRate(_ rate: Int?) {
@@ -552,7 +571,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private static let shader = """
     #include <metal_stdlib>
     using namespace metal;
-    struct U { float4 transform; float4 media; float4 viewport; float4 style; float4 emitter; float4 motion; };
+    struct U { float4 transform; float4 media; float4 viewport; float4 style; float4 emitter; float4 world; float4 motion; };
     struct V { float4 position [[position]]; float2 uv; float fade; float2 canvasUV; };
     uint randomBits(uint value) {
         value ^= value >> 16; value *= 0x7feb352du; value ^= value >> 15;
@@ -577,6 +596,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         float c = cos(u.transform.w), s = sin(u.transform.w);
         q = float2(c*q.x - s*q.y, s*q.x + c*q.y) / float2(u.viewport.x, 1.0);
         q += u.transform.xy * 2.0;
+        q = q * u.world.xy + u.world.zw;
         return {float4(q, 0, 1), float2((p.x+1)*0.5, (1-p.y)*0.5), fade, float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5)};
     }
     float4 styled(float4 pixel, float2 uv, constant U &u) {

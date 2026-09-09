@@ -32,6 +32,8 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Codable, Sendable {
     enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles }
+    enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
+    var canvas: Canvas? = nil
     let title: String
     let nodes: [SceneNode]
     var parameters: [String: SceneParameter] = [:]
@@ -47,18 +49,18 @@ struct SceneDescriptor: Codable, Sendable {
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var requiresMetal: Bool { canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool { usesSignals || nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas
     }
     func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
-        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline)
+        return SceneDescriptor(title: title, nodes: nodes, parameters: parameters, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas)
     }
     func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
@@ -146,7 +148,7 @@ struct SceneDescriptor: Codable, Sendable {
             try binding.target.set(Swift.min(range.upperBound, Swift.max(range.lowerBound, raw)), in: &result)
         }
         if validating { try SceneBudget.validate(result) }
-        return SceneDescriptor(title: title, nodes: result)
+        return SceneDescriptor(title: title, nodes: result, canvas: canvas)
     }
 }
 
@@ -361,6 +363,7 @@ struct LocalSceneSource: SceneSource {
         let capabilities: [String]
     }
     private struct Scene: Decodable {
+        let canvas: SceneDescriptor.Canvas?
         let parameters: [String: SceneParameter]?
         let bindings: [SceneParameterBinding]?
         let timeline: SceneTimeline?
@@ -437,7 +440,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...18).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...19).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -501,7 +504,8 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version >= 7 || (scene.parameters == nil && scene.bindings == nil) else {
             throw SceneError.invalid("Parameters and bindings require scene version 7.")
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline)
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas)
+        guard scene.canvas == nil || manifest.version >= 19 else { throw SceneError.invalid("Canvas modes require scene version 19.") }
         guard scene.timeline == nil || manifest.version >= 11 else { throw SceneError.invalid("Authored playback requires scene version 11.") }
         guard result.timeline?.videosFollowScene != true || manifest.version >= 13 else { throw SceneError.invalid("Video transport requires scene version 13.") }
         guard !result.usesSmoothing || manifest.version >= 12 else { throw SceneError.invalid("Smoothing requires scene version 12.") }
@@ -691,6 +695,7 @@ enum ScenePackageWriter {
         }
         let nodes = try scene.nodes.map(encode)
         var contents: [String: Any] = ["nodes": nodes]
+        if let canvas = scene.canvas { contents["canvas"] = canvas.rawValue }
         if let timeline = scene.timeline {
             try timeline.validate()
             contents["timeline"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(timeline))
@@ -700,7 +705,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.canvas != nil ? 19 : scene.allNodes.contains { $0.style.effects.contains { $0.type == .displacement } } ? 18 : scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
