@@ -4,6 +4,12 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 
 - Six bundled scenes: Undertow, Fireflies, Ripple, Audio Aurora, Aurora, Breathing Aurora.
 - Search by name; filter built-in/imported/favorites; sort by name or recently opened.
+- Use Collections → New Collection to create a named group. Select scenes in All
+  Scenes, then use Collections → Add to to assign them. Named collections appear
+  in the filter menu. Within a collection, the same menu offers rename, delete,
+  and removal of the selected scene. These operations never delete source media.
+  Up to 32 collections hold up to 256 distinct scene references each; old indexes
+  open with no collections. Names must be unique, ignoring case.
 - Select a scene for a still poster. Double-click or Use on Desktop applies it.
 - Open in Studio edits imported packages. Built-ins always become untitled drafts.
 - Make a Copy in Studio starts a draft without overwriting its source.
@@ -29,7 +35,7 @@ memory uses the existing scene budgets during generation. Refresh Preview update
 a poster after external edits. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: user collections, scheduled scene rotation, drag-and-drop import,
+Still missing: scheduled scene rotation, collection playback/reordering, drag-and-drop import,
 automatic preview invalidation, and full video-composition posters. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 

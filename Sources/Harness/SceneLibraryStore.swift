@@ -7,10 +7,25 @@ final class SceneLibraryStore {
         var title: String
         var bookmark: Data
     }
+    struct Collection: Codable, Equatable {
+        var id: String = UUID().uuidString
+        var name: String
+        var sceneIDs: [String] = []
+    }
     struct Catalog: Codable {
         var entries: [Entry] = []
         var favorites: Set<String> = []
         var recent: [String: Date] = [:]
+        var collections: [Collection] = []
+        init() {}
+        enum CodingKeys: String, CodingKey { case entries, favorites, recent, collections }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            entries = try values.decode([Entry].self, forKey: .entries)
+            favorites = try values.decode(Set<String>.self, forKey: .favorites)
+            recent = try values.decode([String: Date].self, forKey: .recent)
+            collections = try values.decodeIfPresent([Collection].self, forKey: .collections) ?? []
+        }
     }
     private(set) var catalog = Catalog()
     let file: URL
@@ -27,6 +42,7 @@ final class SceneLibraryStore {
               Set(decoded.entries.map(\.id)).count == decoded.entries.count,
               decoded.entries.allSatisfy({ $0.bookmark.count <= 16_384 && $0.title.utf8.count <= 1024 })
         else { throw failure("The Library index exceeds its limits.") }
+        try validateCollections(decoded)
         catalog = decoded
     }
 
@@ -67,9 +83,44 @@ final class SceneLibraryStore {
         next.entries.removeAll { $0.id == id }
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
+        for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
         try save(next)
     }
+    @discardableResult func createCollection(name: String) throws -> Collection {
+        let collection = Collection(name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+        var next = catalog
+        next.collections.append(collection)
+        try save(next)
+        return collection
+    }
+    func renameCollection(_ id: String, name: String) throws {
+        var next = catalog
+        guard let index = next.collections.firstIndex(where: { $0.id == id }) else { throw failure("Collection no longer exists.") }
+        next.collections[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        try save(next)
+    }
+    func removeCollection(_ id: String) throws {
+        var next = catalog
+        next.collections.removeAll { $0.id == id }
+        try save(next)
+    }
+    func toggleMembership(sceneID: String, collectionID: String) throws {
+        var next = catalog
+        guard let index = next.collections.firstIndex(where: { $0.id == collectionID }) else { throw failure("Collection no longer exists.") }
+        if next.collections[index].sceneIDs.contains(sceneID) {
+            next.collections[index].sceneIDs.removeAll { $0 == sceneID }
+        } else { next.collections[index].sceneIDs.append(sceneID) }
+        try save(next)
+    }
+    private func validateCollections(_ value: Catalog) throws {
+        guard value.collections.count <= 32,
+              Set(value.collections.map(\.id)).count == value.collections.count,
+              Set(value.collections.map { $0.name.lowercased() }).count == value.collections.count,
+              value.collections.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.utf8.count <= 120 && $0.id.utf8.count <= 128 && $0.sceneIDs.count <= 256 && Set($0.sceneIDs).count == $0.sceneIDs.count && $0.sceneIDs.allSatisfy { $0.utf8.count <= 128 } })
+        else { throw failure("Use unique collection names (1–120 bytes), with at most 32 collections and 256 scenes each.") }
+    }
     private func save(_ next: Catalog) throws {
+        try validateCollections(next)
         let data = try JSONEncoder().encode(next)
         guard data.count <= 1_048_576, next.favorites.count <= 256, next.recent.count <= 256 else {
             throw failure("The Library index is full.")
