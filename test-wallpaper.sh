@@ -6,4 +6,4 @@ mkdir -p build
 fixture_dir="$(mktemp -d "$PWD/build/wallpaper-smoke.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
 ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=24'   -t 1 -c:v libx264 -preset veryfast -pix_fmt yuv420p -an "$fixture_dir/loop.mp4"
-"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-wallpaper "$fixture_dir/loop.mp4"
+"${BUILD_DIR:-$PWD/build}/Idlesse.app/Contents/MacOS/Idlesse" --smoke-wallpaper "$fixture_dir/loop.mp4"

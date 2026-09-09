@@ -10,3 +10,5 @@ xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Harness/SceneDocument.swift 
 build/tests/recovery
 xcrun swiftc -O Sources/Runtime/Scene.swift Sources/Runtime/SceneClock.swift Sources/Runtime/AudioBandAnalyzer.swift Tests/AudioTests.swift -o build/tests/audio
 build/tests/audio
+xcrun swiftc -O Sources/Wallpaper/DesktopComfortController.swift Tests/ComfortTests.swift -framework AppKit -o build/tests/comfort
+build/tests/comfort

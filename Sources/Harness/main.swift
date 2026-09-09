@@ -244,7 +244,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaperMenu.addItem(.separator())
         let bedtime = wallpaperMenu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
         bedtime.target = comfort
-        let dim = wallpaperMenu.addItem(withTitle: "Dim / Restore Display", action: #selector(DesktopComfortController.toggle), keyEquivalent: "")
+        let dim = wallpaperMenu.addItem(withTitle: "Dim / Restore Display", action: #selector(DesktopComfortController.toggle), keyEquivalent: "d")
+        dim.keyEquivalentModifierMask = [.command, .option]
         dim.target = comfort
         NSApp.mainMenu = mainMenu
     }

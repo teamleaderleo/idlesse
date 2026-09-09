@@ -5,8 +5,13 @@ struct DimSchedule {
     var start: Int
     var end: Int
     func contains(minute: Int) -> Bool {
-        guard (0..<1440).contains(start), (0..<1440).contains(end), start != end else { return false }
+        guard (0..<1440).contains(start), (0..<1440).contains(end), (0..<1440).contains(minute), start != end else { return false }
         return start < end ? minute >= start && minute < end : minute >= start || minute < end
+    }
+
+    static func pickerDate(minute: Int, on date: Date, calendar: Calendar = .current) -> Date {
+        let bounded = min(1439, max(0, minute))
+        return calendar.date(bySettingHour: bounded / 60, minute: bounded % 60, second: 0, of: date) ?? date
     }
 }
 
@@ -71,8 +76,38 @@ final class DesktopComfortController: NSObject {
     }
 
     @objc func toggle() {
+        refresh()
         manual = !isDimmed
         refresh()
+    }
+
+    @objc private func setLevel(_ sender: NSMenuItem) {
+        defaults.set(Double(sender.tag) / 100, forKey: "comfort.amount")
+        windows.forEach { $0.alphaValue = amount }
+        updateStatusMenu()
+    }
+
+    private func updateStatusMenu() {
+        guard isDimmed else { return }
+        statusItem?.button?.title = " Dimmed"
+        statusItem?.button?.imagePosition = .imageLeading
+        statusItem?.button?.toolTip = "Idlesse — Click to restore or adjust display dimming"
+        let menu = NSMenu()
+        let restore = menu.addItem(withTitle: "Restore Display", action: #selector(toggle), keyEquivalent: "d")
+        restore.keyEquivalentModifierMask = [.command, .option]
+        restore.target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "\(Int((amount * 100).rounded()))% dimming · \(windows.count) displays", action: nil, keyEquivalent: "")
+        for (title, level) in [("Evening — 70%", 70), ("Dark — 90%", 90), ("Bedtime — 98%", 98)] {
+            let item = menu.addItem(withTitle: title, action: #selector(setLevel(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = level
+            item.state = abs(amount * 100 - Double(level)) < 0.5 ? .on : .off
+        }
+        menu.addItem(.separator())
+        let settings = menu.addItem(withTitle: "Bedtime Display…", action: #selector(showSettings), keyEquivalent: "")
+        settings.target = self
+        statusItem?.menu = menu
     }
 
     private func rebuild() {
@@ -97,13 +132,7 @@ final class DesktopComfortController: NSObject {
             }
             if statusItem == nil { statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength) }
             statusItem?.button?.image = NSImage(systemSymbolName: "moon.fill", accessibilityDescription: "Restore Display")
-            statusItem?.button?.toolTip = "Idlesse — Display dimmed"
-            let menu = NSMenu()
-            let restore = menu.addItem(withTitle: "Restore Display", action: #selector(toggle), keyEquivalent: "")
-            restore.target = self
-            let settings = menu.addItem(withTitle: "Bedtime Display…", action: #selector(showSettings), keyEquivalent: "")
-            settings.target = self
-            statusItem?.menu = menu
+            updateStatusMenu()
         } else if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil
@@ -111,11 +140,11 @@ final class DesktopComfortController: NSObject {
     }
 
     @objc func showSettings() {
-        // Restore before presenting controls so users never have to configure through a dark shade.
-        if isDimmed { manual = false; refresh() }
         let alert = NSAlert()
+        // Lift only this small panel above the shade; opening settings must not light up the room.
+        if isDimmed { alert.window.level = .mainMenu }
         alert.messageText = "Bedtime Display"
-        alert.informativeText = "Dim every display and pause the wallpaper. The moon in the menu bar restores the display. This does not turn off the backlight or prevent normal display sleep. Schedules run while Idlesse is open."
+        alert.informativeText = "Dim every display and pause the wallpaper. Click Dimmed in the menu bar to restore the display. This does not turn off the backlight or prevent normal display sleep. Schedules run while Idlesse is open."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Dim Now")
@@ -128,7 +157,7 @@ final class DesktopComfortController: NSObject {
             let picker = NSDatePicker()
             picker.datePickerStyle = .textFieldAndStepper
             picker.datePickerElements = [.hourMinute]
-            picker.dateValue = Calendar.current.startOfDay(for: Date()).addingTimeInterval(Double(minutes * 60))
+            picker.dateValue = DimSchedule.pickerDate(minute: minutes, on: Date())
             return picker
         }
         let from = picker(schedule.start), to = picker(schedule.end)
@@ -151,13 +180,17 @@ final class DesktopComfortController: NSObject {
             let parts = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
             return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
         }
+        let scheduleChanged = defaults.bool(forKey: "comfort.schedule") != (enabled.state == .on) ||
+            schedule.start != minutes(from) || schedule.end != minutes(to)
         defaults.set(slider.doubleValue / 100, forKey: "comfort.amount")
         defaults.set(enabled.state == .on, forKey: "comfort.schedule")
         defaults.set(minutes(from), forKey: "comfort.start")
         defaults.set(minutes(to), forKey: "comfort.end")
-        manual = nil
+        if scheduleChanged { manual = nil }
         refresh()
         if response == .alertThirdButtonReturn { manual = true; refresh() }
+        windows.forEach { $0.alphaValue = amount }
+        updateStatusMenu()
     }
 
     deinit {

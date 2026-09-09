@@ -13,6 +13,7 @@ parser.add_argument("output", type=Path)
 parser.add_argument("--duration", type=float, default=4)
 parser.add_argument("--fps", type=int, default=12)
 parser.add_argument("--keep-stills", action="store_true")
+parser.add_argument("--app", type=Path, help="Optional Idlesse executable from an isolated build")
 args = parser.parse_args()
 if not math.isfinite(args.duration) or not 0.1 <= args.duration <= 15 or not 1 <= args.fps <= 30:
     parser.error("Use duration 0.1–15 seconds and 1–30 fps.")
@@ -20,7 +21,7 @@ count = math.ceil(args.duration * args.fps)
 if count > 180:
     parser.error("A preview supports at most 180 frames.")
 repo = Path(__file__).resolve().parent.parent
-app = repo / "build/Idlesse.app/Contents/MacOS/Idlesse"
+app = args.app.resolve() if args.app else repo / "build/Idlesse.app/Contents/MacOS/Idlesse"
 ffmpeg = shutil.which("ffmpeg")
 if not app.is_file() or not ffmpeg:
     parser.error("Build Idlesse.app and install ffmpeg first.")
@@ -43,14 +44,14 @@ with tempfile.TemporaryDirectory(prefix="motion-preview-", dir=repo / "build") a
     for index in range(count):
         result = subprocess.run([str(app), "--render-scene", str(scene),
             str(frames / f"{index:03d}.png"), str(index / args.fps)],
-            cwd=repo, capture_output=True, text=True)
+            cwd=repo, capture_output=True, text=True, timeout=30)
         if result.returncode:
             raise SystemExit(result.stderr.strip() or "Scene rendering failed.")
     movie = frames / "preview.mp4"
     subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-n",
         "-framerate", str(args.fps), "-i", str(frames / "%03d.png"),
         "-an", "-c:v", "libx264", "-crf", "22", "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart", str(movie)], check=True)
+        "-movflags", "+faststart", str(movie)], check=True, timeout=120)
     publish(movie, output)
     for index, destination in stills.items():
         publish(frames / f"{index:03d}.png", destination)

@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "id": "c7f0dca1-2d27-4efa-8a73-20a22dd31ed4",
+      "type": "image",
+      "name": "Copper currents",
+      "asset": "assets/contours.png",
+      "transform": { "x": 0, "y": 0, "scale": 1.2, "rotation": 0 },
+      "style": {
+        "effects": [
+          {
+            "id": "9106a7c2-37dc-4e21-8bd7-e6fc71b4f6a3",
+            "type": "displacement",
+            "amount": 0.025
+          }
+        ]
+      }
+    }
+  ],
+  "parameters": {
+    "motion": { "name": "Ripple Strength", "default": 0.025, "min": 0, "max": 0.07 }
+  },
+  "bindings": [
+    {
+      "target": {
+        "nodeID": "c7f0dca1-2d27-4efa-8a73-20a22dd31ed4",
+        "property": "effect.amount",
+        "effectID": "9106a7c2-37dc-4e21-8bd7-e6fc71b4f6a3"
+      },
+      "parameter": "motion",
+      "scale": 1,
+      "offset": 0
+    }
+  ],
+  "timeline": { "duration": 8, "mode": "loop", "rate": 1 }
+}
