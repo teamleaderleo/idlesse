@@ -31,7 +31,7 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case image, video, gradient, group }
+    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles }
     let title: String
     let nodes: [SceneNode]
     var parameters: [String: SceneParameter] = [:]
@@ -47,7 +47,7 @@ struct SceneDescriptor: Codable, Sendable {
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var requiresMetal: Bool { timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || $0.kind == .particles } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool { usesSignals || nodes.contains { $0.animated } }
     init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
@@ -252,7 +252,26 @@ struct SceneSignals: Sendable {
 
 struct SceneNode: Codable, Sendable {
     var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
-    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, group([SceneNode]) }
+    struct Emitter: Codable, Sendable, Equatable {
+        var count: Int = 128
+        var lifetime: Double = 6
+        var speed: Double = 0.12
+        var wind: Double = 0
+        var gravity: Double = 0
+        var size: Double = 0.008
+        var seed: Int = 1234
+        func validate() throws {
+            guard (1...512).contains(count), (0...65535).contains(seed),
+                  lifetime.isFinite, (0.1...60).contains(lifetime),
+                  speed.isFinite, (-1...1).contains(speed),
+                  wind.isFinite, (-1...1).contains(wind),
+                  gravity.isFinite, (-1...1).contains(gravity),
+                  size.isFinite, (0.001...0.05).contains(size) else {
+                throw SceneError.invalid("Particles need 1–512 instances, lifetime 0.1–60 s, speed/wind/gravity −1…1, size 0.001–0.05, and seed 0–65535.")
+            }
+        }
+    }
+    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]) }
     struct Transform: Codable, Sendable {
         let x: Double?
         let y: Double?
@@ -297,15 +316,16 @@ struct SceneNode: Codable, Sendable {
     }
     var style: Style = .plain
     var name: String? = nil
-    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : "Gradient") }
+    var displayName: String { name ?? assetURL?.deletingPathExtension().lastPathComponent ?? (kind == .group ? "Group" : kind == .particles ? "Particles" : "Gradient") }
     var content: Content
     var visible = true
     var locked = false
     var opacity: Double = 1
     var transform: Transform = .identity
     var kind: SceneDescriptor.Kind {
-        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group }
+        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles }
     }
+    var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
     var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
     var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
     var animated: Bool { visible && (kind == .group ? children.contains { $0.animated } : kind != .image) }
@@ -317,7 +337,7 @@ struct SceneNode: Codable, Sendable {
         return copy
     }
     var assetURL: URL? {
-        switch content { case .image(let url), .video(let url): return url; case .gradient, .group: return nil }
+        switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles: return nil }
     }
 }
 
@@ -349,6 +369,7 @@ struct LocalSceneSource: SceneSource {
             let style: SceneNode.Style?
             let children: [Node]?
             let name: String?
+            let emitter: SceneNode.Emitter?
             let type: SceneDescriptor.Kind
             let asset: String?
             let visible: Bool?
@@ -414,7 +435,7 @@ struct LocalSceneSource: SceneSource {
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)
-        guard (1...16).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
+        guard (1...17).contains(manifest.version) else { throw SceneError.invalid("This scene uses an unsupported version.") }
         guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
@@ -438,6 +459,12 @@ struct LocalSceneSource: SceneSource {
                     throw SceneError.invalid("Groups require v3 or later, nonempty children, and no asset.")
                 }
                 content = .group(try children.map { try decode($0, depth: depth + 1) })
+            } else if node.type == .particles {
+                guard manifest.version >= 17, node.children == nil, node.asset == nil, let emitter = node.emitter else {
+                    throw SceneError.invalid("Particle nodes require v17 and an emitter, without assets or children.")
+                }
+                try emitter.validate()
+                content = .particles(emitter)
             } else if node.type == .gradient {
                 guard node.children == nil, manifest.version >= 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
                 content = .gradient
@@ -450,6 +477,7 @@ struct LocalSceneSource: SceneSource {
                 }
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
+            guard node.type == .particles || node.emitter == nil else { throw SceneError.invalid("Only particle nodes accept an emitter.") }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             guard (node.style?.effects.isEmpty ?? true) || manifest.version >= 15 else { throw SceneError.invalid("Ordered effects require scene version 15.") }
@@ -489,6 +517,7 @@ struct LocalSceneSource: SceneSource {
 struct ScenePropertyAddress: Codable, Sendable, Hashable {
     enum Property: String, Codable, Sendable, CaseIterable {
         case x = "transform.x", y = "transform.y", scale = "transform.scale", rotation = "transform.rotation"
+        case particleSize = "emitter.size", particleWind = "emitter.wind", particleSpeed = "emitter.speed"
         case effectAmount = "effect.amount"
         case opacity, exposure = "style.exposure", saturation = "style.saturation", vignette = "style.vignette"
         var range: ClosedRange<Double> {
@@ -499,6 +528,8 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
             case .opacity, .vignette: return 0...1
             case .saturation: return 0...2
             case .effectAmount: return -2...24
+            case .particleSize: return 0.001...0.05
+            case .particleWind, .particleSpeed: return -1...1
             }
         }
     }
@@ -506,7 +537,7 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
     let property: Property
     var effectID: UUID? = nil
     static func targets(for node: SceneNode) -> [Self] {
-        Property.allCases.filter { $0 != .effectAmount }.map { Self(nodeID: node.id, property: $0) }
+        Property.allCases.filter { $0 != .effectAmount && (node.emitter != nil || ![.particleSize, .particleWind, .particleSpeed].contains($0)) }.map { Self(nodeID: node.id, property: $0) }
         + node.style.effects.map { Self(nodeID: node.id, property: .effectAmount, effectID: $0.id) }
     }
     func label(in nodes: [SceneNode]) -> String {
@@ -517,6 +548,9 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
     func range(in nodes: [SceneNode]) throws -> ClosedRange<Double> {
         guard (property == .effectAmount) == (effectID != nil) else { throw SceneError.invalid("Effect amount requires an effect ID, and other properties cannot use one.") }
         guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else { throw SceneError.invalid("The target layer no longer exists.") }
+        guard ![Property.particleSize, .particleWind, .particleSpeed].contains(property) || node.emitter != nil else {
+            throw SceneError.invalid("Particle properties need a particle node.")
+        }
         guard let effectID else { return property.range }
         guard let effect = node.style.effects.first(where: { $0.id == effectID }) else { throw SceneError.invalid("The target effect no longer exists.") }
         return effect.range
@@ -536,6 +570,9 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
         case .exposure: return node.style.exposure
         case .saturation: return node.style.saturation
         case .vignette: return node.style.vignette
+        case .particleSize: return node.emitter!.size
+        case .particleWind: return node.emitter!.wind
+        case .particleSpeed: return node.emitter!.speed
         case .effectAmount: return node.style.effects.first { $0.id == effectID }!.amount
         }
     }
@@ -557,6 +594,12 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
             case .exposure: node.style.exposure = value
             case .saturation: node.style.saturation = value
             case .vignette: node.style.vignette = value
+            case .particleSize, .particleWind, .particleSpeed:
+                var emitter = node.emitter!
+                if property == .particleSize { emitter.size = value }
+                else if property == .particleWind { emitter.wind = value }
+                else { emitter.speed = value }
+                node.content = .particles(emitter)
             case .effectAmount: node.style.effects[node.style.effects.firstIndex { $0.id == effectID }!].amount = value
             }
             siblings[index] = node
@@ -621,6 +664,7 @@ enum ScenePackageWriter {
                 "transform": ["x": node.transform.x ?? 0, "y": node.transform.y ?? 0,
                               "scale": node.transform.scale ?? 1, "rotation": node.transform.rotation ?? 0]]
             if let name = node.name { json["name"] = name }
+            if let emitter = node.emitter { json["emitter"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(emitter)) }
             if node.style != .plain {
                 json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
             }
@@ -651,7 +695,7 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
-        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
+        for (name, json) in [("manifest.json", ["version": scene.allNodes.contains { $0.kind == .particles } ? 17 : scene.allNodes.contains { !$0.style.effects.isEmpty } ? 16 : scene.usesAudio ? 14 : scene.timeline?.videosFollowScene == true ? 13 : scene.usesSmoothing ? 12 : scene.timeline != nil ? 11 : scene.usesTracks ? 10 : scene.usesDrivers ? 9 : scene.usesSignals ? 8 : controlled ? 7 : 6, "title": scene.title, "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])] as [String: Any]),
                              ("scene.json", contents)] {
             try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
                 .write(to: staging.appendingPathComponent(name), options: .atomic)
@@ -718,6 +762,7 @@ enum SceneBudget {
             guard depth <= maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
             var result: [SceneNode] = []
             for node in nodes {
+                try node.emitter?.validate()
                 guard node.style.effects.count <= 8, node.style.effects.allSatisfy({ $0.amount.isFinite && $0.range.contains($0.amount) }) else {
                     throw SceneError.invalid("Use at most eight effects per layer, with amounts inside each effect's range.")
                 }
@@ -735,6 +780,7 @@ enum SceneBudget {
             return result
         }
         let nodes = try walk(roots, depth: 0)
+        guard nodes.filter({ $0.kind == .particles }).count <= 4 else { throw SceneError.invalid("A scene supports at most four particle emitters.") }
         let effectIDs = nodes.flatMap { $0.style.effects }.compactMap(\.id)
         guard effectIDs.count == nodes.reduce(0, { $0 + $1.style.effects.count }), Set(effectIDs).count == effectIDs.count else {
             throw SceneError.invalid("Effect identities must exist and be unique across the scene.")

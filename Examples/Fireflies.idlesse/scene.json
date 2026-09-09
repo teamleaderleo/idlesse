@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "id": "01e0acd6-b63f-426d-847f-19179e1ca091",
+      "type": "particles",
+      "name": "Fireflies",
+      "emitter": {
+        "count": 128,
+        "lifetime": 6,
+        "speed": 0.12,
+        "wind": 0,
+        "gravity": 0,
+        "size": 0.008,
+        "seed": 1234
+      },
+      "style": {
+        "effects": [
+          {
+            "id": "736789d7-6acb-4992-9ecd-cdef5b5bdded",
+            "type": "bloom",
+            "amount": 1
+          }
+        ]
+      }
+    }
+  ],
+  "timeline": {
+    "duration": 6,
+    "mode": "loop",
+    "rate": 1
+  }
+}

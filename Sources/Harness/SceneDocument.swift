@@ -86,9 +86,9 @@ final class SceneDocument {
         try SceneBudget.validate(recovery.scene.nodes)
         _ = try recovery.scene.evaluated()
         for node in recovery.scene.allNodes {
-            for property in ScenePropertyAddress.Property.allCases where property != .effectAmount {
-                let value = try ScenePropertyAddress(nodeID: node.id, property: property).value(in: recovery.scene.nodes)
-                guard value.isFinite, property.range.contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
+            for target in ScenePropertyAddress.targets(for: node) {
+                let value = try target.value(in: recovery.scene.nodes)
+                guard value.isFinite, try target.range(in: recovery.scene.nodes).contains(value) else { throw SceneError.invalid("Recovery contains an invalid layer property.") }
             }
             if let url = node.assetURL {
                 guard url.isFileURL, FileManager.default.isReadableFile(atPath: url.path) else {

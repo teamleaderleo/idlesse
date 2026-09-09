@@ -287,3 +287,21 @@ after editing it to 1.4, while scene time continued. The Audio Aurora Studio-win
 10-second measurement reported 91.7 presented fps and 0.75 ms GPU/frame with Match
 Display (160 Hz) selected and audio capture off. This is a windowed sample, not a
 4K desktop, energy, or audio-enabled benchmark.
+
+### Particles
+
+Use **+ Particles** to add a seeded emitter, or **Samples → Fireflies** for a
+looping composition. Select the particle layer and open **Emitter…** to change
+count, lifetime, speed, wind, gravity, size, and seed. Apply is undoable and updates
+the existing Metal renderer. **Bind…** and **Keyframes…** expose particle size,
+wind, and speed, alongside ordinary transforms and individual effect amounts.
+Particles also work inside groups and through ordered effects. No audio or pointer
+permission is needed unless you author and enable those bindings.
+
+### Offscreen verification
+
+`build/Idlesse.app/Contents/MacOS/Idlesse --render-scene input.idlesse output.png 2.5`
+renders a 1024×1024 PNG at the specified scene time, without desktop windows or
+input grants. It supports images, gradients, particles, groups, and effects; video
+scenes are rejected instead of exporting a not-yet-decoded frame. Output must not
+already exist. This is a verification/export aid, not a display-performance test.

@@ -284,7 +284,7 @@ import Foundation
         let reloaded = try await source.resolve(groupedPackage)
         precondition(reloaded.allNodes.map(\.id) == grouped.allNodes.map(\.id))
         var addressed = reloaded.nodes
-        for property in ScenePropertyAddress.Property.allCases where property != .effectAmount {
+        for property in ScenePropertyAddress.Property.allCases where ![.effectAmount, .particleSize, .particleWind, .particleSpeed].contains(property) {
             let address = ScenePropertyAddress(nodeID: firstNode.id, property: property)
             let decoded = try JSONDecoder().decode(ScenePropertyAddress.self, from: JSONEncoder().encode(address))
             precondition(decoded == address)
@@ -519,6 +519,23 @@ import Foundation
         var duplicateIDs = duplicated
         duplicateIDs.style.effects[1].id = duplicateIDs.style.effects[0].id
         do { try SceneBudget.validate([duplicateIDs]); fatalError("Accepted duplicate effect identity") } catch is SceneError {}
+        let particleNode = SceneNode(content: .particles(.init()))
+        let sizeTarget = ScenePropertyAddress(nodeID: particleNode.id, property: .particleSize)
+        let particleScene = SceneDescriptor(title: "Particles", nodes: [particleNode], bindings: [
+            .init(target: sizeTarget, scale: 1, signal: .audioBass)
+        ])
+        let particlesPackage = root.appendingPathComponent("Particles.idlesse")
+        try ScenePackageWriter.write(particleScene, to: particlesPackage)
+        let loadedParticles = try await source.resolve(particlesPackage)
+        precondition(loadedParticles.nodes[0].emitter == particleNode.emitter && loadedParticles.requiresMetal)
+        let reactiveParticles = try loadedParticles.evaluated(signals: .init(audio: .init(bass: 1)))
+        precondition(reactiveParticles.nodes[0].emitter?.size == 0.05)
+        for count in [0, 513] {
+            do { try SceneBudget.validate([SceneNode(content: .particles(.init(count: count)))]); fatalError("Accepted unbounded particles") } catch is SceneError {}
+        }
+        do { try SceneBudget.validate((0..<5).map { _ in SceneNode(content: .particles(.init())) }); fatalError("Accepted too many emitters") } catch is SceneError {}
+        try Data(#"{"version":16,"title":"Old","capabilities":["audio"]}"#.utf8).write(to: particlesPackage.appendingPathComponent("manifest.json"))
+        do { _ = try await source.resolve(particlesPackage); fatalError("Accepted particles in v16") } catch is SceneError {}
         print("Scene tests passed: metadata resolution, asset boundaries, bounded manifest, audio capability round-trip")
     }
 }
