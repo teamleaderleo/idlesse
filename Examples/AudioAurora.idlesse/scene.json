@@ -8,11 +8,13 @@
         "effects": [
           {
             "type": "exposure",
-            "amount": 0.8
+            "amount": 0.8,
+            "id": "27004032-8f0b-46a1-9c77-c08f48f0892a"
           },
           {
             "type": "bloom",
-            "amount": 0.9
+            "amount": 0.9,
+            "id": "9bac7986-161e-41fc-b61d-de5b90da9d7e"
           }
         ]
       }
@@ -22,11 +24,12 @@
     {
       "target": {
         "nodeID": "D3F83815-1B44-4E42-BFAE-3B354DA47819",
-        "property": "style.exposure"
+        "property": "effect.amount",
+        "effectID": "9bac7986-161e-41fc-b61d-de5b90da9d7e"
       },
       "parameter": "",
       "signal": "audio.bass",
-      "scale": 6,
+      "scale": 20,
       "offset": 0,
       "smoothing": 0.08,
       "modifiers": [
@@ -36,7 +39,7 @@
         },
         {
           "operation": "add",
-          "value": -0.5
+          "value": 0.3
         }
       ]
     },

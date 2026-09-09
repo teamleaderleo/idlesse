@@ -5,6 +5,7 @@ final class SceneEditorController {
     let document: SceneDocument
     var selection = 0
     var commit: (([SceneNode], Int, String) -> Bool)?
+    var duplicateCommit: ((SceneNode, SceneNode, [SceneNode], Int) -> Bool)?
     var onError: ((String) -> Void)?
     init(document: SceneDocument) { self.document = document }
     var selectedNode: SceneNode? {
@@ -43,10 +44,12 @@ final class SceneEditorController {
         }
     }
     func duplicate() {
-        edit(selection, name: "Duplicate Layer") { nodes, index in
-            var copy = nodes[index].duplicated(); copy.name = copy.displayName + " Copy"
-            nodes.insert(copy, at: index + 1); return copy.id
-        }
+        guard let source = selectedNode else { return }
+        var copy = source.duplicated(); copy.name = copy.displayName + " Copy"
+        var roots = document.scene.nodes
+        guard SceneTree.edit(source.id, in: &roots, { nodes, index in nodes.insert(copy, at: index + 1) }),
+              let selected = roots.flatMap({ $0.descendants }).firstIndex(where: { $0.id == copy.id }) else { return }
+        _ = duplicateCommit?(source, copy, roots, selected) ?? commit?(roots, selected, "Duplicate Layer")
     }
     func groupWithNext() {
         edit(selection, name: "Group Layers") { nodes, index in

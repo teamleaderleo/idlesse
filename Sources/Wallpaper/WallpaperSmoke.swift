@@ -224,6 +224,15 @@ enum WallpaperSmoke {
         effectNode.style.effects = [.init(type: .exposure, amount: 1), .init(type: .bloom, amount: 1)]
         let effectRenderer = try MetalSceneRenderer(playable: SceneDescriptor(title: "Effects", nodes: [effectNode]),
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: sceneClock) { errors.append($0) }
+        let bloomAddress = ScenePropertyAddress(nodeID: effectNode.id, property: .effectAmount, effectID: effectNode.style.effects[1].id)
+        let reactiveGlow = SceneDescriptor(title: "Reactive glow", nodes: [effectNode], bindings: [
+            .init(target: bloomAddress, scale: 10, signal: .audioBass)
+        ])
+        precondition(effectRenderer.updateScene(reactiveGlow))
+        let silentGlow = try effectRenderer.renderProbe(signals: .init(audio: .init(bass: 0)))
+        let loudGlow = try effectRenderer.renderProbe(signals: .init(audio: .init(bass: 0.2)))
+        precondition(silentGlow != loudGlow, "Audio must modulate the actual bloom pass")
+        precondition(effectRenderer.updateScene(SceneDescriptor(title: "Effects", nodes: [effectNode])))
         let glowPixels = try effectRenderer.renderProbe()
         effectNode.style.effects.reverse()
         precondition(effectRenderer.updateScene(SceneDescriptor(title: "Reordered", nodes: [effectNode])))

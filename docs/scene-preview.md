@@ -274,13 +274,13 @@ do not request audio permission.
 
 ### Ordered effects
 
-Select a layer or group and open **Appearance…**. The eight effect slots run from
-top to bottom; select **None** to skip a slot. Choose blur, bloom, exposure,
-saturation, or vignette and enter its amount. Applying is one undoable edit and
-preserves playback in Metal. Save/Save As writes a V15 package when a stack exists.
+Select a layer or group and open **Appearance…**. The effects list runs from top
+to bottom; add/remove effects, drag rows to reorder, and edit the selected effect's
+type and amount. Up to eight effects are supported. Applying is one undoable edit and
+preserves playback in Metal. Save/Save As writes a V16 package when a stack exists.
 The older mask/color controls run after the stack, so existing bindings keep working.
-Audio Aurora now includes exposure followed by bloom, with audio driving its final
-exposure/vignette. Audio capture remains off until explicitly enabled.
+Audio Aurora includes exposure followed by bloom, with audio driving bloom and
+final vignette. **Bind…** and **Keyframes…** list each identified effect amount. Audio capture remains off until explicitly enabled.
 
 2026-09-08 native check: Appearance Apply → Undo → reopen restored bloom 0.9
 after editing it to 1.4, while scene time continued. The Audio Aurora Studio-window

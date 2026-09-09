@@ -112,10 +112,10 @@ final class SceneTimelineView: NSStackView {
         label.stringValue = String(format: "%.2f s  /  %.2f s", time, end)
         let bindings = scene.bindings.filter { $0.target.nodeID == selectedID && $0.keyframes != nil }
         let nextTargets = bindings.map(\.target)
-        if nextTargets != targets {
+        if nextTargets != targets || trackPicker.itemTitles != (nextTargets.isEmpty ? ["No keyframe tracks"] : nextTargets.map { $0.label(in: scene.nodes) }) {
             targets = nextTargets
             trackPicker.removeAllItems()
-            trackPicker.addItems(withTitles: targets.isEmpty ? ["No keyframe tracks"] : targets.map { $0.property.rawValue })
+            trackPicker.addItems(withTitles: targets.isEmpty ? ["No keyframe tracks"] : targets.map { $0.label(in: scene.nodes) })
             if let chosenTarget, let index = targets.firstIndex(of: chosenTarget) { trackPicker.selectItem(at: index) }
             chosenTarget = targets.indices.contains(trackPicker.indexOfSelectedItem) ? targets[trackPicker.indexOfSelectedItem] : nil
             markers.cancelDrag()

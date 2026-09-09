@@ -322,3 +322,22 @@ therefore reduce intermediate resolution. Each node reuses its three targets acr
 the entire stack. Static scenes remain event-driven. Stack changes update an existing
 Metal renderer without restarting its media. Effect amounts are currently static;
 audio/time bindings can still animate the final appearance properties.
+
+## V16 effect identities and animation
+
+Every effect now saves a UUID `id`. V15 packages still load: missing effect IDs are
+created on import, then persist when saved as V16. V16 rejects missing or duplicate
+effect IDs. Recovery drafts from before this change receive IDs on recovery.
+
+An effect target is `{ "nodeID": "…", "property": "effect.amount", "effectID": "…" }`.
+It works with parameters, signals, modifiers, smoothing, and keyframe tracks. The
+final value clamps to the selected effect's range (e.g. bloom 0–2, blur 0–24).
+Missing targets and effect IDs attached to ordinary properties are invalid.
+Reordering preserves targets; removing an effect in Studio removes only its bindings.
+Duplicating a layer/group creates new node/effect IDs and copies its bindings onto
+the corresponding new targets. Shared parameter references stay shared. A duplicate
+that would exceed the 64-binding limit is rejected.
+
+Audio Aurora now binds bass directly to bloom strength, with sensitivity and
+smoothing; its final vignette still follows audio level. No new capability or
+automatic audio grant is introduced.
