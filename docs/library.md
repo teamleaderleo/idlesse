@@ -33,6 +33,8 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 - Open in Studio edits imported packages. Built-ins always become untitled drafts.
 - Make a Copy in Studio starts a draft without overwriting its source.
 - Remove from Library removes the reference and favorite/recent metadata, never the media.
+- Drop supported scene/media files onto the scene list to import references through
+  the same pipeline as Add Scenes. Unsupported dropped files are ignored.
 - Adding scenes clears the search, opens Imported, and selects the first added scene.
   Each file is attempted independently; failed imports are reported together while
   successful references remain available. Double-clicking empty list space does nothing.
@@ -50,12 +52,14 @@ not a grid of continuously playing wallpapers.
 
 The memory cache holds at most eight 512-square posters (about 8 MiB pixel data).
 There is no disk thumbnail cache or original-media duplication. Renderer working
-memory uses the existing scene budgets during generation. Refresh Preview updates
-a poster after external edits. Closing the Library cancels its request and clears
+memory uses the existing scene budgets during generation. Selecting a scene or
+reopening Library checks its revision before reusing a poster. Packages use bounded
+JSON and file metadata revisions; raw media uses modification time and size.
+Revision checks run off the main thread, without a background folder scan or timer.
+Edits during generation discard the result. Refresh Preview forces regeneration. Closing the Library cancels its request and clears
 the image cache.
 
-Still missing: weekday rules, crossfades, collection reordering, drag-and-drop import,
-automatic preview invalidation, and full video-composition posters. Imported
+Still missing: weekday rules, crossfades, collection reordering, and full video-composition posters. Imported
 cloud-backed media may need to download when explicitly selected for preview.
 
 Validation includes index round trips/removal preservation, generated Metal posters,
