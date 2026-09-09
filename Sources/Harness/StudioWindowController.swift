@@ -1210,6 +1210,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         follow.state = scene.timeline?.videosFollowScene == true ? .on : .off
         let duration = NSTextField(string: String(scene.timeline?.duration ?? 8))
         let rate = NSTextField(string: String(scene.timeline?.rate ?? 1))
+        let canvasMode = NSPopUpButton()
+        canvasMode.addItems(withTitles: ["Per Display", "Span Desktop"])
+        canvasMode.selectItem(at: scene.canvas == .desktopSpan ? 1 : 0)
+        canvasMode.setAccessibilityLabel("Scene canvas")
         let mode = NSPopUpButton()
         mode.addItems(withTitles: ["Once", "Loop", "Ping-pong"])
         let modes: [SceneTimeline.Mode] = [.once, .loop, .pingPong]
@@ -1218,9 +1222,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         rate.setAccessibilityLabel("Authored playback speed")
         mode.setAccessibilityLabel("Authored playback mode")
         let fields = NSStackView(views: [NSTextField(labelWithString: "Duration (seconds)"), duration,
-            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, mode, follow])
+            NSTextField(labelWithString: "Speed (0.1–4×)"), rate, mode, follow, canvasMode])
         fields.orientation = .vertical; fields.alignment = .leading
-        fields.frame = NSRect(x: 0, y: 0, width: 340, height: 190)
+        fields.frame = NSRect(x: 0, y: 0, width: 340, height: 225)
         dialog.accessoryView = fields
         dialog.beginSheetModal(for: window) { [weak self] response in
             guard let self, response != .alertSecondButtonReturn else { return }
@@ -1234,7 +1238,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                     next.timeline = SceneTimeline(duration: seconds, mode: modes[mode.indexOfSelectedItem], rate: speed, videosFollowScene: follow.state == .on)
                     try next.timeline?.validate()
                 }
-                guard next.timeline != self.scene.timeline else { return }
+                next.canvas = canvasMode.indexOfSelectedItem == 1 ? .desktopSpan : nil
+                guard next.timeline != self.scene.timeline || next.canvas != self.scene.canvas else { return }
                 _ = self.applyEdit(next.nodes, selected: self.nodePicker.indexOfSelectedItem, name: "Change Playback", controls: next)
             } catch { self.detailLabel.stringValue = error.localizedDescription }
         }

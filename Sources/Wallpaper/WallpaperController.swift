@@ -36,6 +36,10 @@ final class WallpaperSurface {
             renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
         }
+        if let metal = renderer as? MetalSceneRenderer, playable.canvas == .desktopSpan {
+            metal.desktopFrame = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+            metal.displayFrame = screen.frame
+        }
         window.contentView = renderer.view
         updateFrameRate()
     }
@@ -86,6 +90,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var sceneTime: TimeInterval { clock.time }
     private let source: SceneSource = LocalSceneSource()
     private var scopeStarted = false
+    private var retiring: [WallpaperSurface] = []
+    private var retiringURL: URL?
+    private var transitionTimer: Timer?
+    var transitionDuration: Double {
+        get { let value = UserDefaults.standard.double(forKey: "wallpaperTransitionSeconds"); return [0, 0.5, 1, 2].contains(value) ? value : 0 }
+        set { UserDefaults.standard.set([0, 0.5, 1, 2].contains(newValue) ? newValue : 0, forKey: "wallpaperTransitionSeconds") }
+    }
     private var asleep = false
     private var systemAsleep = false
     var presentsWindows = true
@@ -189,6 +200,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         generation += 1
         let request = generation
         loadTask?.cancel()
+        finishTransition()
         isLoading = true
         ensureStatusItem()
         updateMenu()
@@ -226,8 +238,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 let replacement = self.suspended ? [] :
                     try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
-                self.releaseSurfaces()
-                if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
+                let fade = !reloading && self.presentsWindows && !self.suspended && !self.shouldPause &&
+                    !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && self.transitionDuration > 0 && !self.surfaces.isEmpty
+                if fade {
+                    self.retiring = self.surfaces
+                    self.retiring.forEach { $0.setPaused(true) }
+                    self.retiringURL = self.scopeStarted ? self.selectedURL : nil
+                    self.surfaces = []
+                } else {
+                    self.releaseSurfaces()
+                    if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
+                }
                 self.selectedURL = url
                 self.scopeStarted = access
                 self.playable = playable
@@ -250,7 +271,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.surfaces = replacement
                 replacement.forEach { $0.setPaused(self.shouldPause) }
                 if self.suspended { self.releaseSurfaces() }
-                else if self.presentsWindows { replacement.forEach { $0.show(paused: self.shouldPause) } }
+                else if self.presentsWindows {
+                    replacement.forEach { $0.window.alphaValue = fade ? 0 : 1; $0.show(paused: self.shouldPause) }
+                    if fade { self.beginTransition() }
+                }
                 self.ensureStatusItem()
                 self.updateMenu()
                 self.onStart?()
@@ -341,6 +365,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     func setDimmedForBedtime(_ value: Bool) {
+        finishTransition()
         dimmedForBedtime = value
         clock.setPaused(suspended || shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
@@ -348,6 +373,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc func togglePause() {
+        finishTransition()
         pausedByUser.toggle()
         clock.setPaused(suspended || shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
@@ -377,8 +403,37 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     private func releaseSurfaces() {
+        finishTransition()
         surfaces.forEach { $0.close() }
         surfaces.removeAll()
+    }
+
+    private func beginTransition() {
+        for (next, old) in zip(surfaces, retiring) {
+            next.window.order(.above, relativeTo: old.window.windowNumber)
+        }
+        let start = ProcessInfo.processInfo.systemUptime
+        let duration = transitionDuration
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let progress = min(1, (ProcessInfo.processInfo.systemUptime - start) / max(0.01, duration))
+            self.surfaces.forEach { $0.window.alphaValue = progress * progress * (3 - 2 * progress) }
+            if progress >= 1 { self.finishTransition() }
+        }
+        transitionTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func finishTransition() {
+        transitionTimer?.invalidate(); transitionTimer = nil
+        surfaces.forEach { $0.window.alphaValue = 1 }
+        retiring.forEach { $0.close() }; retiring.removeAll()
+        retiringURL?.stopAccessingSecurityScopedResource(); retiringURL = nil
+    }
+
+    @objc private func changeTransition(_ sender: NSMenuItem) {
+        transitionDuration = sender.representedObject as? Double ?? 0
+        updateMenu()
     }
 
     private func ensureStatusItem() {
@@ -412,6 +467,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         menu.addItem(.separator())
         addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
+        let transition = NSMenuItem(title: "Scene Transition", action: nil, keyEquivalent: "")
+        let choices = NSMenu()
+        for seconds in [0.0, 0.5, 1.0, 2.0] {
+            let item = addItem(choices, seconds == 0 ? "Instant" : "Crossfade · \(seconds) seconds", #selector(changeTransition(_:)))
+            item.representedObject = seconds
+            item.state = transitionDuration == seconds ? .on : .off
+        }
+        transition.submenu = choices; menu.addItem(transition)
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
         pause.isEnabled = isRunning && selectedIsAnimated
         let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))

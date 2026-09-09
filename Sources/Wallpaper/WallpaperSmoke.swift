@@ -199,6 +199,28 @@ enum WallpaperSmoke {
         wait { controller.revision > goodRevision }
         precondition(controller.lastReloadError == nil && controller.pausedByUser)
 
+        let span = SceneDescriptor(title: "Span", nodes: [SceneNode(content: .gradient)], canvas: .desktopSpan)
+        let spanClock = SceneClock()
+        let spanRenderer = try MetalSceneRenderer(playable: span, bounds: CGRect(x: 0, y: 0, width: 128, height: 64), scale: 1, clock: spanClock) { errors.append($0) }
+        spanRenderer.desktopFrame = CGRect(x: -64, y: 0, width: 128, height: 64)
+        spanRenderer.displayFrame = spanRenderer.desktopFrame
+        let whole = try spanRenderer.renderFrame(width: 128, height: 64)
+        spanRenderer.displayFrame = CGRect(x: -64, y: 0, width: 64, height: 64)
+        let spanLeft = try spanRenderer.renderFrame(width: 64, height: 64)
+        spanRenderer.displayFrame = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let spanRight = try spanRenderer.renderFrame(width: 64, height: 64)
+        for y in 0..<64 {
+            for x in 0..<128 {
+                let half = x < 64 ? spanLeft : spanRight
+                for c in 0..<4 {
+                    precondition(abs(Int(whole[(y * 128 + x) * 4 + c]) - Int(half[(y * 64 + x % 64) * 4 + c])) <= 1, "Desktop viewports must reconstruct one continuous scene")
+                }
+            }
+        }
+        spanRenderer.releaseResources()
+        precondition(span.replacingNodes(span.nodes).canvas == .desktopSpan)
+        let evaluatedSpan = try span.evaluated(); precondition(evaluatedSpan.canvas == .desktopSpan)
+
         var instant = 0.0
         let sceneClock = SceneClock(now: { instant })
         sceneClock.setPaused(false)

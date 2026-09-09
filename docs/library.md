@@ -66,3 +66,9 @@ Validation includes index round trips/removal preservation, generated Metal post
 favorite filtering, empty searches, and built-in routing to a Studio draft. The
 offscreen UI capture exercises layout but cannot fully reproduce macOS glass-control
 appearance; live UI validation remains separate from those tests.
+
+## Wallpaper transitions and shared canvases
+
+The wallpaper menu offers Instant or a 0.5/1/2-second crossfade. A replacement is prepared first; the outgoing scene pauses during the fade and is released at completion. Rapid selection, pause, bedtime, sleep, display changes, and Stop finish the transition immediately. Reduce Motion uses instant switching. Instant remains the default.
+
+Studio Playback offers Per Display and Span Desktop. V19 saves `canvas: desktopSpan`; each wallpaper surface views its rectangle within the union of connected display frames (in macOS logical points). Pointer bindings use that same union when pointer access is enabled. Gaps and unequal monitor sizes are preserved. Studio and exports show the entire scene in their own canvas aspect ratio. Video players still follow the existing approximate clock behavior.
