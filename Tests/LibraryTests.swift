@@ -50,6 +50,32 @@ import Foundation
         do { try store.setPlayback(other.id, .init(startMinute: 0, endMinute: 0)); fatalError("Empty range accepted") } catch {}
         do { try store.setPlayback(other.id, .init(minutes: 1)); fatalError("Invalid interval accepted") } catch {}
         try store.removeCollection(other.id)
+        try store.setPlayback(collection.id, .init(startMinute: 1320, endMinute: 420, weekdays: [6]))
+        let friday = calendar.date(from: DateComponents(year: 2026, month: 9, day: 11, hour: 23))!
+        let saturday = calendar.date(from: DateComponents(year: 2026, month: 9, day: 12, hour: 6))!
+        precondition(store.scheduledCollection(at: friday, calendar: calendar)?.id == collection.id)
+        precondition(store.scheduledCollection(at: saturday, calendar: calendar)?.id == collection.id)
+        precondition(store.scheduledCollection(at: saturday.addingTimeInterval(3600), calendar: calendar) == nil)
+        precondition(store.scheduledCollection(at: friday.addingTimeInterval(86400), calendar: calendar) == nil)
+        let weekend = try store.createCollection(name: "Weekend")
+        do {
+            try store.setPlayback(weekend.id, .init(startMinute: 360, endMinute: 480, weekdays: [7]))
+            fatalError("Overnight spill overlap accepted")
+        } catch {}
+        try store.setPlayback(weekend.id, .init(startMinute: 1320, endMinute: 420, weekdays: [7]))
+        do { try store.setPlayback(weekend.id, .init(weekdays: [])); fatalError("Empty days accepted") } catch {}
+        do { try store.setPlayback(weekend.id, .init(weekdays: [8])); fatalError("Invalid day accepted") } catch {}
+        try store.moveCollection(weekend.id, by: -1)
+        let collectionOrder = try SceneLibraryStore(file: file)
+        precondition(collectionOrder.catalog.collections.first?.id == weekend.id)
+        try store.moveCollection(weekend.id, by: 1)
+        try store.removeCollection(weekend.id)
+        try store.moveScene("builtin.Undertow", in: collection.id, by: -1)
+        let reorderedStore = try SceneLibraryStore(file: file)
+        precondition(reorderedStore.catalog.collections.first?.sceneIDs == ["builtin.Undertow", entry.id])
+        try store.moveScene("builtin.Undertow", in: collection.id, by: -1)
+        try store.moveScene("builtin.Undertow", in: collection.id, by: 1)
+        try store.setPlayback(collection.id, .init(minutes: 15, shuffle: true, startMinute: 1320, endMinute: 420))
         let reopened = try SceneLibraryStore(file: file)
         precondition(reopened.catalog.collections.first?.playback?.minutes == 15)
         precondition(reopened.catalog.collections.first?.playback?.shuffle == true)

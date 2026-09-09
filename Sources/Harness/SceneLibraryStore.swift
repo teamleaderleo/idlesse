@@ -12,8 +12,12 @@ final class SceneLibraryStore {
         var shuffle: Bool = false
         var startMinute: Int?
         var endMinute: Int?
-        func contains(_ minute: Int) -> Bool {
+        // Calendar weekday numbers; nil preserves legacy daily schedules.
+        var weekdays: Set<Int>?
+        func contains(_ minute: Int, weekday: Int = 1) -> Bool {
             guard let start = startMinute, let end = endMinute else { return false }
+            let owner = start > end && minute < end ? (weekday == 1 ? 7 : weekday - 1) : weekday
+            guard weekdays?.contains(owner) ?? true else { return false }
             return start < end ? minute >= start && minute < end : minute >= start || minute < end
         }
     }
@@ -123,6 +127,25 @@ final class SceneLibraryStore {
         } else { next.collections[index].sceneIDs.append(sceneID) }
         try save(next)
     }
+    func moveCollection(_ id: String, by offset: Int) throws {
+        var next = catalog
+        guard let index = next.collections.firstIndex(where: { $0.id == id }),
+              [-1, 1].contains(offset) else { throw failure("Select a collection.") }
+        let destination = index + offset
+        guard next.collections.indices.contains(destination) else { return }
+        next.collections.swapAt(index, destination)
+        try save(next)
+    }
+    func moveScene(_ sceneID: String, in collectionID: String, by offset: Int) throws {
+        var next = catalog
+        guard let collection = next.collections.firstIndex(where: { $0.id == collectionID }),
+              let index = next.collections[collection].sceneIDs.firstIndex(of: sceneID),
+              [-1, 1].contains(offset) else { throw failure("Select a scene in a collection.") }
+        let destination = index + offset
+        guard next.collections[collection].sceneIDs.indices.contains(destination) else { return }
+        next.collections[collection].sceneIDs.swapAt(index, destination)
+        try save(next)
+    }
     func setPlayback(_ id: String, _ playback: Playback) throws {
         var next = catalog
         guard let index = next.collections.firstIndex(where: { $0.id == id }) else { throw failure("Collection no longer exists.") }
@@ -131,13 +154,15 @@ final class SceneLibraryStore {
     }
     /// Daily local-time ranges; overlaps are rejected instead of using hidden priority.
     func scheduledCollection(at date: Date, calendar: Calendar = .current) -> Collection? {
-        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        let parts = calendar.dateComponents([.hour, .minute, .weekday], from: date)
         let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-        return catalog.collections.first { $0.playback?.contains(minute) == true }
+        return catalog.collections.first { $0.playback?.contains(minute, weekday: parts.weekday ?? 1) == true }
     }
     private func validateCollections(_ value: Catalog) throws {
         for collection in value.collections {
             guard let settings = collection.playback else { continue }
+            guard settings.weekdays.map({ !$0.isEmpty && $0.isSubset(of: Set(1...7)) }) ?? true
+            else { throw failure("Choose at least one valid schedule day.") }
             guard [5, 15, 30, 60].contains(settings.minutes),
                   (settings.startMinute == nil && settings.endMinute == nil) ||
                   (settings.startMinute != nil && settings.endMinute != nil &&
@@ -145,9 +170,10 @@ final class SceneLibraryStore {
                    settings.startMinute != settings.endMinute)
             else { throw failure("Choose a supported interval and two different daily times.") }
         }
-        for minute in 0..<1440 {
-            guard value.collections.filter({ $0.playback?.contains(minute) == true }).count <= 1
-            else { throw failure("Daily collection schedules cannot overlap. Adjust the other collection first.") }
+        for slot in 0..<(7 * 1440) {
+            let minute = slot % 1440, weekday = slot / 1440 + 1
+            guard value.collections.filter({ $0.playback?.contains(minute, weekday: weekday) == true }).count <= 1
+            else { throw failure("Collection schedules cannot overlap on the same day. Adjust the other collection first.") }
         }
         guard value.collections.count <= 32,
               Set(value.collections.map(\.id)).count == value.collections.count,
