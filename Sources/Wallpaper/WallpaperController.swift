@@ -121,6 +121,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     weak var comfort: DesktopComfortController?
     private var dimmedForBedtime = false
 
+    var statusDescription: String {
+        let title = playable?.title ?? selectedURL?.deletingPathExtension().lastPathComponent ?? "No wallpaper selected"
+        if isLoading { return "Loading… · " + title }
+        guard isRunning else { return title }
+        let state = suspended ? "Suspended" : (shouldPause ? "Paused" : "Playing")
+        return state + " · " + title
+    }
     var isRunning: Bool { selectedURL != nil }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
     private var shouldPause: Bool { pausedByUser || dimmedForBedtime || ProcessInfo.processInfo.isLowPowerModeEnabled }

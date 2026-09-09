@@ -1,9 +1,13 @@
 # Settings
 
 Open **Idlesse → Settings…** or press **⌘,**. The same window is available from
-the preview toolbar and wallpaper menu-bar menu. Changes apply immediately.
+the preview toolbar and wallpaper menu-bar menu. Library and Settings share this
+sidebar window. The header reports wallpaper playback state and provides Pause /
+Resume. Choosing a scene keeps the browser open. Changes apply immediately. Idlesse opens here on launch; the screen saver preview
+is available separately from the Wallpaper menu.
 
-- **Wallpaper:** desktop icons, frame rate, crossfade.
+- **Wallpapers:** Library, animated media imports, collections, previews and Use on Desktop.
+- **Playback & Desktop:** desktop icons, frame rate, crossfade.
 - **Bedtime:** dimming level, daily schedule, Dim Now / Restore.
 - **Screen Saver:** opens the existing options as an attached sheet.
 
