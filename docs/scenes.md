@@ -320,8 +320,8 @@ the existing 128 MiB per-renderer pool, including in-flight and cached targets.
 Resolution falls uniformly when needed to stay inside the cap; more effects can
 therefore reduce intermediate resolution. Each node reuses its three targets across
 the entire stack. Static scenes remain event-driven. Stack changes update an existing
-Metal renderer without restarting its media. Effect amounts are currently static;
-audio/time bindings can still animate the final appearance properties.
+Metal renderer without restarting its media. V15 amounts are static; V16 adds
+identified effect targets for animation, described below.
 
 ## V16 effect identities and animation
 
@@ -341,3 +341,28 @@ that would exceed the 64-binding limit is rejected.
 Audio Aurora now binds bass directly to bloom strength, with sensitivity and
 smoothing; its final vignette still follows audio level. No new capability or
 automatic audio grant is introduced.
+
+## V17 deterministic particles
+
+The Metal-only `particles` node carries an `emitter` object: `count` (1–512),
+`lifetime` (0.1–60 seconds), `speed`, `wind`, `gravity` (each −1…1), `size`
+(0.001–0.05 of canvas height), and integer `seed` (0–65535). All fields are
+required in package JSON. At most four emitters/2048 instances are allowed per
+scene, within the existing 16-node cap. Particles are warm-colored soft discs.
+
+Birth phases are evenly spaced over one lifetime. Integer hashing of seed and
+instance index determines origin and size/speed variation. Position is origin +
+velocity × age + gravity × age²/2; fade-in/out hides recycling. The entire emitter
+repeats every lifetime. No particle-state buffer, CPU simulation, or frame history
+is retained. Instance quads use the normal Metal pipeline; effects reuse the same
+bounded offscreen pool. Large counts and sizes still have fill-rate costs.
+
+`emitter.size`, `emitter.wind`, and `emitter.speed` are property targets for
+parameters, signals, smoothing, and keyframes. Their values modulate the analytic
+formula at the current time; wind is not a historical force integral. Count,
+lifetime, gravity and seed are authored constants in this version. There is no
+variable emission-rate integration or per-particle scripting. Seeking to the same
+time with the same evaluated properties reproduces the same result. Stateful
+smoothing retains its existing seek-reset semantics.
+
+`Examples/Fireflies.idlesse` is a six-second looping particle scene with bloom.

@@ -209,6 +209,31 @@ enum WallpaperSmoke {
         gradient.releaseResources()
         precondition(gradient.diagnostics.activeResources == 0)
 
+        let particleClock = SceneClock(now: { 0 })
+        var particleNode = SceneNode(content: .particles(.init(size: 0.04)))
+        particleNode.style.effects = [.init(type: .bloom, amount: 0.7)]
+        let particles = try MetalSceneRenderer(playable: SceneDescriptor(title: "Particles", nodes: [particleNode]),
+            bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: particleClock) { errors.append($0) }
+        try particleClock.seek(to: 1.25)
+        let particlesA = try particles.renderProbe()
+        try particleClock.seek(to: 4.75)
+        let particlesB = try particles.renderProbe()
+        try particleClock.seek(to: 1.25)
+        let particlesAgain = try particles.renderProbe()
+        precondition(particlesA != particlesB && particlesA == particlesAgain, "Particles must be deterministic when seeking")
+        try particleClock.seek(to: 7.25)
+        let loopedParticles = try particles.renderProbe(); precondition(loopedParticles == particlesA, "A particle lifetime must repeat exactly")
+        let particleSizeTarget = ScenePropertyAddress(nodeID: particleNode.id, property: .particleSize)
+        let reactiveParticles = SceneDescriptor(title: "Reactive particles", nodes: [particleNode], bindings: [
+            .init(target: particleSizeTarget, scale: 0.05, offset: 0.001, signal: .audioBass)
+        ])
+        precondition(particles.updateScene(reactiveParticles))
+        let tinyParticles = try particles.renderProbe(signals: .init(audio: .init(bass: 0)))
+        let bigParticles = try particles.renderProbe(signals: .init(audio: .init(bass: 1)))
+        precondition(tinyParticles != bigParticles)
+        particles.releaseResources()
+        wait { particles.intermediateTextureBytes == 0 }
+        precondition(particles.intermediateTextureBytes == 0)
         let sixteenImages = SceneDescriptor(title: "Sixteen", nodes: (0..<16).map { _ in SceneNode(content: .image(imageURL), opacity: 0.2) })
         let audioNode = SceneNode(content: .gradient)
         let audioScene = SceneDescriptor(title: "Audio", nodes: [audioNode], bindings: [

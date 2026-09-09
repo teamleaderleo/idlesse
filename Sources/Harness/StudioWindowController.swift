@@ -132,6 +132,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let viewport = NSScrollView()
     private let dragOverlay = SceneDragOverlay()
     private let addMediaButton = NSButton(title: "+ Image / Video…", target: nil, action: nil)
+    private let addParticlesButton = NSButton(title: "+ Particles", target: nil, action: nil)
+    private let emitterButton = NSButton(title: "Emitter…", target: nil, action: nil)
     private let addGradientButton = NSButton(title: "+ Gradient", target: nil, action: nil)
     private let removeNodeButton = NSButton(title: "Remove", target: nil, action: nil)
     private let reorderButton = NSButton(title: "Bring Forward", target: nil, action: nil)
@@ -287,8 +289,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         heading.spacing = 4
         let open = NSButton(title: "Open Scene…", target: self, action: #selector(choose))
         let sample = NSPopUpButton(frame: .zero, pullsDown: true)
-        sample.addItems(withTitles: ["Samples", "Aurora", "Audio Aurora"])
+        sample.addItems(withTitles: ["Samples", "Aurora", "Audio Aurora", "Fireflies"])
         sample.item(at: 1)?.target = self; sample.item(at: 1)?.action = #selector(showSample)
+        sample.item(at: 3)?.target = self; sample.item(at: 3)?.action = #selector(showParticleSample)
         sample.item(at: 2)?.target = self; sample.item(at: 2)?.action = #selector(showAudioSample)
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
@@ -334,7 +337,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         redoButton.target = self
         redoButton.action = #selector(redoEdit)
         inspector.addArrangedSubview(NSStackView(views: [undoButton, redoButton]))
-        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(addGradient)),
+        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(addGradient)), (addParticlesButton, #selector(addParticles)), (emitterButton, #selector(editEmitter)),
                                   (reorderButton, #selector(reorderNode)), (removeNodeButton, #selector(removeNode))] {
             button.target = self
             button.action = action
@@ -598,6 +601,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         duplicateButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addMediaButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addGradientButton.isEnabled = addMediaButton.isEnabled
+        addParticlesButton.isEnabled = addMediaButton.isEnabled && scene.allNodes.filter { $0.kind == .particles }.count < 4
+        emitterButton.isEnabled = !saving && editor.selectedNode?.emitter != nil && editor.selectedNode?.locked == false
         removeNodeButton.isEnabled = !saving && editor.siblings.count > 1
         reorderButton.isEnabled = !saving && editor.siblings.count > 1
         dragOverlay.isEnabled = !saving
@@ -932,6 +937,52 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func ungroupNodes() { editor.ungroup() }
     @objc private func groupNodes() { editor.groupWithNext() }
     @objc private func duplicateNode() { editor.duplicate() }
+    @objc private func addParticles() {
+        guard !saving else { return }
+        _ = editor.add(SceneNode(name: "Fireflies", content: .particles(.init())))
+    }
+    @objc private func editEmitter() {
+        guard !saving, var node = editor.selectedNode, !node.locked, let current = node.emitter else { return }
+        let dialog = NSAlert()
+        dialog.messageText = "Emitter — " + node.displayName
+        dialog.informativeText = "Seeded particles repeat every lifetime. Size, wind and speed can also use Bind or Keyframes."
+        dialog.addButton(withTitle: "Apply"); dialog.addButton(withTitle: "Cancel")
+        let names = ["Count (1–512)", "Lifetime (0.1–60 s)", "Speed (−1…1)", "Wind (−1…1)", "Gravity (−1…1)", "Size (0.001–0.05)", "Seed (0–65535)"]
+        let values = [String(current.count), String(current.lifetime), String(current.speed), String(current.wind), String(current.gravity), String(current.size), String(current.seed)]
+        let fields = values.map { NSTextField(string: $0) }
+        let stack = NSStackView()
+        stack.orientation = .vertical; stack.alignment = .leading
+        for (index, name) in names.enumerated() {
+            fields[index].setAccessibilityLabel(name)
+            fields[index].widthAnchor.constraint(equalToConstant: 250).isActive = true
+            stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(fields[index])
+        }
+        stack.frame = NSRect(x: 0, y: 0, width: 270, height: 350)
+        dialog.accessoryView = stack
+        dialog.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.editor.selectedNode?.id == node.id,
+                  !self.saving, self.editor.selectedNode?.locked == false else { return }
+            guard let count = Int(fields[0].stringValue), let lifetime = Double(fields[1].stringValue),
+                  let speed = Double(fields[2].stringValue), let wind = Double(fields[3].stringValue),
+                  let gravity = Double(fields[4].stringValue), let size = Double(fields[5].stringValue),
+                  let seed = Int(fields[6].stringValue) else {
+                self.detailLabel.stringValue = "Enter numeric emitter values; count and seed must be integers."; return
+            }
+            let emitter = SceneNode.Emitter(count: count, lifetime: lifetime, speed: speed, wind: wind, gravity: gravity, size: size, seed: seed)
+            do { try emitter.validate() } catch { self.detailLabel.stringValue = error.localizedDescription; return }
+            node.content = .particles(emitter)
+            self.editor.replaceSelected(node, name: "Change Emitter")
+        }
+    }
+    @objc private func showParticleSample() {
+        guard mayDiscard() else { return }
+        showSample()
+        var particles = SceneNode(name: "Fireflies", content: .particles(.init()))
+        particles.style.effects = [.init(type: .bloom, amount: 1)]
+        let background = SceneNode(name: "Night", content: .gradient, opacity: 0.25)
+        let sample = SceneDescriptor(title: "Fireflies", nodes: [background, particles], timeline: .init(duration: 6, mode: .loop))
+        _ = applyEdit(sample.nodes, selected: 1, name: "Create Fireflies", controls: sample)
+    }
     @objc private func addGradient() {
         guard scene.allNodes.count < SceneBudget.maxNodes else { return }
         _ = editor.add(SceneNode(name: "Gradient \(scene.allNodes.count + 1)", content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0)))

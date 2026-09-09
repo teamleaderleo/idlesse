@@ -243,6 +243,45 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
 let app = NSApplication.shared
 
+// Deterministic, offscreen preview: no desktop windows, input grants, or UI activation.
+if let index = CommandLine.arguments.firstIndex(of: "--render-scene") {
+    guard CommandLine.arguments.count > index + 3,
+          let seconds = Double(CommandLine.arguments[index + 3]), seconds.isFinite, (0...86400).contains(seconds) else {
+        fputs("Usage: --render-scene input.idlesse output.png seconds\n", stderr); exit(1)
+    }
+    let input = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+    let output = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+    Task { @MainActor in
+        do {
+            let scene = try await LocalSceneSource().resolve(input)
+            guard !scene.allNodes.contains(where: { $0.kind == .video }) else {
+                throw SceneError.invalid("Offscreen export supports images and procedural scenes. Use Studio for video previews.")
+            }
+            let clock = SceneClock(now: { 0 })
+            try clock.configure(timeline: scene.timeline)
+            try clock.seek(to: seconds)
+            let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 1024, height: 1024),
+                scale: 1, clock: clock) { fputs(($0 + "\n"), stderr) }
+            defer { renderer.releaseResources() }
+            let pixels = try renderer.renderProbe(signals: .init(time: clock.time), dimension: 1024)
+            let data = Data(pixels)
+            guard let provider = CGDataProvider(data: data as CFData),
+                  let image = CGImage(width: 1024, height: 1024, bitsPerComponent: 8, bitsPerPixel: 32,
+                    bytesPerRow: 4096, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent),
+                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+                throw SceneError.invalid("Could not encode scene preview.")
+            }
+            try png.write(to: output, options: .withoutOverwriting)
+            print("Rendered 1024×1024 preview at \(seconds)s; input permissions remain disabled.")
+            exit(0)
+        } catch { fputs((error.localizedDescription + "\n"), stderr); exit(1) }
+    }
+    RunLoop.main.run()
+    exit(1)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--benchmark"),
    CommandLine.arguments.count > index + 2 {
     do {
