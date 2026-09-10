@@ -36,6 +36,8 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 - Drop supported scene/media files onto the scene list to import references through
   the same pipeline as Add Scenes. Unsupported dropped files are ignored.
 - Adding scenes clears the search, opens Imported, and selects the first added scene.
+  Video playability is probed asynchronously. Imports/conversions run sequentially
+  in one cancellable batch and refresh the Library once on completion.
   Each file is attempted independently; failed imports are reported together while
   successful references remain available. Double-clicking empty list space does nothing.
 

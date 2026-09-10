@@ -41,6 +41,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selected: Item?
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
+    private var importFailureHandler: (([String]) -> Void)?
     private var generation = 0
     private var rotationTimer: Timer?
     private var rotationCollectionID: String?
@@ -434,55 +435,50 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return true
     }
     private func importScenes(_ urls: [URL]) {
-        let conversions = urls.filter { MediaImport.needsConversion($0) }
-        if !conversions.isEmpty {
-            guard conversionTask == nil else {
-                let alert = NSAlert(); alert.messageText = "A media import is already running"
-                alert.beginSheetModal(for: presentationWindow!)
-                return
-            }
-            conversionTask = Task { [weak self] in
-                guard let self else { return }
-                defer { self.conversionTask = nil }
-                for source in conversions {
-                    if Task.isCancelled { return }
-                    self.detail.stringValue = "Converting " + source.lastPathComponent + "…"
-                    do {
-                        let converted = try await MediaImport.convert(source)
-                        guard !Task.isCancelled else { return }
-                        let entry = try self.store.add(converted, title: source.deletingPathExtension().lastPathComponent)
-                        self.search.stringValue = ""; self.filter.selectItem(at: 2)
-                        self.reload(selecting: entry.id)
-                    } catch {
-                        if Task.isCancelled { return }
-                        let alert = NSAlert()
-                        alert.messageText = "Couldn’t import " + source.lastPathComponent
-                        alert.informativeText = error.localizedDescription
-                        await alert.beginSheetModal(for: self.presentationWindow!)
-                        return
+        guard conversionTask == nil else {
+            detail.stringValue = "An import is already running. Try again when it finishes."
+            return
+        }
+        conversionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.conversionTask = nil }
+            var firstID: String?
+            var failures: [String] = []
+            for (index, source) in urls.enumerated() {
+                if Task.isCancelled { return }
+                self.detail.stringValue = "Importing \(index + 1) of \(urls.count)…"
+                do {
+                    guard Self.supportedImport(source) else {
+                        throw SceneError.invalid("This file type is not supported.")
                     }
+                    let convert = try await MediaImport.needsConversion(source)
+                    try Task.checkCancellation()
+                    let imported: URL
+                    if convert {
+                        self.detail.stringValue = "Converting \(index + 1) of \(urls.count)…"
+                        imported = try await MediaImport.convert(source)
+                    } else { imported = source }
+                    try Task.checkCancellation()
+                    let entry = try self.store.add(imported,
+                        title: convert ? source.deletingPathExtension().lastPathComponent : nil)
+                    if firstID == nil { firstID = entry.id }
+                } catch {
+                    if Task.isCancelled { return }
+                    failures.append("\(source.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-        }
-        var firstID: String?
-        var failures: [String] = []
-        for url in urls where !conversions.contains(url) {
-            do {
-                guard Self.supportedImport(url) else { throw SceneError.invalid("Choose a scene, image, or video. This file type is not supported.") }
-                let entry = try store.add(url)
-                if firstID == nil { firstID = entry.id }
-            } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
-        }
-        if firstID != nil {
-            search.stringValue = ""
-            filter.selectItem(at: 2)
-        }
-        reload(selecting: firstID)
-        if !failures.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = "Some scenes could not be added"
-            alert.informativeText = failures.joined(separator: "\n")
-            if let window = presentationWindow { alert.beginSheetModal(for: window) }
+            if firstID != nil {
+                self.search.stringValue = ""
+                self.filter.selectItem(at: 2)
+            }
+            self.reload(selecting: firstID)
+            if !failures.isEmpty {
+                if let handler = self.importFailureHandler { handler(failures); return }
+                let alert = NSAlert()
+                alert.messageText = "Some scenes could not be added"
+                alert.informativeText = failures.joined(separator: "\n")
+                if let window = self.presentationWindow { await alert.beginSheetModal(for: window) }
+            }
         }
     }
     @objc private func toggleFavorite() {
@@ -759,7 +755,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.isEmpty && !controller.apply.isEnabled)
         if let videoURL {
-            controller.importScenes([videoURL])
+            let invalidMedia = folder.appendingPathComponent("invalid.webm")
+            try Data("not a video".utf8).write(to: invalidMedia)
+            var importFailures: [String] = []
+            controller.importFailureHandler = { importFailures = $0 }
+            controller.importScenes([invalidMedia, videoURL])
+            let importDeadline = Date().addingTimeInterval(10)
+            while controller.conversionTask != nil && Date() < importDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(controller.conversionTask == nil, "Async import timed out")
+            precondition(importFailures.count == 1 && importFailures[0].contains("invalid.webm"),
+                         "Failed conversion must be reported while later native media imports")
             precondition(controller.search.stringValue.isEmpty && controller.filter.indexOfSelectedItem == 2)
             precondition(controller.items.count == 1 && controller.selected?.id == controller.items[0].id,
                          "Import must reveal and select its scene despite previous search/filter")
@@ -775,7 +782,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             try ScenePackageWriter.write(SceneDescriptor(title: "Transparent Video", nodes: [video]), to: package)
             controller.importScenes([package])
             let compositionDeadline = Date().addingTimeInterval(10)
-            while controller.task != nil && Date() < compositionDeadline {
+            while (controller.conversionTask != nil || controller.task != nil) && Date() < compositionDeadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
             }
             precondition(controller.poster.image != nil, controller.detail.stringValue)

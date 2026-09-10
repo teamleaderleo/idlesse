@@ -8,10 +8,16 @@ enum MediaImport {
     static let stills: Set<String> = ["avif", "tif", "tiff", "bmp", "jp2", "jxl"]
     static let motion: Set<String> = ["webp", "gif", "apng", "mkv", "webm", "avi", "m4v", "mpg", "mpeg", "ts", "mts", "m2ts", "wmv", "flv", "ogv"]
     static func supports(_ url: URL) -> Bool { native.union(stills).union(motion).contains(url.pathExtension.lowercased()) }
-    static func needsConversion(_ url: URL) -> Bool {
+    static func needsConversion(_ url: URL) async throws -> Bool {
         let ext = url.pathExtension.lowercased()
         if stills.union(motion).contains(ext) { return true }
-        return ["mp4", "mov"].contains(ext) && !AVURLAsset(url: url).isPlayable
+        guard ["mp4", "mov"].contains(ext) else { return false }
+        try Task.checkCancellation()
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let playable = try await AVURLAsset(url: url).load(.isPlayable)
+        try Task.checkCancellation()
+        return !playable
     }
 
     static func convert(_ source: URL) async throws -> URL {
