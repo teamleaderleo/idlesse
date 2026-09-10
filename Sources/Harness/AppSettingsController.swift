@@ -130,7 +130,10 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         reload()
         selectPage(tab ?? 3)
         window?.level = comfort.isDimmed ? .mainMenu : .normal
-        showWindow(nil); NSApp.activate(ignoringOtherApps: true)
+        window?.deminiaturize(nil)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
     func windowDidBecomeKey(_ notification: Notification) { reload() }
     private func updateIcons() {

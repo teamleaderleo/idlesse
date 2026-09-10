@@ -135,20 +135,33 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         } catch { NSLog("Idlesse: saved Library schedules unavailable: %@", error.localizedDescription) }
 
         if let pendingSceneURL {
-            wallpaper.select(pendingSceneURL)
+            route(pendingSceneURL)
             self.pendingSceneURL = nil
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { showLibrary() }
+        showLibrary()
         return true
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
         if window == nil { pendingSceneURL = url }
-        else { wallpaper.select(url) }
+        else { route(url) }
+    }
+
+    private func route(_ url: URL) {
+        guard url.scheme == "idlesse" else { wallpaper.select(url); return }
+        switch url.host {
+        case "wallpapers": showLibrary()
+        case "screensaver":
+            showLibrary()
+            appSettings.present(tab: 2)
+            showSaverSettings(asSheet: true)
+        case "desktop-icons": comfort.toggleDesktopIcons()
+        default: break
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -193,12 +206,25 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func showSettings() { showLibrary() }
 
     private func showSaverSettings(asSheet: Bool = false) {
-        settingsController.reload()
         let settingsWindow = settingsController.window
+        // Repeated Options clicks should focus the draft, not discard it or
+        // silently return while its parent is behind another application.
+        if settingsWindow.isVisible {
+            let parent = settingsWindow.sheetParent ?? settingsWindow
+            parent.deminiaturize(nil)
+            parent.makeKeyAndOrderFront(nil)
+            settingsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        settingsController.reload()
         if asSheet, let parent = appSettings.window {
             guard settingsWindow.sheetParent == nil else { return }
             settingsWindow.orderOut(nil)
+            parent.deminiaturize(nil)
+            parent.makeKeyAndOrderFront(nil)
             parent.beginSheet(settingsWindow)
+            NSApp.activate(ignoringOtherApps: true)
             return
         }
         settingsWindow.center()
