@@ -37,7 +37,7 @@ enum DesktopQualification {
                 "surfaceCount": controller.surfaces.count]
             row["displays"] = controller.surfaces.map { surface -> [String: Any] in
                 var display: [String: Any] = ["submittedFrames": surface.diagnostics.frameCount,
-                    "loops": surface.diagnostics.loopCount]
+                    "loops": surface.diagnostics.loopCount, "menuStripFrames": surface.menuStripFrames]
                 if let presented = surface.presentedFrameCount { display["presentedFrames"] = presented }
                 if let gpu = surface.gpuTotals { display["gpuSeconds"] = gpu.seconds; display["gpuFrames"] = gpu.frames }
                 return display

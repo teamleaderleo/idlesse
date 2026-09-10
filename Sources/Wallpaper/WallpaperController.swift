@@ -1,3 +1,4 @@
+import MetalKit
 import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
@@ -21,9 +22,11 @@ private final class DesktopWindow: NSPanel {
 final class WallpaperSurface {
     let window: NSWindow
     private let renderer: SceneRenderer
+    private var menuStrip: MenuBarStrip?
     var diagnostics: RendererDiagnostics { renderer.diagnostics }
     var presentedFrameCount: Int? { renderer.presentedFrameCount }
     var gpuTotals: (seconds: Double, frames: Int)? { renderer.gpuTotals }
+    var menuStripFrames: Int { menuStrip?.frames ?? 0 }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {
@@ -43,7 +46,7 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" {
+        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
         } else {
@@ -55,6 +58,12 @@ final class WallpaperSurface {
             metal.displayFrame = screen.frame
         }
         window.contentView = renderer.view
+        if ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1",
+           let metal = renderer as? MetalSceneRenderer {
+            let strip = MenuBarStrip(screen: screen)
+            menuStrip = strip
+            metal.mirrorFrame = { [weak strip] command, texture in strip?.copy(command: command, texture: texture) }
+        }
         updateFrameRate()
     }
 
@@ -75,12 +84,16 @@ final class WallpaperSurface {
 
     func show(paused: Bool) {
         window.orderBack(nil)
+        menuStrip?.window.orderFront(nil)
         setPaused(paused)
     }
 
     func setPaused(_ paused: Bool) { renderer.setPaused(paused) }
 
     func close() {
+        (renderer as? MetalSceneRenderer)?.mirrorFrame = nil
+        menuStrip?.window.close()
+        menuStrip = nil
         renderer.releaseResources()
         window.contentView = nil
         window.close()
@@ -850,5 +863,57 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         releaseSurfaces()
         if scopeStarted { selectedURL?.stopAccessingSecurityScopedResource() }
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+    }
+}
+
+
+/// Opt-in experiment: a narrow GPU copy, never a second decoder or a disk snapshot loop.
+/// macOS may composite an opaque menu background above this window; do not enable by default.
+private final class MenuBarStrip {
+    let window: NSPanel
+    private let layer = CAMetalLayer()
+    private let height: CGFloat
+    private(set) var frames = 0
+    init(screen: NSScreen) {
+        height = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top)
+        let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - height,
+            width: screen.frame.width, height: height)
+        window = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+        window.setFrame(frame, display: false)
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.ignoresMouseEvents = true
+        window.hasShadow = false
+        window.hidesOnDeactivate = false
+        window.isFloatingPanel = false
+        window.isReleasedWhenClosed = false
+        window.title = "Idlesse Menu Strip Experiment"
+        let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        view.wantsLayer = true
+        layer.pixelFormat = .bgra8Unorm
+        layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        layer.framebufferOnly = false
+        layer.maximumDrawableCount = 2
+        layer.allowsNextDrawableTimeout = true
+        view.layer = layer
+        window.contentView = view
+    }
+    func copy(command: MTLCommandBuffer, texture: MTLTexture) {
+        guard window.isVisible else { return }
+        let scale = CGFloat(texture.width) / max(1, window.frame.width)
+        let rows = min(texture.height, max(1, Int((height * scale).rounded())))
+        let size = CGSize(width: texture.width, height: rows)
+        if layer.device == nil { layer.device = texture.device }
+        if layer.drawableSize != size { layer.drawableSize = size }
+        guard let target = layer.nextDrawable(), let blit = command.makeBlitCommandEncoder() else { return }
+        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: texture.width, height: rows, depth: 1),
+            to: target.texture, destinationSlice: 0, destinationLevel: 0,
+            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        command.present(target)
+        frames += 1
     }
 }
