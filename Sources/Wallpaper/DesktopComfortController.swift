@@ -29,10 +29,8 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     var onDesktopIconsChanged: (() -> Void)?
     var onShowSettings: (() -> Void)?
 
-    var desktopIconsVisible: Bool {
-        CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
-        return !((CFPreferencesCopyAppValue("StandardHideDesktopIcons" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
-    }
+    static let desktopVisibilityChanged = Notification.Name("Idlesse.DesktopVisibilityChanged")
+    var desktopIconsVisible: Bool { !UserDefaults.standard.bool(forKey: "comfort.keepDesktopFilesHidden") }
 
     var desktopWidgetsVisible: Bool {
         CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
@@ -68,7 +66,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     func addDesktopIconsItem(to menu: NSMenu) {
         let item = menu.addItem(withTitle: "Show Desktop Files", action: #selector(toggleDesktopIcons), keyEquivalent: "")
         item.target = self
-        item.toolTip = "Hide icons without moving files. Restarts Finder."
+        item.toolTip = "Keep files covered while an Idlesse wallpaper is running. Files remain available in Finder."
         iconItems.add(item)
         let widgets = menu.addItem(withTitle: "Show Desktop Widgets", action: #selector(toggleDesktopWidgets), keyEquivalent: "")
         widgets.target = self
@@ -103,45 +101,9 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     }
 
     @objc func toggleDesktopIcons() {
-        guard !changingDesktopIcons else { return }
-        let visible = !desktopIconsVisible
-        changingDesktopIcons = true
+        UserDefaults.standard.set(desktopIconsVisible, forKey: "comfort.keepDesktopFilesHidden")
         updateDesktopIconsItems()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var failure: String?
-            do {
-                // Match Desktop & Dock > Show items > On Desktop. CreateDesktop=false
-                // removes Finder's desktop surface and breaks click-to-reveal.
-                for arguments in [
-                    ["write", "com.apple.finder", "CreateDesktop", "-bool", "true"],
-                    ["write", "com.apple.WindowManager", "StandardHideDesktopIcons", "-bool", visible ? "false" : "true"]
-                ] {
-                    let write = Process()
-                    write.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-                    write.arguments = arguments
-                    try write.run(); write.waitUntilExit()
-                    guard write.terminationStatus == 0 else { throw NSError(domain: "Idlesse.Desktop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not change the desktop icon setting."]) }
-                }
-                if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").isEmpty {
-                    let restart = Process()
-                    restart.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-                    restart.arguments = ["Finder"]
-                    try restart.run(); restart.waitUntilExit()
-                    guard restart.terminationStatus == 0 else { throw NSError(domain: "Idlesse.Desktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "The setting was saved, but Finder could not restart. Relaunch Finder to apply it."]) }
-                }
-            } catch { failure = error.localizedDescription }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.changingDesktopIcons = false
-                self.updateDesktopIconsItems()
-                if let failure {
-                    let alert = NSAlert()
-                    alert.messageText = "Desktop Icons"
-                    alert.informativeText = failure
-                    alert.runModal()
-                }
-            }
-        }
+        NotificationCenter.default.post(name: Self.desktopVisibilityChanged, object: nil)
     }
     var onDimmingChanged: ((Bool) -> Void)?
     private let defaults = UserDefaults.standard

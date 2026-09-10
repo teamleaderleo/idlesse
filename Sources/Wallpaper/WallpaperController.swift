@@ -2,9 +2,20 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-private final class DesktopWindow: NSWindow {
+private final class DesktopWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    var desktopClick: (() -> Void)?
+    var desktopMenu: (() -> NSMenu)?
+    override func sendEvent(_ event: NSEvent) {
+        if let desktopMenu, event.type == .rightMouseDown ||
+            (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
+            if let view = contentView { NSMenu.popUpContextMenu(desktopMenu(), with: event, for: view) }
+            return
+        }
+        if event.type == .leftMouseDown, let desktopClick { desktopClick(); return }
+        super.sendEvent(event)
+    }
 }
 
 final class WallpaperSurface {
@@ -16,8 +27,9 @@ final class WallpaperSurface {
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {
-        window = DesktopWindow(contentRect: screen.frame, styleMask: .borderless,
+        window = DesktopWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
+        (window as? NSPanel)?.isFloatingPanel = false
         window.setFrame(screen.frame, display: false)
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
@@ -44,6 +56,17 @@ final class WallpaperSurface {
         }
         window.contentView = renderer.view
         updateFrameRate()
+    }
+
+    func setCleanDesktop(_ enabled: Bool, click: @escaping () -> Void, menu: @escaping () -> NSMenu) {
+        guard let desktop = window as? DesktopWindow else { return }
+        desktop.desktopClick = enabled ? click : nil
+        desktop.desktopMenu = enabled ? menu : nil
+        desktop.ignoresMouseEvents = !enabled
+        desktop.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(enabled ? .desktopIconWindow : .desktopWindow)) + 1)
+        if desktop.isVisible {
+            if enabled { desktop.orderFront(nil) } else { desktop.orderBack(nil) }
+        }
     }
 
     func updateFrameRate() {
@@ -77,7 +100,7 @@ enum WallpaperError: LocalizedError {
     }
 }
 
-/// A sibling to the saver. Does not mutate macOS's wallpaper or ScreenSaverDefaults.
+/// A sibling to the saver. Interactive playback also prepares a matching system wallpaper still.
 final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var surfaces: [WallpaperSurface] = []
     private(set) var selectedURL: URL?
@@ -204,6 +227,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private var surfaceGeneration = 0
     private(set) var isLoading = false
     private var loadTask: Task<Void, Never>?
+    private var backdropTask: Task<Void, Never>?
     private var screenRefresh: DispatchWorkItem?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var statusItem: NSStatusItem?
@@ -232,6 +256,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         super.init()
         observe(.default, SceneFrameRate.changed) { controller in
             controller.surfaces.forEach { $0.updateFrameRate() }
+        }
+        observe(.default, DesktopComfortController.desktopVisibilityChanged) { controller in
+            controller.surfaces.forEach { controller.configureDesktopInteraction($0) }
+            controller.updateMenu()
         }
         let workspace = NSWorkspace.shared.notificationCenter
         observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.setAsleep(true) }
@@ -383,6 +411,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 self.ensureStatusItem()
                 self.updateMenu()
+                self.syncSystemBackdrop(scene: playable, sourceURL: url, request: request)
                 self.saveSelection()
                 self.onStart?()
             } catch {
@@ -423,6 +452,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         self.showError(message)
                     }
                 }
+                configureDesktopInteraction(surface)
                 result.append(surface)
             }
             return result
@@ -430,6 +460,98 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             result.forEach { $0.close() }
             throw error
         }
+    }
+
+    /// A small SDR still gives macOS matching material for menu-bar/Show Desktop
+    /// regions it composites from the system wallpaper rather than our window.
+    private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int) {
+        guard persistsSelection && presentsWindows else { return }
+        backdropTask?.cancel()
+        backdropTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let scoped = sourceURL.startAccessingSecurityScopedResource()
+            defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
+            do {
+                let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                    appropriateFor: nil, create: true).appendingPathComponent("Idlesse/Desktop Backdrops")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let screens = NSScreen.screens
+                for screen in screens {
+                    try Task.checkCancellation()
+                    let factor = min(1, 1280 / max(screen.frame.width, screen.frame.height))
+                    let width = max(1, Int(screen.frame.width * factor))
+                    let height = max(1, Int(screen.frame.height * factor))
+                    let clock = SceneClock(now: { 0 })
+                    try clock.configure(timeline: scene.timeline)
+                    let time = scene.metadata?.previewTime ?? 2
+                    try clock.seek(to: time)
+                    let renderer = try MetalSceneRenderer(playable: scene,
+                        bounds: NSRect(x: 0, y: 0, width: width, height: height), scale: 1, clock: clock, onError: { _ in })
+                    defer { renderer.releaseResources() }
+                    if scene.canvas == .desktopSpan {
+                        renderer.desktopFrame = screens.reduce(CGRect.null) { $0.union($1.frame) }
+                        renderer.displayFrame = screen.frame
+                    }
+                    try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : time,
+                        size: CGSize(width: width, height: height))
+                    try Task.checkCancellation()
+                    guard self.generation == request else { return }
+                    let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: width, height: height, sampleVideo: false)
+                    guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+                          let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                            bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent),
+                          let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+                    else { throw SceneError.invalid("Could not prepare the system wallpaper still.") }
+                    let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+                    let slotKey = "wallpaperBackdropSlot.\(displayID)"
+                    let slot = 1 - min(1, max(0, UserDefaults.standard.integer(forKey: slotKey)))
+                    let destination = root.appendingPathComponent("display-\(displayID)-\(slot).jpg")
+                    try jpeg.write(to: destination, options: .atomic)
+                    try NSWorkspace.shared.setDesktopImageURL(destination, for: screen,
+                        options: [.imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue, .allowClipping: true])
+                    UserDefaults.standard.set(slot, forKey: slotKey)
+                }
+            } catch {
+                guard !Task.isCancelled, self.generation == request else { return }
+                self.lastReloadError = "System wallpaper still: " + error.localizedDescription
+                self.updateMenu()
+            }
+        }
+    }
+
+    private func configureDesktopInteraction(_ surface: WallpaperSurface) {
+        surface.setCleanDesktop(comfort?.desktopIconsVisible == false,
+            click: { [weak self] in self?.revealDesktop() },
+            menu: { [weak self] in self?.cleanDesktopMenu() ?? NSMenu() })
+    }
+
+    @objc func revealDesktop() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = ["1"]
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
+            configuration: configuration) { [weak self] _, error in
+                if let error { DispatchQueue.main.async { self?.showError(error.localizedDescription) } }
+            }
+    }
+
+    @objc private func openDesktopFolder() {
+        NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop"))
+    }
+    @objc private func customizeDesktop() { onShowSettings?() }
+    private func cleanDesktopMenu() -> NSMenu {
+        let menu = NSMenu()
+        for (title, action) in [("Change Wallpaper…", #selector(customizeDesktop)),
+                                ("Open Desktop Folder", #selector(openDesktopFolder)),
+                                ("Show / Restore Windows", #selector(revealDesktop))] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+        }
+        menu.addItem(.separator())
+        comfort?.addDesktopIconsItem(to: menu)
+        return menu
     }
 
     private func rebuild() {
@@ -501,6 +623,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         generation += 1
         loadTask?.cancel()
         loadTask = nil
+        backdropTask?.cancel()
+        backdropTask = nil
         screenRefresh?.cancel()
         screenRefresh = nil
         releaseSurfaces()
@@ -534,6 +658,22 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         controller.retiring = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
         let old = controller.retiring
         controller.surfaces = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        if let surface = controller.surfaces.first {
+            let originalView = surface.window.contentView
+            var clicks = 0
+            surface.setCleanDesktop(true, click: { clicks += 1 }, menu: { NSMenu() })
+            precondition(!surface.window.ignoresMouseEvents)
+            precondition(surface.window.level.rawValue > Int(CGWindowLevelForKey(.desktopIconWindow)))
+            precondition(surface.window.contentView === originalView, "Clean desktop must reuse the renderer")
+            // Local dispatch to an unshown test window, never posted to the system.
+            let event = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            surface.window.sendEvent(event)
+            precondition(clicks == 1, "Clean desktop must handle a click instead of opening an invisible file")
+            surface.setCleanDesktop(false, click: {}, menu: { NSMenu() })
+            precondition(surface.window.ignoresMouseEvents)
+            precondition(surface.window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow)))
+        }
         controller.surfaces.forEach { $0.window.alphaValue = 0 }
         controller.beginTransition()
         let deadline = Date(timeIntervalSinceNow: 2)
@@ -703,6 +843,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     deinit {
+        backdropTask?.cancel()
         loadTask?.cancel()
         screenRefresh?.cancel()
         observers.forEach { $0.0.removeObserver($0.1) }
