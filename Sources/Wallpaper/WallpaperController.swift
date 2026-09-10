@@ -745,7 +745,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func ensureStatusItem() {
         guard presentsWindows, statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: "Idlesse Wallpaper")
+        item.button?.image = NSImage(systemSymbolName: "cat", accessibilityDescription: "Idlesse")
         item.button?.toolTip = "Idlesse Wallpaper"
         statusItem = item
     }

@@ -54,7 +54,7 @@ scene transport time; ordinary looping video uses elapsed preview time.
 Studio supplies the moving composition. This is a still-preview library,
 not a grid of continuously playing wallpapers.
 
-The memory cache holds at most eight 512×288 widescreen posters (about 4.5 MiB pixel data).
+The memory cache holds at most four 1024×576 widescreen posters (about 9 MiB pixel data).
 There is no disk thumbnail cache or original-media duplication. Renderer working
 memory uses the existing scene budgets during generation. Selecting a scene or
 reopening Library checks its revision before reusing a poster. Packages use bounded
