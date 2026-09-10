@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows assets previously retrieved using BA-AD; not publisher wallpaper downloads",
+  "items": [
+    {"id": "ch0282_home", "title": "Karin-School-Uniform", "stem": "CH0282_home", "animation": "Idle_01", "seconds": 10},
+    {"id": "ch0167_home", "title": "Reisa", "stem": "CH0167_home", "animation": "Idle_01", "seconds": 20},
+    {"id": "ch0203_home", "title": "Yuzu-Maid", "stem": "CH0203_home", "animation": "Idle_01", "seconds": 20}
+  ]
+}
