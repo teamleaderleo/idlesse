@@ -83,6 +83,102 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var selectedURL: URL?
     private(set) var pausedByUser = false
     private var playable: SceneDescriptor?
+    // Only the interactive host persists state; smoke/qualification controllers stay isolated.
+    var persistsSelection = false
+    var resumeDefaults = UserDefaults.standard
+    private static let resumeKey = "wallpaperResumeBookmark"
+    private static let pauseKey = "wallpaperResumePaused"
+
+    func restoreSelection() {
+        guard persistsSelection, !isRunning, !isLoading,
+              let data = resumeDefaults.data(forKey: Self.resumeKey) else { return }
+        do {
+            var stale = false
+            let url = try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil, bookmarkDataIsStale: &stale)
+            select(url, automatic: true, restoringPause: resumeDefaults.bool(forKey: Self.pauseKey))
+        } catch {
+            lastReloadError = "The previous wallpaper is unavailable. Choose it again in Wallpapers."
+            updateMenu()
+        }
+    }
+
+    static func smokeResume(url: URL) throws {
+        let suite = "Idlesse.ResumeTest." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func host() -> WallpaperController {
+            let c = WallpaperController()
+            c.resumeDefaults = defaults
+            c.persistsSelection = true
+            c.presentsWindows = false
+            c.onError = { _ in }
+            return c
+        }
+        func settle(_ c: WallpaperController) {
+            let deadline = Date().addingTimeInterval(15)
+            while c.isLoading && Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            precondition(!c.isLoading, "Resume timed out")
+        }
+        let first = host()
+        first.select(url)
+        settle(first)
+        precondition(first.isRunning)
+        first.togglePause()
+        first.shutdown()
+        precondition(defaults.data(forKey: resumeKey) != nil)
+        let second = host()
+        second.restoreSelection()
+        settle(second)
+        precondition(second.selectedURL == url && second.pausedByUser)
+        second.select(url.appendingPathComponent("missing.mp4"))
+        settle(second)
+        precondition(second.selectedURL == url, "Failed replacement must retain scene")
+        second.stop()
+        let third = host()
+        third.restoreSelection()
+        precondition(!third.isRunning && !third.isLoading, "Stop must suppress restart")
+        print("Resume checks passed: selection, pause, quit, failed replacement, explicit stop")
+    }
+
+    private func saveSelection() {
+        guard persistsSelection, let selectedURL else { return }
+        do {
+            let data = try selectedURL.bookmarkData(options: .withSecurityScope,
+                includingResourceValuesForKeys: nil, relativeTo: nil)
+            resumeDefaults.set(data, forKey: Self.resumeKey)
+            resumeDefaults.set(pausedByUser, forKey: Self.pauseKey)
+        } catch {
+            // Never resume an older wallpaper after the latest selection could not be saved.
+            resumeDefaults.removeObject(forKey: Self.resumeKey)
+        }
+    }
+
+    func shutdown() {
+        saveSelection()
+        persistsSelection = false
+        stop()
+    }
+
+    var diagnosticSummary: String {
+        let nodes = playable?.allNodes ?? []
+        return """
+        Wallpaper active: \(isRunning)
+        Loading: \(isLoading)
+        Paused by user: \(pausedByUser)
+        Suspended: \(suspended)
+        Low Power Mode: \(ProcessInfo.processInfo.isLowPowerModeEnabled)
+        Surfaces: \(surfaces.count)
+        Retiring surfaces: \(retiring.count)
+        Nodes: \(nodes.count)
+        Video nodes: \(nodes.filter { $0.kind == .video }.count)
+        Creative renderer required: \(playable?.requiresMetal ?? false)
+        Crossfade seconds: \(transitionDuration)
+        """
+    }
+
     private var selectedIsAnimated: Bool { playable?.animated ?? false }
     private var clock = SceneClock()
     private var audioSession: SceneAudioSession?
@@ -204,7 +300,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     var onManualSelection: (() -> Void)?
-    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false) {
+    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil) {
         if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
         generation += 1
@@ -263,7 +359,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.scopeStarted = access
                 self.playable = playable
                 adopted = true
-                if !reloading { self.pausedByUser = false }
+                if !reloading { self.pausedByUser = restoringPause ?? false }
                 if !reuseClock {
                     self.audioSession = nil
                     self.audioSession = SceneAudioSession(clock: candidateClock) { [weak self] message in
@@ -287,6 +383,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 self.ensureStatusItem()
                 self.updateMenu()
+                self.saveSelection()
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
@@ -385,12 +482,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     @objc func togglePause() {
         finishTransition()
         pausedByUser.toggle()
+        saveSelection()
         clock.setPaused(suspended || shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
         updateMenu()
     }
 
     @objc func stop() {
+        if persistsSelection {
+            resumeDefaults.removeObject(forKey: Self.resumeKey)
+            resumeDefaults.removeObject(forKey: Self.pauseKey)
+        }
         onManualSelection?()
         let wasActive = isRunning || isLoading
         watcher = nil
