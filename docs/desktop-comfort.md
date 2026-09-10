@@ -153,3 +153,10 @@ failed replacement, and teardown passed; final surface count was zero.
 Wallpaper, Library, export/cancellation, and restart-recovery smoke tests passed.
 These counts are not visible menu-bar FPS. The test process could not be selected
 by the UI inspection tool, so composite menu-bar appearance remains unverified.
+
+Interactive enablement found an AppKit placement issue: setting
+`isFloatingPanel=false` reset the level, and the default panel constraint moved
+the strip below the menu bar. The strip now uses a non-key panel that preserves
+its requested frame and assigns level 23 after panel configuration. Live window
+inspection confirmed both displays at their top edge. Its height uses the
+per-screen reserved top inset as well as the status-bar/notch metrics.
