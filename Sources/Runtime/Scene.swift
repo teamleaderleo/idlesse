@@ -749,7 +749,7 @@ struct LocalSceneSource: SceneSource {
         }
     }
 
-    fileprivate static func read(_ url: URL) throws -> SceneDescriptor {
+    static func read(_ url: URL) throws -> SceneDescriptor {
         try Task.checkCancellation()
         guard url.isFileURL else { throw SceneError.invalid("Download this scene before opening it.") }
         if url.pathExtension.lowercased() != "idlesse" {

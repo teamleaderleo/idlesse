@@ -5,6 +5,48 @@ private final class StudioInspectorView: NSView {
     override var isFlipped: Bool { true }
 }
 
+final class StudioPerformanceHUDView: NSVisualEffectView {
+    private let label = NSTextField(wrappingLabelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        material = .hudWindow
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.2).cgColor
+
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .labelColor
+        label.isEditable = false
+        label.isSelectable = false
+        label.isBezeled = false
+        label.drawsBackground = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    func update(text: String) {
+        label.stringValue = text
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+}
+
 extension StudioWindowController {
     /// Exercises recovery without opening a window or touching user media.
     static func smokeTestResetRecovery() {
@@ -134,6 +176,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let canvas = NSView()
     private let viewport = NSScrollView()
+    private let hudOverlay = StudioPerformanceHUDView()
+    private let hudButton = NSButton(title: "HUD", target: nil, action: nil)
     private let dragOverlay = SceneDragOverlay()
     private let addMediaButton = NSButton(title: "+ Image / Video…", target: nil, action: nil)
     private let addParticlesButton = NSButton(title: "+ Particles", target: nil, action: nil)
@@ -334,7 +378,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         transport.toolTip = "Seek, change motion speed, or loop scene animation in Metal"
         let playback = NSButton(title: "Playback…", target: self, action: #selector(editAuthoredPlayback))
         playback.toolTip = "Save scene duration, looping, and speed in the document"
-        let controls = NSStackView(views: [open, sample, pauseButton, transport, playback, engine, zoomOut, fit, zoomIn, measureButton, applyButton])
+        hudButton.target = self
+        hudButton.action = #selector(toggleHUD)
+        hudButton.setButtonType(.pushOnPushOff)
+        hudButton.toolTip = "Toggle real-time performance HUD overlay"
+        let showHUD = UserDefaults.standard.bool(forKey: "Idlesse.studio.showHUD")
+        hudButton.state = showHUD ? .on : .off
+        hudOverlay.isHidden = !showHUD
+        let controls = NSStackView(views: [open, sample, pauseButton, transport, playback, engine, zoomOut, fit, zoomIn, measureButton, hudButton, applyButton])
         controls.spacing = 10
         nodePicker.onVisibility = { [weak self] in self?.editor.toggleVisibility($0) }
         nodePicker.onLock = { [weak self] in self?.editor.toggleLock($0) }
@@ -471,7 +522,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 self.detailLabel.stringValue = "Loop set to 0–\(end) seconds. Resume to play; Time… changes or disables it."
             } catch { self.detailLabel.stringValue = error.localizedDescription }
         }
-        for child in [heading, viewport, controls, frameRate, timeline] {
+        for child in [heading, viewport, controls, frameRate, timeline, hudOverlay] {
             child.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(child)
         }
@@ -497,7 +548,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             timeline.trailingAnchor.constraint(equalTo: viewport.trailingAnchor),
             timeline.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -12),
             controls.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
+            controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
+            hudOverlay.topAnchor.constraint(equalTo: viewport.topAnchor, constant: 12),
+            hudOverlay.trailingAnchor.constraint(equalTo: viewport.trailingAnchor, constant: -12),
+            hudOverlay.widthAnchor.constraint(greaterThanOrEqualToConstant: 180)
         ])
     }
     private var checkedRecovery = false
@@ -1593,6 +1647,27 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         performanceLabel.stringValue = host.performanceText()
         measureButton.isEnabled = measurement == nil && renderer?.diagnostics.state == .running && renderer?.diagnostics.animated == true && renderer?.gpuTotals != nil
         if measurementResult != nil { measureButton.title = "Measure Again" }
+        if !hudOverlay.isHidden {
+            var lines: [String] = []
+            lines.append("Renderer: \(renderer is MetalSceneRenderer ? "Metal (GPU)" : "Native / AVPlayer")")
+            lines.append("Status: \(renderer?.diagnostics.state == .running ? "Running" : "Paused")")
+            lines.append("Rate: \(host.performanceText())")
+            if let gpu = renderer?.gpuTotals, gpu.frames > 0 {
+                let msPerFrame = (gpu.seconds * 1000.0) / Double(gpu.frames)
+                lines.append(String(format: "GPU: %.2f ms/frame (%d frames)", msPerFrame, gpu.frames))
+            }
+            lines.append("Nodes: \(scene.nodes.count)")
+            lines.append("Canvas: \(Int(canvas.bounds.width)) × \(Int(canvas.bounds.height))")
+            hudOverlay.update(text: lines.joined(separator: "\n"))
+        }
+    }
+    @objc private func toggleHUD() {
+        let visible = hudButton.state == .on
+        hudOverlay.isHidden = !visible
+        UserDefaults.standard.set(visible, forKey: "Idlesse.studio.showHUD")
+        if visible {
+            updatePerformance()
+        }
     }
     @objc private func togglePause() { paused.toggle(); updatePlayback() }
     @objc private func editAuthoredPlayback() {

@@ -134,6 +134,34 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var resumeDefaults = UserDefaults.standard
     private static let resumeKey = "wallpaperResumeBookmark"
     private static let pauseKey = "wallpaperResumePaused"
+    private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
+
+    var sameWallpaperOnAllDisplays: Bool {
+        get {
+            if resumeDefaults.object(forKey: Self.sameDisplaysKey) == nil { return true }
+            return resumeDefaults.bool(forKey: Self.sameDisplaysKey)
+        }
+        set {
+            resumeDefaults.set(newValue, forKey: Self.sameDisplaysKey)
+            rebuild()
+            updateMenu()
+        }
+    }
+
+    func displayURL(for displayID: UInt32) -> URL? {
+        guard let data = resumeDefaults.data(forKey: "\(Self.resumeKey).\(displayID)") else { return selectedURL }
+        var stale = false
+        return try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
+    }
+
+    func setDisplayURL(_ url: URL, for displayID: UInt32) {
+        do {
+            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            resumeDefaults.set(data, forKey: "\(Self.resumeKey).\(displayID)")
+            rebuild()
+            updateMenu()
+        } catch {}
+    }
 
     func restoreSelection() {
         guard persistsSelection, !isRunning, !isLoading,
@@ -472,7 +500,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         var result: [WallpaperSurface] = []
         let hasVideo = playable.allNodes.contains { $0.kind == .video }
         let needsMetal = playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || WallpaperSurface.liveMenuStripEnabled
-        let sharedHub = (hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
+        let sharedHub = (sameWallpaperOnAllDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
             self.stop()
@@ -480,8 +508,24 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         } : nil
         do {
             for screen in NSScreen.screens {
+                let screenPlayable: SceneDescriptor
+                let screenHub: SharedVideoHub?
+                if sameWallpaperOnAllDisplays {
+                    screenPlayable = playable
+                    screenHub = sharedHub
+                } else {
+                    let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+                    if let overrideURL = displayURL(for: displayID), overrideURL != selectedURL,
+                       let resolved = try? LocalSceneSource.read(overrideURL) {
+                        screenPlayable = resolved
+                        screenHub = nil
+                    } else {
+                        screenPlayable = playable
+                        screenHub = nil
+                    }
+                }
                 let surface = try autoreleasepool {
-                    try WallpaperSurface(screen: screen, playable: playable, clock: clock, sharedHub: sharedHub) { [weak self] message in
+                    try WallpaperSurface(screen: screen, playable: screenPlayable, clock: clock, sharedHub: screenHub) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
                         self.stop()
@@ -819,6 +863,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             item.state = transitionDuration == seconds ? .on : .off
         }
         transition.submenu = choices; menu.addItem(transition)
+        if NSScreen.screens.count > 1 {
+            let displaysItem = NSMenuItem(title: "Displays", action: nil, keyEquivalent: "")
+            let displayMenu = NSMenu()
+            let sameItem = addItem(displayMenu, "Same Wallpaper on All Displays", #selector(toggleSameDisplays))
+            sameItem.state = sameWallpaperOnAllDisplays ? .on : .off
+            displaysItem.submenu = displayMenu
+            menu.addItem(displaysItem)
+        }
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
         pause.isEnabled = isRunning && selectedIsAnimated
         let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
@@ -838,6 +890,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc private func showAppSettings() { onShowSettings?() }
+    @objc private func toggleSameDisplays() { sameWallpaperOnAllDisplays.toggle() }
 
     @discardableResult private func addItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")

@@ -47,6 +47,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let widgets = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
     private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
     private let batteryThrottle = NSButton(checkboxWithTitle: "Cap to 30 fps on battery", target: nil, action: nil)
+    private let sameDisplays = NSButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
@@ -122,7 +123,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         liveMenu.target = self; liveMenu.action = #selector(changeMenuAnimation)
         batteryThrottle.target = self; batteryThrottle.action = #selector(changeBatteryThrottle)
         batteryThrottle.toolTip = "Automatically caps frame rate to 30 fps when running on battery to conserve energy."
-        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu], [batteryThrottle]])
+        sameDisplays.target = self; sameDisplays.action = #selector(changeSameDisplays)
+        sameDisplays.toolTip = "Synchronizes the same wallpaper across all monitors for maximum performance and efficiency."
+        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu], [batteryThrottle], [sameDisplays]])
         schedule.target = self; schedule.action = #selector(changeBedtime)
         amount.target = self; amount.action = #selector(changeBedtime); amount.isContinuous = true
         amount.setAccessibilityLabel("Dimming")
@@ -189,6 +192,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
         batteryThrottle.state = SceneFrameRate.throttleOnBattery ? .on : .off
+        sameDisplays.state = wallpaper.sameWallpaperOnAllDisplays ? .on : .off
         let values = comfort.bedtimeSettings
         schedule.state = values.enabled ? .on : .off
         amount.doubleValue = values.amount * 100
@@ -206,6 +210,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     }
     @objc private func changeBatteryThrottle() {
         SceneFrameRate.throttleOnBattery = batteryThrottle.state == .on
+    }
+    @objc private func changeSameDisplays() {
+        wallpaper.sameWallpaperOnAllDisplays = sameDisplays.state == .on
     }
     @objc private func mirrorWallpaperToSaver() {
         guard let url = wallpaper.selectedURL else {

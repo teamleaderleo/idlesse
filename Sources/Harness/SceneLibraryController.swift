@@ -20,10 +20,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
+    private let viewModeControl = NSSegmentedControl(labels: ["List", "Grid"], trackingMode: .selectOne, target: nil, action: nil)
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
+    private let scroll = NSScrollView()
+    private let right = NSStackView()
+    private let gridScroll = NSScrollView()
+    private let gridView = LibraryGridView()
     private let poster = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
@@ -165,7 +170,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sourceActions.addItem(withTitle: "Sources…")
         sourceActions.target = self
         sourceActions.action = #selector(sourceAction)
-        let toolbar = NSStackView(views: [search, filter, sort, collectionActions, sourceActions, add])
+        viewModeControl.target = self
+        viewModeControl.action = #selector(viewModeChanged)
+        viewModeControl.selectedSegment = UserDefaults.standard.integer(forKey: "Idlesse.library.viewMode")
+        let toolbar = NSStackView(views: [search, filter, sort, viewModeControl, collectionActions, sourceActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -179,9 +187,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         table.target = self; table.doubleAction = #selector(doubleClickScene)
         table.setAccessibilityLabel("Scenes")
         table.registerForDraggedTypes([.fileURL])
-        let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
+        gridScroll.documentView = gridView
+        gridScroll.hasVerticalScroller = true
+        gridScroll.hasHorizontalScroller = false
+        gridScroll.autohidesScrollers = true
+        gridScroll.drawsBackground = false
+        gridView.autoresizingMask = [.width]
+        gridView.onSelect = { [weak self] item in
+            self?.selected = item
+            if let index = self?.items.firstIndex(where: { $0.id == item.id }) {
+                self?.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                self?.table.scrollRowToVisible(index)
+            }
+            self?.preview()
+        }
+        gridView.onDoubleAction = { [weak self] item in
+            self?.selected = item
+            self?.useScene()
+        }
+        gridView.onRequestThumbnail = { [weak self] item, callback in
+            self?.requestThumbnail(for: item, completion: callback)
+        }
         poster.imageScaling = .scaleProportionallyUpOrDown
         poster.wantsLayer = true
         poster.layer?.backgroundColor = NSColor.black.cgColor
@@ -204,11 +232,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         apply.bezelColor = .controlAccentColor
         apply.contentTintColor = .white
         detail.font = .systemFont(ofSize: 12)
-        let right = NSStackView(views: [poster, heading, detail, primary])
+        right.setViews([poster, heading, detail, primary], in: .leading)
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
-        for view in [toolbar, scroll, right] {
+        for view in [toolbar, scroll, right, gridScroll] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -229,8 +257,24 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             poster.widthAnchor.constraint(equalTo: right.widthAnchor),
             poster.heightAnchor.constraint(equalTo: poster.widthAnchor, multiplier: 9.0 / 16.0),
             heading.widthAnchor.constraint(equalTo: right.widthAnchor),
-            detail.widthAnchor.constraint(equalTo: right.widthAnchor)
+            detail.widthAnchor.constraint(equalTo: right.widthAnchor),
+            gridScroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
+            gridScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            gridScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
+        viewModeChanged()
+    }
+
+    @objc private func viewModeChanged() {
+        let isGrid = viewModeControl.selectedSegment == 1
+        UserDefaults.standard.set(viewModeControl.selectedSegment, forKey: "Idlesse.library.viewMode")
+        scroll.isHidden = isGrid
+        right.isHidden = isGrid
+        gridScroll.isHidden = !isGrid
+        if isGrid {
+            gridView.update(items: items, selectedID: selected?.id)
+        }
     }
 
     weak var hostWindow: NSWindow?
@@ -310,16 +354,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
         table.reloadData()
+        gridView.update(items: items, selectedID: selected?.id)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             // Reloading can keep the same row number while changing its identity.
             // AppKit need not send a selection notification in that case.
             selected = items[index]
+            gridView.select(id: selected?.id)
             preview()
             table.scrollRowToVisible(index)
         } else {
             table.deselectAll(nil)
             selected = nil
+            gridView.select(id: nil)
             preview()
         }
     }
@@ -340,42 +387,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         thumbnail.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(thumbnail)
         cell.imageView = thumbnail
-        thumbnails.countLimit = 64
-        if let opened = try? open(item) {
-            let posterAccess: SceneLibraryStore.Access?
-            if let entry = item.entry { posterAccess = try? store.accessPoster(entry) }
-            else { posterAccess = nil }
-            // A serial queue bounds decoder use; only cells requested by AppKit enqueue work.
-            thumbnailQueue.async { [weak self, weak thumbnail, opened, posterAccess] in
-                guard let self, thumbnail != nil else { return }
-                let source = opened.url
-                let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
-                if let image = self.thumbnails.object(forKey: key) {
-                    DispatchQueue.main.async { thumbnail?.image = image }
-                    return
-                }
-                let image: CGImage?
-                if let explicit = posterAccess?.url, let poster = Self.listThumbnail(explicit) {
-                    image = poster
-                } else if source.pathExtension.lowercased() == "idlesse" {
-                    image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
-                } else if let still = Self.listThumbnail(source) {
-                    image = still
-                } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
-                    ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
-                    image = sidecar
-                } else {
-                    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
-                    generator.appliesPreferredTrackTransform = true
-                    generator.maximumSize = CGSize(width: 192, height: 108)
-                    image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
-                }
-                guard let image else { return }
-                let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-                self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
-                DispatchQueue.main.async { thumbnail?.image = result }
-            }
+        requestThumbnail(for: item) { [weak thumbnail] image in
+            thumbnail?.image = image
         }
         text.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(text)
@@ -390,16 +403,54 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         ])
         return cell
     }
+    func requestThumbnail(for item: Item, completion: @escaping (NSImage) -> Void) {
+        thumbnails.countLimit = 64
+        guard let opened = try? open(item) else { return }
+        let posterAccess: SceneLibraryStore.Access?
+        if let entry = item.entry { posterAccess = try? store.accessPoster(entry) }
+        else { posterAccess = nil }
+        thumbnailQueue.async { [weak self, opened, posterAccess] in
+            guard let self else { return }
+            let source = opened.url
+            let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+            if let image = self.thumbnails.object(forKey: key) {
+                DispatchQueue.main.async { completion(image) }
+                return
+            }
+            let image: CGImage?
+            if let explicit = posterAccess?.url, let poster = Self.listThumbnail(explicit) {
+                image = poster
+            } else if source.pathExtension.lowercased() == "idlesse" {
+                image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
+            } else if let still = Self.listThumbnail(source) {
+                image = still
+            } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
+                ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
+                image = sidecar
+            } else {
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 320, height: 180)
+                image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
+            }
+            guard let image else { return }
+            let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+            self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
     private static func listThumbnail(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 192
+            kCGImageSourceThumbnailMaxPixelSize: 320
         ] as CFDictionary)
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        gridView.select(id: selected?.id)
         preview()
     }
     private func open(_ item: Item) throws -> OpenedItem {
