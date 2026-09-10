@@ -118,7 +118,8 @@ better and identified activation/menu-bar issues addressed by this follow-up.
 
 ### Live menu strip experiment
 
-`IDLESSE_LIVE_MENU_STRIP=1` opts a development process into a narrow Metal
+`IDLESSE_LIVE_MENU_STRIP=1` (or the app preference
+`comfort.liveMenuStrip=true`, applied on restart) opts into a narrow Metal
 presentation strip at `mainMenu - 1`. It forces the Metal renderer for that
 process. The strip copies the top rows of the existing compositor drawable into
 a two-drawable CAMetalLayer on the same command buffer. It creates no second

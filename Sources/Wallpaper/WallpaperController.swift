@@ -20,6 +20,10 @@ private final class DesktopWindow: NSPanel {
 }
 
 final class WallpaperSurface {
+    private static var liveMenuStripEnabled: Bool {
+        ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" ||
+            UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip")
+    }
     let window: NSWindow
     private let renderer: SceneRenderer
     private var menuStrip: MenuBarStrip?
@@ -46,7 +50,7 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" {
+        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || Self.liveMenuStripEnabled {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
         } else {
@@ -58,7 +62,7 @@ final class WallpaperSurface {
             metal.displayFrame = screen.frame
         }
         window.contentView = renderer.view
-        if ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1",
+        if Self.liveMenuStripEnabled,
            let metal = renderer as? MetalSceneRenderer {
             let strip = MenuBarStrip(screen: screen)
             menuStrip = strip
