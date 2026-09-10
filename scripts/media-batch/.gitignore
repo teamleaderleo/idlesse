@@ -1,0 +1,7 @@
+__pycache__/
+node_modules/
+render
+render.bundle.js
+assets*/
+*.mp4
+*.zip
