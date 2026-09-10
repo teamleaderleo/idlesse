@@ -14,9 +14,19 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private func prepareLibrary() throws {
         if library == nil {
             library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
-                onEdit: { [weak self] url, asCopy in self?.scenePreview.openLibraryScene(url, asCopy: asCopy) })
+                onEdit: { [weak self] url, asCopy in
+                    guard let self else { return }
+                    self.scenePreview.onClose = { [weak self] in
+                        self?.library?.releaseActiveEditAccess()
+                        self?.showLibrary()
+                    }
+                    self.scenePreview.openLibraryScene(url, asCopy: asCopy)
+                })
         }
-        wallpaper.onManualSelection = { [weak self] in self?.library?.stopRotation() }
+        wallpaper.onManualSelection = { [weak self] in
+            self?.library?.stopRotation()
+            self?.library?.releaseActiveUseAccess()
+        }
         library?.startSchedules()
     }
     @objc private func showLibrary() {
@@ -44,7 +54,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func showScenePreview() {
         saverView?.stopAnimation()
         window?.orderOut(nil)
-        scenePreview.onClose = { [weak self] in self?.showLibrary() }
+        scenePreview.onClose = { [weak self] in
+            self?.library?.releaseActiveEditAccess()
+            self?.showLibrary()
+        }
         scenePreview.show()
     }
 
@@ -61,7 +74,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.saverView?.stopAnimation()
             self?.window?.orderOut(nil)
         }
-        wallpaper.onStop = { [weak self] in self?.showLibrary() }
+        wallpaper.onStop = { [weak self] in
+            self?.library?.releaseActiveUseAccess()
+            self?.showLibrary()
+        }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
         wallpaper.presentingWindow = { [weak self] in self?.appSettings.window }
         wallpaper.comfort = comfort
@@ -188,6 +204,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     func applicationWillTerminate(_ notification: Notification) {
         library?.windowWillClose(notification)
+        library?.releaseActiveUseAccess()
+        library?.releaseActiveEditAccess()
         wallpaper.onStop = nil
         wallpaper.shutdown()
         saverView?.stopAnimation()

@@ -11,12 +11,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let builtin: URL?
         let entry: SceneLibraryStore.Entry?
     }
+    private struct OpenedItem {
+        let url: URL
+        let access: SceneLibraryStore.Access?
+    }
     private let store: SceneLibraryStore
     private let table = NSTableView()
     private let search = NSSearchField()
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
     private let poster = NSImageView()
@@ -45,6 +50,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
     private var importFailureHandler: (([String]) -> Void)?
+    private var activeUseAccess: [String: SceneLibraryStore.Access] = [:]
+    private var activeEditAccess: [String: SceneLibraryStore.Access] = [:]
     private var generation = 0
     private var rotationTimer: Timer?
     private var rotationCollectionID: String?
@@ -53,6 +60,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var rotationMinutes = 30
     private var scheduleTimer: Timer?
     private var scheduleToken: String?
+
     func startSchedules() {
         guard scheduleTimer == nil else { return }
         checkSchedule()
@@ -93,6 +101,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         rotationCollectionID = nil
         collectionActions.item(at: 0)?.title = "Collections…"
     }
+    func releaseActiveUseAccess() { activeUseAccess.removeAll() }
+    func releaseActiveEditAccess() { activeEditAccess.removeAll() }
+    private func retainUseAccess(_ access: SceneLibraryStore.Access?) {
+        guard let access, let sourceID = access.sourceID else { return }
+        activeUseAccess[sourceID] = access
+    }
+    private func retainEditAccess(_ access: SceneLibraryStore.Access?) {
+        guard let access, let sourceID = access.sourceID else { return }
+        activeEditAccess[sourceID] = access
+    }
     private func advanceRotation() {
         guard let id = rotationCollectionID,
               let collection = store.catalog.collections.first(where: { $0.id == id }) else {
@@ -103,9 +121,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
               let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
         do {
-            let target = try url(item)
+            let opened = try open(item)
             try store.used(item.id)
-            onUse(target)
+            retainUseAccess(opened.access)
+            onUse(opened.url)
         } catch { detail.stringValue = "Rotation: " + error.localizedDescription }
     }
     private var onUse: (URL) -> Void
@@ -116,10 +135,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         self.onEdit = onEdit
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         store = try SceneLibraryStore(file: indexURL ?? support.appendingPathComponent("Idlesse/Library/index.json"))
-        super.init(window: NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
+        super.init(window: NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 640),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false))
         window?.title = "Idlesse Library"
-        window?.minSize = NSSize(width: 840, height: 520)
+        window?.minSize = NSSize(width: 900, height: 520)
         window?.isReleasedWhenClosed = false
         window?.delegate = self
         window?.center()
@@ -142,7 +161,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         collectionActions.addItem(withTitle: "Collections…")
         collectionActions.target = self
         collectionActions.action = #selector(collectionAction)
-        let toolbar = NSStackView(views: [search, filter, sort, collectionActions, add])
+        sourceActions.addItem(withTitle: "Sources…")
+        sourceActions.target = self
+        sourceActions.action = #selector(sourceAction)
+        let toolbar = NSStackView(views: [search, filter, sort, collectionActions, sourceActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -244,6 +266,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func filterChanged() { reload() }
     func controlTextDidChange(_ obj: Notification) { reload() }
     private func reload(selecting id: String? = nil) {
+        reloadSourceActions()
         let previous = id ?? selected?.id
         let collectionID = filter.selectedItem?.representedObject as? String
         let previousFilter = min(filter.indexOfSelectedItem, 3)
@@ -308,12 +331,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         cell.addSubview(thumbnail)
         cell.imageView = thumbnail
         thumbnails.countLimit = 64
-        if let source = try? url(item) {
+        if let opened = try? open(item) {
+            let posterAccess: SceneLibraryStore.Access?
+            if let entry = item.entry { posterAccess = try? store.accessPoster(entry) }
+            else { posterAccess = nil }
             // A serial queue bounds decoder use; only cells requested by AppKit enqueue work.
-            thumbnailQueue.async { [weak self, weak thumbnail] in
+            thumbnailQueue.async { [weak self, weak thumbnail, opened, posterAccess] in
                 guard let self, thumbnail != nil else { return }
-                let accessed = source.startAccessingSecurityScopedResource()
-                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+                let source = opened.url
                 let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                 let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
                 if let image = self.thumbnails.object(forKey: key) {
@@ -321,7 +346,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     return
                 }
                 let image: CGImage?
-                if source.pathExtension.lowercased() == "idlesse" {
+                if let explicit = posterAccess?.url, let poster = Self.listThumbnail(explicit) {
+                    image = poster
+                } else if source.pathExtension.lowercased() == "idlesse" {
                     image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
                 } else if let still = Self.listThumbnail(source) {
                     image = still
@@ -365,10 +392,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
         preview()
     }
-    private func url(_ item: Item) throws -> URL {
-        if let builtin = item.builtin { return builtin }
+    private func open(_ item: Item) throws -> OpenedItem {
+        if let builtin = item.builtin { return OpenedItem(url: builtin, access: nil) }
         guard let entry = item.entry else { throw CocoaError(.fileNoSuchFile) }
-        return try store.resolve(entry)
+        let access = try store.access(entry)
+        return OpenedItem(url: access.url, access: access)
     }
     @objc private func refreshPreview() {
         if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
@@ -408,9 +436,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let self else { return }
             defer { if token == self.generation { self.task = nil } }
             do {
-                let url = try self.url(selected)
-                let accessed = url.startAccessingSecurityScopedResource()
-                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                let opened = try self.open(selected)
+                let url = opened.url
+                defer { withExtendedLifetime(opened.access) {} }
                 let revision = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
@@ -457,7 +485,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.detail.stringValue = note
             } catch {
                 guard token == self.generation, !Task.isCancelled else { return }
-                self.detail.stringValue = "Preview unavailable: \(error.localizedDescription). Try Open in Studio, or re-add a moved file."
+                self.detail.stringValue = "Preview unavailable: \(error.localizedDescription). Use Relink Source… for a moved Source, or re-add a moved individual file."
             }
         }
     }
@@ -481,6 +509,141 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                   let height = properties[kCGImagePropertyPixelHeight] as? Int else { return "" }
             return " · \(width) × \(height)"
         }.value
+    }
+
+    private func reloadSourceActions() {
+        sourceActions.removeAllItems()
+        sourceActions.addItem(withTitle: "Sources…")
+        sourceActions.addItem(withTitle: "Add Source…")
+        for source in store.catalog.sources {
+            sourceActions.addItem(withTitle: "Relink \(source.name)…")
+            sourceActions.lastItem?.representedObject = ["action": "relink", "id": source.id]
+            sourceActions.addItem(withTitle: "Remove \(source.name)…")
+            sourceActions.lastItem?.representedObject = ["action": "remove", "id": source.id]
+        }
+    }
+
+    @objc private func sourceAction() {
+        guard let item = sourceActions.selectedItem else { return }
+        if item.title == "Add Source…" { chooseSourceFolder(relinking: nil); return }
+        guard let command = item.representedObject as? [String: String],
+              let action = command["action"], let id = command["id"] else { return }
+        if action == "relink" { chooseSourceFolder(relinking: id); return }
+        guard action == "remove", let source = store.catalog.sources.first(where: { $0.id == id }),
+              let window = presentationWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove \(source.name) from Library?"
+        alert.informativeText = "Its Library entries, favorites, recent records, and collection references are removed. Files in the Source folder stay untouched."
+        alert.addButton(withTitle: "Remove Source")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            do {
+                let removed = Set(self.store.catalog.entries.filter { $0.sourceID == id }.map(\.id))
+                try self.store.removeSource(id)
+                for entryID in removed { self.cache.removeValue(forKey: entryID) }
+                self.cacheOrder.removeAll { removed.contains($0) }
+                self.thumbnails.removeAllObjects()
+                self.reload()
+                self.detail.stringValue = "Removed \(source.name) from the Library. Source files were preserved."
+            } catch { self.detail.stringValue = error.localizedDescription }
+        }
+    }
+
+    private func chooseSourceFolder(relinking id: String?) {
+        guard let window = presentationWindow else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.folder]
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = id == nil ? "Add Source" : "Relink Source"
+        panel.message = id == nil
+            ? "Choose a wallpaper folder. Idlesse scans it once and stores one folder access reference plus safe relative paths."
+            : "Choose the folder that now contains this Source. Saved entry IDs and relative paths stay unchanged."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let root = panel.url else { return }
+            if let id {
+                do {
+                    try self.store.relinkSource(id, to: root)
+                    self.cache.removeAll(); self.cacheOrder.removeAll(); self.thumbnails.removeAllObjects()
+                    self.reload()
+                    self.detail.stringValue = "Source relinked."
+                } catch { self.detail.stringValue = error.localizedDescription }
+            } else { self.importSource(root) }
+        }
+    }
+
+    private func importSource(_ root: URL) {
+        guard conversionTask == nil else {
+            detail.stringValue = "An import is already running. Try again when it finishes."
+            return
+        }
+        conversionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.conversionTask = nil }
+            self.detail.stringValue = "Scanning Source…"
+            do {
+                let drafts = try await Task.detached(priority: .utility) { try Self.scanSource(root) }.value
+                try Task.checkCancellation()
+                let oldIDs = Set(self.store.catalog.entries.map(\.id))
+                let source = try self.store.addSource(root, entries: drafts)
+                let firstNew = self.store.catalog.entries.first { $0.sourceID == source.id && !oldIDs.contains($0.id) }?.id
+                    ?? self.store.catalog.entries.first { $0.sourceID == source.id }?.id
+                self.search.stringValue = ""
+                self.filter.selectItem(at: 2)
+                self.reload(selecting: firstNew)
+                self.detail.stringValue = "\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id }.count) wallpapers in Library."
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.detail.stringValue = "Source import failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    nonisolated private static func scanSource(_ root: URL) throws -> [SceneLibraryStore.SourceEntry] {
+        let maxSourceScanItems = 20_000
+        let sourceNativeExtensions: Set<String> = ["idlesse", "jpg", "jpeg", "png", "heic", "mp4", "mov"]
+        let accessed = root.startAccessingSecurityScopedResource()
+        defer { if accessed { root.stopAccessingSecurityScopedResource() } }
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(at: root,
+            includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles],
+            errorHandler: { _, error in enumerationError = error; return false }) else {
+            throw NSError(domain: "IdlesseLibrary", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The Source folder could not be scanned."])
+        }
+        var visited = 0
+        var entries: [SceneLibraryStore.SourceEntry] = []
+        while let candidate = enumerator.nextObject() as? URL {
+            try Task.checkCancellation()
+            visited += 1
+            guard visited <= maxSourceScanItems else {
+                throw NSError(domain: "IdlesseLibrary", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "The Source contains more than 20,000 items. Choose a narrower folder."])
+            }
+            let values = try candidate.resourceValues(forKeys: [.isDirectoryKey])
+            let ext = candidate.pathExtension.lowercased()
+            if values.isDirectory == true {
+                if ext == "idlesse" {
+                    let relative = try SceneLibraryStore.relativePath(from: root, to: candidate)
+                    entries.append(.init(relativeMediaPath: relative,
+                        title: candidate.deletingPathExtension().lastPathComponent, mediaType: "scene"))
+                    enumerator.skipDescendants()
+                }
+            } else if sourceNativeExtensions.contains(ext) {
+                let relative = try SceneLibraryStore.relativePath(from: root, to: candidate)
+                let type = ext == "idlesse" ? "scene" : (["mp4", "mov"].contains(ext) ? "video" : "image")
+                entries.append(.init(relativeMediaPath: relative,
+                    title: candidate.deletingPathExtension().lastPathComponent, mediaType: type))
+            }
+            guard entries.count <= SceneLibraryStore.maxSourceEntries else {
+                throw NSError(domain: "IdlesseLibrary", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "The Library supports up to 4096 source-backed entries."])
+            }
+        }
+        if let enumerationError { throw enumerationError }
+        return entries.sorted { $0.relativeMediaPath.localizedStandardCompare($1.relativeMediaPath) == .orderedAscending }
     }
 
     @objc private func addScenes() {
@@ -508,7 +671,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return .copy
     }
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
-                   row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+                   row: Int, dropOperation operation: NSTableView.DropOperation) -> Bool {
         let urls = droppedURLs(info.draggingPasteboard)
         guard !urls.isEmpty else { return false }
         importScenes(urls)
@@ -740,9 +903,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }
         do {
-            let url = try url(selected)
+            let opened = try open(selected)
             try store.used(selected.id)
-            if editing { onEdit(url, asCopy || selected.builtin != nil) } else { stopRotation(); onUse(url); if !embedded { window?.orderOut(nil) } }
+            if editing {
+                retainEditAccess(opened.access)
+                onEdit(opened.url, asCopy || selected.builtin != nil)
+            } else {
+                stopRotation()
+                retainUseAccess(opened.access)
+                onUse(opened.url)
+                if !embedded { window?.orderOut(nil) }
+            }
         } catch { detail.stringValue = error.localizedDescription }
     }
     func windowWillClose(_ notification: Notification) {
@@ -771,6 +942,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
         precondition(controller.droppedURLs(pasteboard) == [raw])
         precondition(controller.items.count == 8 && controller.items.contains { $0.title == "Desk Clock" })
+        precondition(controller.sourceActions.itemArray.contains { $0.title == "Add Source…" })
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]
@@ -884,6 +1056,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         controller.window?.close()
-        print("Library UI checks passed: built-in poster/color, favorites, search, draft routing\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
+        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, draft routing\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
     }
 }
