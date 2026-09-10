@@ -21,6 +21,7 @@ let height=args.count>4 ? Int(args[4])! : 2160
 let folder=args.count>5 ? args[5] : "assets/ch0069_home"
 let stem=args.count>6 ? args[6] : "CH0069_home"
 let animation=args.count>7 ? args[7] : "Idle_01"
+let renderPort=Int(ProcessInfo.processInfo.environment["IDLESSE_RENDER_PORT"] ?? "18763") ?? 18763
 let startTime=args.count>8 ? Double(args[8])! : 0
 let app=NSApplication.shared
 app.setActivationPolicy(.prohibited)
@@ -53,10 +54,12 @@ class Driver:NSObject,WKNavigationDelegate {
  }
 }
 let driver=Driver()
-let view=WKWebView(frame:NSRect(x:0,y:0,width:width,height:height))
+let webConfiguration=WKWebViewConfiguration()
+webConfiguration.websiteDataStore = .nonPersistent()
+let view=WKWebView(frame:NSRect(x:0,y:0,width:width,height:height),configuration:webConfiguration)
 let window=NSWindow(contentRect:view.frame,styleMask:.borderless,backing:.buffered,defer:false)
 window.contentView=view
 view.navigationDelegate=driver
-view.load(URLRequest(url:URL(string:"http://127.0.0.1:18763/index.html")!))
+view.load(URLRequest(url:URL(string:"http://127.0.0.1:\(renderPort)/index.html")!))
 DispatchQueue.main.asyncAfter(deadline:.now()+600){fputs("Export timeout\n",stderr);exit(4)}
 app.run()

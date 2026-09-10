@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows assets previously retrieved using BA-AD; not publisher wallpaper downloads",
+  "items": [
+    {
+      "id": "mutsuki_home",
+      "title": "Mutsuki",
+      "stem": "Mutsuki_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0225_home",
+      "title": "Kikyou",
+      "stem": "CH0225_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "maki_home",
+      "title": "Maki",
+      "stem": "Maki_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "yoshimi_home",
+      "title": "Yoshimi",
+      "stem": "Yoshimi_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "chise_home",
+      "title": "Chise",
+      "stem": "Chise_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0155_home",
+      "title": "Natsu",
+      "stem": "CH0155_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0137_home",
+      "title": "Kokona",
+      "stem": "CH0137_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ibuki_home",
+      "title": "Ibuki",
+      "stem": "Ibuki_home",
+      "animation": "Idle_01",
+      "seconds": 10.000000953674316
+    },
+    {
+      "id": "airi_home",
+      "title": "Airi",
+      "stem": "Airi_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0195_home",
+      "title": "Hanae-Christmas",
+      "stem": "CH0195_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "utaha_home",
+      "title": "Utaha",
+      "stem": "Utaha_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    }
+  ]
+}

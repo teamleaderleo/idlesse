@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows assets previously retrieved using BA-AD; not publisher wallpaper downloads",
+  "items": [
+    {
+      "id": "ch0069_home",
+      "title": "Mika",
+      "stem": "CH0069_home",
+      "animation": "Idle_01",
+      "seconds": 33.333335876464844
+    },
+    {
+      "id": "ch0294_home",
+      "title": "Mika-Swimsuit",
+      "stem": "CH0294_home",
+      "animation": "Idle_01",
+      "seconds": 12.000000953674316
+    },
+    {
+      "id": "ch0086_home",
+      "title": "Kayoko-New-Year",
+      "stem": "CH0086_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0179_home",
+      "title": "Izuna-Swimsuit",
+      "stem": "CH0179_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "shigure_home",
+      "title": "Shigure",
+      "stem": "Shigure_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0158_home",
+      "title": "Rio",
+      "stem": "CH0158_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "ch0152_home",
+      "title": "Mine",
+      "stem": "CH0152_home",
+      "animation": "Idle_01",
+      "seconds": 20.000001907348633
+    },
+    {
+      "id": "ch0177_home",
+      "title": "Fuuka-New-Year",
+      "stem": "CH0177_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "hibiki_home",
+      "title": "Hibiki",
+      "stem": "Hibiki_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0082_home",
+      "title": "Sena-Casual",
+      "stem": "CH0082_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0180_home",
+      "title": "Shizuko-Swimsuit",
+      "stem": "CH0180_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "miyako_home",
+      "title": "Miyako",
+      "stem": "Miyako_home",
+      "animation": "Idle_01",
+      "seconds": 5.000000476837158
+    },
+    {
+      "id": "fuuka_home",
+      "title": "Fuuka",
+      "stem": "Fuuka_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "neru_home",
+      "title": "Neru",
+      "stem": "Neru_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "hinata_home",
+      "title": "Hinata",
+      "stem": "Hinata_home",
+      "animation": "Idle_01",
+      "seconds": 10.000000953674316
+    },
+    {
+      "id": "sakurako_home",
+      "title": "Sakurako",
+      "stem": "Sakurako_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "ch0194_home",
+      "title": "Serina-Christmas",
+      "stem": "CH0194_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "serina_home",
+      "title": "Serina",
+      "stem": "serina_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0160_home",
+      "title": "Chihiro",
+      "stem": "CH0160_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    }
+  ]
+}

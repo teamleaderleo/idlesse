@@ -2,7 +2,7 @@
 
 This is an offline operator tool, not a shipping renderer. It restores texture sheets once, adjusts atlas pixel coordinates, then renders authored Spine idle loops. It does not upscale thousands of video frames.
 
-The checked-in plan covers Karin (School Uniform), Reisa and Yuzu (Maid). Sources are existing Japan Windows assets; outputs are restored 4K60, not native 4K detail. Review candidates and framing before adding them to a plan.
+The default plan covers Karin (School Uniform), Reisa and Yuzu (Maid). `plans/plan-01.json` through `plan-06.json` cover 76 additional reviewed wishlist scenes. Sources are existing Japan Windows assets; outputs are restored 4K60, not native 4K detail. Review candidates and framing before adding them to a plan.
 
 ## Existing workstation
 
@@ -20,9 +20,25 @@ Outputs: HEVC MP4, 1024-wide JPEG, and source/hash/measurement JSON. Visual revi
 
 ## Rebuild render workspace
 
-The previously task-local renderer sources and dependency lock now live here. Copy `Render.swift`, `render.js`, `index.html`, `package.json`, and `package-lock.json` into a dedicated build workspace; run `npm ci`, `npx esbuild render.js --bundle --outfile=render.bundle.js`, then `swiftc Render.swift -o render -framework AppKit -framework WebKit`. Place extracted sources under `assets-pc/<asset-id>/`. No game assets are committed.
+Copy `Render.swift`, `Encode.swift`, `render.js`, `cameras.json`, `fast-export.js`, `index.html`, `package.json`, and `package-lock.json` into a dedicated build workspace. In that workspace:
 
-The runner owns a localhost-only HTTP server on port 18763 for the duration of exports and shuts it down afterward. A busy port fails rather than interrupting someone else's server. HEVC streams directly from the renderer; no giant frame sequence is accumulated.
+```sh
+npm ci
+node_modules/.bin/esbuild render.js --bundle --outfile=render.bundle.js
+node_modules/.bin/esbuild fast-export.js --bundle --outfile=fast-export.bundle.js
+swiftc Render.swift -o render -framework AppKit -framework WebKit
+swiftc Encode.swift -o encode -framework AppKit -framework WebKit
+```
+
+Place extracted sources under `assets-pc/<asset-id>/`. No game assets are committed. The renderer requires a logged-in macOS GUI session even though it presents no desktop window.
+
+The runner owns a localhost-only HTTP server on port 18763 for the duration of exports and shuts it down afterward. Use `--port 0` for an ephemeral port. A busy fixed port fails rather than interrupting someone else's server.
+
+The default encoder captures the WebGL canvas directly through WebCodecs and muxes HEVC using Mediabunny. Each frame has an exact 1/60-second timestamp; it does not record wall-clock playback or create a JPEG per frame. A nonce-protected loopback receiver accepts the finished MP4. Limits are 3840×2160, 5,400 frames (90 seconds), and 512 MiB per encoded file. The MP4 is buffered in memory during muxing; this is not a constant-memory streaming encoder.
+
+The native host stops after 120 seconds without progress or 30 minutes total. Jobs sharing a workspace serialize encoding through `.media-encoder.lock`. `run.py --encoder frames` selects the older JPEG/FFmpeg path; `--frame-asset ID` selects it for a specific asset. The runner attempts that local fallback once after a WebCodecs failure, without repeating GPU restoration. Full VideoToolbox decode checks dimensions, cadence and every frame before publication.
+
+Camera recipes live in `cameras.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Recheck first/middle/last frames after modifying a recipe; saved video checkpoints deliberately do not regenerate just because renderer code changed.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 
@@ -44,3 +60,17 @@ python3 scripts/media-batch/pipeline.py \
 ```
 
 It uses the workspace `.venv/bin/python` for Pillow-based QA, or `--qa-python`. The final human/agent checks are visual review and normal Library import. It does not mutate the running app's Library store behind its back or automatically spend money on a recurring schedule.
+
+## Additional wishlist batches
+
+Use `--plan /path/to/batch.json --job-name wishlist-01` with `pipeline.py` to process another bounded batch in the same prepared workspace. Each job has separate fingerprints, logs, state and Drive archive directory. Existing default job paths remain compatible. Only include visually reviewed source scenes; model filenames alone do not establish correct framing or an authored seamless loop.
+
+```sh
+python3 scripts/media-batch/pipeline.py \
+  --root build/ba-export-study --port 0 \
+  --plan scripts/media-batch/plans/plan-01.json --job-name wishlist-01 \
+  --output "$HOME/Pictures/Wallpapers/Blue Archive/Live2D Restored" \
+  --drive "$HOME/Library/CloudStorage/GoogleDrive-leoli.4u@gmail.com/My Drive/Idlesse"
+```
+
+`run.py --restore-only` prepares textures without starting video exports. Completed GPU restoration is checkpointed independently from video work. Import final MP4s through Library; do not include JPEG posters or provenance sidecars.

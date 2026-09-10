@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows assets previously retrieved using BA-AD; not publisher wallpaper downloads",
+  "items": [
+    {
+      "id": "misaki_home",
+      "title": "Misaki",
+      "stem": "Misaki_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "wakamo_home",
+      "title": "Wakamo",
+      "stem": "Wakamo_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0095_home",
+      "title": "Noa",
+      "stem": "CH0095_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "azusa_home",
+      "title": "Azusa",
+      "stem": "Azusa_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "shiroko_home",
+      "title": "Shiroko",
+      "stem": "Shiroko_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0170_home",
+      "title": "Kanna",
+      "stem": "CH0170_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0193_home",
+      "title": "Haruna-Track",
+      "stem": "CH0193_home",
+      "animation": "Idle_01",
+      "seconds": 20.000001907348633
+    },
+    {
+      "id": "ch0191_home",
+      "title": "Haruna-New-Year",
+      "stem": "CH0191_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "shun_home",
+      "title": "Shun",
+      "stem": "Shun_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "kirino_home",
+      "title": "Kirino",
+      "stem": "kirino_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0262_home",
+      "title": "Kirino-Swimsuit",
+      "stem": "CH0262_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "nodoka_home",
+      "title": "Nodoka",
+      "stem": "Nodoka_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "nonomi_home",
+      "title": "Nonomi",
+      "stem": "Nonomi_home",
+      "animation": "Idle_01",
+      "seconds": 3.000000238418579
+    },
+    {
+      "id": "momoi_home",
+      "title": "Momoi",
+      "stem": "Momoi_home",
+      "animation": "Idle_01",
+      "seconds": 4
+    },
+    {
+      "id": "koharu_home",
+      "title": "Koharu",
+      "stem": "Koharu_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "ch0266_home",
+      "title": "Saori-Swimsuit-Dj",
+      "stem": "CH0266_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "ch0240_home",
+      "title": "Aru-Dress",
+      "stem": "CH0240_home",
+      "animation": "Idle_01",
+      "seconds": 40.000003814697266
+    }
+  ]
+}

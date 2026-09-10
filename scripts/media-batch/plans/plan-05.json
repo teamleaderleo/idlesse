@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows assets previously retrieved using BA-AD; not publisher wallpaper downloads",
+  "items": [
+    {
+      "id": "ch0092_home",
+      "title": "Nonomi-Swimsuit",
+      "stem": "CH0092_home",
+      "animation": "Idle_01",
+      "seconds": 10.000000953674316
+    },
+    {
+      "id": "aru_newyear_home",
+      "title": "Aru-New-Year",
+      "stem": "Aru_newyear_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ch0293_home",
+      "title": "Nagisa-Swimsuit",
+      "stem": "CH0293_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "ch0138_home",
+      "title": "Mina",
+      "stem": "CH0138_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "hihumi_home",
+      "title": "Hifumi",
+      "stem": "Hihumi_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0058_home",
+      "title": "Hifumi-Swimsuit",
+      "stem": "CH0058_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333969116211
+    },
+    {
+      "id": "ch0169_home",
+      "title": "Ui",
+      "stem": "CH0169_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "haruka_home",
+      "title": "Haruka",
+      "stem": "Haruka_home",
+      "animation": "Idle_01",
+      "seconds": 10.000000953674316
+    },
+    {
+      "id": "ch0113_home",
+      "title": "Michiru",
+      "stem": "CH0113_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "pina_home",
+      "title": "Pina",
+      "stem": "Pina_home",
+      "animation": "Idle_01",
+      "seconds": 10.000000953674316
+    },
+    {
+      "id": "momiji_home",
+      "title": "Momiji",
+      "stem": "momiji_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "cherino_home",
+      "title": "Cherino",
+      "stem": "Cherino_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "kotama_home",
+      "title": "Kotama",
+      "stem": "Kotama_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "juri_home",
+      "title": "Juri",
+      "stem": "juri_home",
+      "animation": "Idle_01",
+      "seconds": 8
+    },
+    {
+      "id": "haruna_home",
+      "title": "Haruna",
+      "stem": "Haruna_home",
+      "animation": "Idle_01",
+      "seconds": 4
+    },
+    {
+      "id": "shiroko_ridingsuit_home",
+      "title": "Shiroko-Cycling",
+      "stem": "Shiroko_ridingsuit_home",
+      "animation": "Idle_01",
+      "seconds": 6.6666669845581055
+    },
+    {
+      "id": "ayane_home",
+      "title": "Ayane",
+      "stem": "Ayane_home",
+      "animation": "Idle_01",
+      "seconds": 3.3333334922790527
+    },
+    {
+      "id": "ch0070_home",
+      "title": "Seia",
+      "stem": "CH0070_home",
+      "animation": "Idle_01",
+      "seconds": 77.66667175292969
+    },
+    {
+      "id": "ch0260_home",
+      "title": "Kanna-Swimsuit",
+      "stem": "CH0260_home",
+      "animation": "Idle_01",
+      "seconds": 20.000001907348633
+    }
+  ]
+}
