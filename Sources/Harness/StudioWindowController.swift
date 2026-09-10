@@ -23,12 +23,14 @@ extension StudioWindowController {
         editor.document.undoManager.undo()
         precondition(editor.scene.nodes[1].visible)
         editor.editor.toggleLock(1)
+        precondition(!editor.layerInspector.transformFields[0].isEnabled)
         let lockedTransform = editor.scene.nodes[1].transform.x
         editor.editor.selection = 1
         editor.editor.nudge(x: 0.1, y: 0)
         precondition(editor.scene.nodes[1].transform.x == lockedTransform)
         editor.document.undoManager.undo()
         precondition(!editor.scene.nodes[1].locked)
+        precondition(editor.layerInspector.transformFields[0].isEnabled)
         let running = editor.renderer
         var moved = editor.scene.nodes
         moved[1].transform = .init(x: 0.2, y: 0, scale: 0.6, rotation: 15)
@@ -90,6 +92,7 @@ extension StudioWindowController {
         controlled.bindings = [.init(target: .init(nodeID: childID, property: .opacity), parameter: "amount")]
         precondition(editor.applyEdit(controlled.nodes, selected: 1, name: "Bind", controls: controlled))
         precondition(editor.renderer === styledRenderer && editor.scene.bindings.count == 1)
+        precondition(StudioInspectorState.numeric(.init(nodeID: childID, property: .opacity), in: editor.scene) == .driven)
         editor.document.undoManager.undo()
         precondition(editor.scene.bindings.isEmpty)
         editor.document.undoManager.redo()
@@ -100,6 +103,7 @@ extension StudioWindowController {
         let target = ScenePropertyAddress(nodeID: keyed.allNodes[1].id, property: .opacity)
         keyed.bindings = [.init(target: target, keyframes: .init(keys: [.init(time: 0, value: 0), .init(time: 4, value: 1)]))]
         precondition(editor.applyEdit(keyed.nodes, selected: 1, name: "Keyframes", controls: keyed))
+        precondition(StudioInspectorState.numeric(target, in: editor.scene) == .keyframed)
         let keyRenderer = editor.renderer
         editor.timeline.onMoveKey?(target, 1, 3)
         precondition(editor.scene.bindings[0].keyframes?.keys[1].time == 3 && editor.renderer === keyRenderer)
@@ -141,7 +145,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let fieldEditor = StudioFieldEditor()
     private weak var editingClient: NSTextField?
     private lazy var editor = SceneEditorController(document: document)
-    private let nameField = NSTextField(string: "")
+    private let layerInspector = StudioLayerInspector(frame: .zero)
+    private var nameField: NSTextField { layerInspector.nameField }
     private var audioSession: SceneAudioSession?
     private let audioStatus = NSTextField(wrappingLabelWithString: "Audio response off")
     private let audioToggle = NSButton(checkboxWithTitle: "Enable Audio Response", target: nil, action: nil)
@@ -170,7 +175,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let applyButton = NSButton(title: "Use on Desktop", target: nil, action: nil)
     private let nodePicker = SceneLayerList()
     private let timeline = SceneTimelineView(frame: .zero)
-    private var transformFields: [NSTextField] = []
+    private var transformFields: [NSTextField] { layerInspector.transformFields }
     private var exportTask: Task<Void, Never>?
     private let exportButton = NSButton(title: "Export Video…", target: nil, action: nil)
     private let saveCopyButton = NSButton(title: "Save As…", target: nil, action: nil)
@@ -196,7 +201,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
 
     init(apply: @escaping (URL) -> Void) {
         self.apply = apply
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 820),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1320, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
         audioSession = SceneAudioSession(clock: clock) { [weak self] message in
@@ -205,7 +210,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         }
         window.title = "Idlesse Studio"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 1040, height: 820)
+        window.minSize = NSSize(width: 1180, height: 820)
         window.delegate = self
         fieldEditor.isFieldEditor = true
         fieldEditor.allowsUndo = true
@@ -335,28 +340,27 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         nodePicker.onLock = { [weak self] in self?.editor.toggleLock($0) }
         nodePicker.target = self
         nodePicker.action = #selector(selectNode)
-        let inspector = NSStackView()
-        inspector.orientation = .vertical
-        inspector.alignment = .leading
-        inspector.spacing = 10
-        inspector.addArrangedSubview(NSTextField(labelWithString: "LAYERS"))
         nodePicker.onReorder = { [weak self] source, destination in
             guard let self, !self.saving else { return }
             self.editor.reorder(source, destination)
         }
         nodePicker.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(nodePicker)
-        undoButton.target = self
-        undoButton.action = #selector(undoEdit)
-        redoButton.target = self
-        redoButton.action = #selector(redoEdit)
-        inspector.addArrangedSubview(NSStackView(views: [undoButton, redoButton]))
-        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(createMenu)), (addParticlesButton, #selector(addParticles)), (emitterButton, #selector(editEmitter)),
-                                  (reorderButton, #selector(reorderNode)), (removeNodeButton, #selector(removeNode))] {
+
+        undoButton.target = self; undoButton.action = #selector(undoEdit)
+        redoButton.target = self; redoButton.action = #selector(redoEdit)
+        for (button, action) in [(addMediaButton, #selector(addMedia)), (addGradientButton, #selector(createMenu)),
+                                 (addParticlesButton, #selector(addParticles)), (reorderButton, #selector(reorderNode)),
+                                 (removeNodeButton, #selector(removeNode))] {
             button.target = self
             button.action = action
-            inspector.addArrangedSubview(button)
         }
+        duplicateButton.target = self; duplicateButton.action = #selector(duplicateNode)
+        groupButton.target = self; groupButton.action = #selector(groupNodes)
+        groupButton.toolTip = "Combine this layer and the next layer in drawing order. Undo restores the individual layers."
+        ungroupButton.target = self; ungroupButton.action = #selector(ungroupNodes)
+        ungroupButton.toolTip = "Restore the child layers. Reset group transform, opacity and appearance first."
+
         dragOverlay.onSelect = { [weak self] index in
             guard let self, self.scene.allNodes.indices.contains(index) else { return }
             self.nodePicker.selectItem(at: index); self.selectNode()
@@ -371,76 +375,51 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
         dragOverlay.onNudge = { [weak self] x, y in self?.editor.nudge(x: x, y: y) }
         dragOverlay.onDelete = { [weak self] in self?.editor.remove() }
-        nameField.placeholderString = "Layer name"
-        nameField.target = self
-        nameField.action = #selector(renameNode)
-        nameField.setAccessibilityLabel("Layer name")
-        nameField.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        inspector.addArrangedSubview(nameField)
-        duplicateButton.target = self
-        duplicateButton.action = #selector(duplicateNode)
-        inspector.addArrangedSubview(duplicateButton)
-        groupButton.target = self
-        groupButton.action = #selector(groupNodes)
-        groupButton.toolTip = "Combine this layer and the next layer in drawing order. Undo restores the individual layers."
-        inspector.addArrangedSubview(groupButton)
-        ungroupButton.target = self; ungroupButton.action = #selector(ungroupNodes)
-        ungroupButton.toolTip = "Restore the child layers. Reset group transform, opacity and appearance first."
-        inspector.addArrangedSubview(ungroupButton)
-        for (index, label) in ["X", "Y", "Scale", "Rotation °", "Opacity"].enumerated() {
-            let field = NSTextField(string: "")
-            field.tag = index
-            field.target = self
-            field.action = #selector(editTransform)
-            field.setAccessibilityLabel(label)
-            field.widthAnchor.constraint(equalToConstant: 76).isActive = true
-            transformFields.append(field)
-            let row = NSStackView(views: [NSTextField(labelWithString: label), field])
-            row.distribution = .equalSpacing
-            row.widthAnchor.constraint(equalToConstant: 160).isActive = true
-            inspector.addArrangedSubview(row)
-        }
-        inspector.addArrangedSubview(NSButton(title: "Appearance…", target: self, action: #selector(editAppearance)))
-        inspector.addArrangedSubview(NSButton(title: "Mask & Blend…", target: self, action: #selector(editCompositing)))
-        inspector.addArrangedSubview(NSStackView(views: [
-            NSButton(title: "Controls…", target: self, action: #selector(editControls)),
-            NSButton(title: "Bind…", target: self, action: #selector(editBinding))]))
-        inspector.addArrangedSubview(NSButton(title: "Keyframes…", target: self, action: #selector(editKeyframes)))
+
         pointerToggle.target = self; pointerToggle.action = #selector(togglePointer)
         pointerToggle.font = .systemFont(ofSize: 10)
-        inspector.addArrangedSubview(pointerToggle)
         audioToggle.target = self; audioToggle.action = #selector(toggleAudio)
         audioToggle.font = .systemFont(ofSize: 10)
         audioToggle.toolTip = "Use system audio levels for this session. No audio is saved."
-        inspector.addArrangedSubview(audioToggle)
         audioStatus.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         audioStatus.setAccessibilityLabel("Audio input levels")
-        audioStatus.widthAnchor.constraint(equalToConstant: 150).isActive = true
-        inspector.addArrangedSubview(audioStatus)
-        saveCopyButton.target = self
-        saveCopyButton.action = #selector(saveCopy)
-        saveButton.target = self
-        saveButton.action = #selector(saveDocument)
-        inspector.addArrangedSubview(saveButton)
-        inspector.addArrangedSubview(saveCopyButton)
+        audioStatus.widthAnchor.constraint(equalToConstant: 270).isActive = true
+
+        saveCopyButton.target = self; saveCopyButton.action = #selector(saveCopy)
+        saveButton.target = self; saveButton.action = #selector(saveDocument)
         exportButton.target = self; exportButton.action = #selector(exportVideo)
-        inspector.addArrangedSubview(exportButton)
-        inspector.addArrangedSubview(NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges)))
-        inspector.translatesAutoresizingMaskIntoConstraints = false
-        let inspectorDocument = StudioInspectorView(frame: NSRect(x: 0, y: 0, width: 160, height: inspector.fittingSize.height))
-        inspectorDocument.addSubview(inspector)
-        NSLayoutConstraint.activate([
-            inspector.topAnchor.constraint(equalTo: inspectorDocument.topAnchor),
-            inspector.leadingAnchor.constraint(equalTo: inspectorDocument.leadingAnchor),
-            inspector.widthAnchor.constraint(equalToConstant: 160)
+        let resetButton = NSButton(title: "Reset Changes", target: self, action: #selector(resetChanges))
+        let sceneDetails = NSButton(title: "Scene Details…", target: self, action: #selector(editMetadata))
+        let scenePlayback = NSButton(title: "Playback…", target: self, action: #selector(editAuthoredPlayback))
+
+        layerInspector.onRename = { [weak self] in self?.renameNode() }
+        layerInspector.onTransform = { [weak self] in self?.editTransform() }
+        layerInspector.onVisibility = { [weak self] in
+            guard let self else { return }
+            self.editor.toggleVisibility(self.nodePicker.indexOfSelectedItem)
+        }
+        layerInspector.onLock = { [weak self] in
+            guard let self else { return }
+            self.editor.toggleLock(self.nodePicker.indexOfSelectedItem)
+        }
+        layerInspector.onCommitNode = { [weak self] node, name in self?.commitInspectorNode(node, name: name) }
+        layerInspector.onChooseMaskImage = { [weak self] node in self?.chooseLayerImage(node, sprite: false) }
+        layerInspector.onChooseSpriteImage = { [weak self] node in self?.chooseLayerImage(node, sprite: true) }
+        layerInspector.onEditControls = { [weak self] in self?.editControls() }
+        layerInspector.onEditBinding = { [weak self] in self?.editBinding() }
+        layerInspector.onEditKeyframes = { [weak self] in self?.editKeyframes() }
+        layerInspector.onError = { [weak self] message in self?.detailLabel.stringValue = message }
+        layerInspector.install(layerActions: [
+            NSStackView(views: [undoButton, redoButton]),
+            NSStackView(views: [addMediaButton, addGradientButton]),
+            NSStackView(views: [addParticlesButton, duplicateButton]),
+            groupButton, ungroupButton,
+            NSStackView(views: [reorderButton, removeNodeButton])
+        ], motionSession: [pointerToggle, audioToggle, audioStatus], sceneActions: [
+            scenePlayback, sceneDetails, NSStackView(views: [saveButton, saveCopyButton]), exportButton, resetButton
         ])
-        let inspectorScroll = NSScrollView()
-        inspectorScroll.hasVerticalScroller = true
-        inspectorScroll.drawsBackground = false
-        inspectorScroll.documentView = inspectorDocument
-        inspectorScroll.setAccessibilityLabel("Layer inspector")
-        inspectorScroll.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(inspectorScroll)
+        layerInspector.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(layerInspector)
         canvas.wantsLayer = true
         canvas.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         canvas.layer?.cornerRadius = 12
@@ -508,11 +487,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             nodePicker.widthAnchor.constraint(equalToConstant: 230),
             nodePicker.topAnchor.constraint(equalTo: viewport.topAnchor),
             nodePicker.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
-            viewport.trailingAnchor.constraint(equalTo: inspectorScroll.leadingAnchor, constant: -18),
-            inspectorScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
-            inspectorScroll.topAnchor.constraint(equalTo: viewport.topAnchor),
-            inspectorScroll.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
-            inspectorScroll.widthAnchor.constraint(equalToConstant: 178),
+            viewport.trailingAnchor.constraint(equalTo: layerInspector.leadingAnchor, constant: -16),
+            layerInspector.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            layerInspector.topAnchor.constraint(equalTo: viewport.topAnchor),
+            layerInspector.bottomAnchor.constraint(equalTo: viewport.bottomAnchor),
+            layerInspector.widthAnchor.constraint(equalToConstant: 304),
             viewport.bottomAnchor.constraint(equalTo: timeline.topAnchor, constant: -12),
             timeline.leadingAnchor.constraint(equalTo: viewport.leadingAnchor),
             timeline.trailingAnchor.constraint(equalTo: viewport.trailingAnchor),
@@ -610,7 +589,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         saveCopyButton.isEnabled = !saving
         exportButton.isEnabled = !saving
         saveButton.isEnabled = !saving
-        nameField.isEditable = !saving
+        nameField.isEditable = !saving && editor.selectedNode?.locked == false
         duplicateButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addMediaButton.isEnabled = !saving && scene.allNodes.count < SceneBudget.maxNodes
         addGradientButton.isEnabled = !saving
@@ -643,8 +622,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         dragOverlay.selected = editor.selection
         dragOverlay.transform = previewNodes.flatMap { $0.descendants }.first { $0.id == node.id }?.transform ?? node.transform
         reorderButton.title = offset == 0 ? "Bring Forward" : "Send Backward"
-        let values = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
-                      node.transform.rotation ?? 0, node.opacity]
+        let values: [Double] = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
+                                node.transform.rotation ?? 0, node.opacity]
         for (index, pair) in zip(transformFields, values).enumerated() {
             let (field, value) = pair
             let property: ScenePropertyAddress.Property = [.x, .y, .scale, .rotation, .opacity][index]
@@ -653,9 +632,10 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             field.isEnabled = !saving && !bound
             field.toolTip = bound ? "Controlled by a binding. Use Controls… or remove the binding in Bind…. This is the static fallback." : nil
         }
+        layerInspector.update(scene: scene, node: node, saving: saving)
     }
     @objc private func editTransform() {
-        guard !saving, let current = editor.selectedNode else { return }
+        guard !saving, let current = editor.selectedNode, !current.locked else { return }
         let values = transformFields.compactMap { Double($0.stringValue) }
         let ranges = [-2.0...2.0, -2.0...2.0, 0.05...4.0, -360.0...360.0, 0.0...1.0]
         guard values.count == 5, zip(values, ranges).allSatisfy({ $0.isFinite && $1.contains($0) }) else {
@@ -663,8 +643,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             selectNode()
             return
         }
-        let existing = [current.transform.x ?? 0, current.transform.y ?? 0, current.transform.scale ?? 1,
-                        current.transform.rotation ?? 0, current.opacity]
+        let existing: [Double] = [current.transform.x ?? 0, current.transform.y ?? 0, current.transform.scale ?? 1,
+                                  current.transform.rotation ?? 0, current.opacity]
         // Display rounds to three decimals; unchanged fields must not create edits.
         guard zip(values, existing).contains(where: { abs($0 - $1) > 0.0005 }) else { return }
         var node = current
@@ -712,7 +692,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         window.firstResponder === fieldEditor ? fieldEditor.undoManager : document.undoManager
     }
     private func clearEditHistory() { document.clearHistory(); fieldEditor.undoManager?.removeAllActions() }
-    @objc private func renameNode() { editor.rename(nameField.stringValue) }
+    @objc private func renameNode() {
+        guard !saving, editor.selectedNode?.locked == false else { selectNode(); return }
+        editor.rename(nameField.stringValue)
+    }
+    private func commitInspectorNode(_ node: SceneNode, name: String) {
+        guard !saving, let current = editor.selectedNode, current.id == node.id, !current.locked else {
+            selectNode(); return
+        }
+        editor.replaceSelected(node, name: name)
+    }
     @objc private func editControls() {
         guard !saving else { return }
         let original = scene.parameters
@@ -1074,7 +1063,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func createMenu() {
         let menu = NSMenu()
         for (title, action) in [("Gradient", #selector(addGradient)), ("Text", #selector(addText)),
-            ("Shape", #selector(addShape)), ("Edit Text / Shape…", #selector(editGraphic)),
+            ("Shape", #selector(addShape)),
             ("New Control…", #selector(addControl)), ("Local Presets…", #selector(presetBrowser)), ("My Presets…", #selector(globalPresets)), ("Scene Details…", #selector(editMetadata))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self; menu.addItem(item)
@@ -1195,11 +1184,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     @objc private func addText() {
         guard !saving else { return }
-        if editor.add(SceneNode(content: .text(.init()), transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))) { editGraphic() }
+        if editor.add(SceneNode(content: .text(.init()), transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0))) { layerInspector.revealContent() }
     }
     @objc private func addShape() {
         guard !saving else { return }
-        if editor.add(SceneNode(content: .shape(.init()), transform: .init(x: 0, y: 0, scale: 0.4, rotation: 0))) { editGraphic() }
+        if editor.add(SceneNode(content: .shape(.init()), transform: .init(x: 0, y: 0, scale: 0.4, rotation: 0))) { layerInspector.revealContent() }
     }
     @objc private func editGraphic() {
         guard !saving, let original = editor.selectedNode, !original.locked,
