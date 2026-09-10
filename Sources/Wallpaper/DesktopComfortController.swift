@@ -23,6 +23,8 @@ private final class DimWindow: NSWindow {
 /// An opt-in visual shade, not a hardware brightness or display-sleep controller.
 final class DesktopComfortController: NSObject, NSMenuItemValidation {
     private let iconItems = NSHashTable<NSMenuItem>.weakObjects()
+    private let widgetItems = NSHashTable<NSMenuItem>.weakObjects()
+    private(set) var changingDesktopWidgets = false
     private(set) var changingDesktopIcons = false
     var onDesktopIconsChanged: (() -> Void)?
     var onShowSettings: (() -> Void)?
@@ -32,11 +34,46 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
         return !((CFPreferencesCopyAppValue("StandardHideDesktopIcons" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
     }
 
+    var desktopWidgetsVisible: Bool {
+        CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
+        return !((CFPreferencesCopyAppValue("StandardHideWidgets" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
+    }
+
+    @objc func toggleDesktopWidgets() {
+        guard !changingDesktopWidgets else { return }
+        let visible = !desktopWidgetsVisible
+        changingDesktopWidgets = true
+        updateDesktopIconsItems()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var failure: String?
+            do {
+                let write = Process()
+                write.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+                write.arguments = ["write", "com.apple.WindowManager", "StandardHideWidgets", "-bool", visible ? "false" : "true"]
+                try write.run(); write.waitUntilExit()
+                if write.terminationStatus != 0 { failure = "Could not change desktop widget visibility." }
+            } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.changingDesktopWidgets = false
+                self.updateDesktopIconsItems()
+                if let failure {
+                    let alert = NSAlert(); alert.messageText = "Desktop Widgets"
+                    alert.informativeText = failure; alert.runModal()
+                }
+            }
+        }
+    }
+
     func addDesktopIconsItem(to menu: NSMenu) {
-        let item = menu.addItem(withTitle: "Show Desktop Icons", action: #selector(toggleDesktopIcons), keyEquivalent: "")
+        let item = menu.addItem(withTitle: "Show Desktop Files", action: #selector(toggleDesktopIcons), keyEquivalent: "")
         item.target = self
         item.toolTip = "Hide icons without moving files. Restarts Finder."
         iconItems.add(item)
+        let widgets = menu.addItem(withTitle: "Show Desktop Widgets", action: #selector(toggleDesktopWidgets), keyEquivalent: "")
+        widgets.target = self
+        widgets.toolTip = "Show widgets on the desktop. Stage Manager has a separate macOS setting."
+        widgetItems.add(widgets)
         updateDesktopIconsItems()
     }
 
@@ -46,10 +83,18 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
             item.state = visible ? .on : .off
             item.isEnabled = !changingDesktopIcons
         }
+        for item in widgetItems.allObjects {
+            item.state = desktopWidgetsVisible ? .on : .off
+            item.isEnabled = !changingDesktopWidgets
+        }
         onDesktopIconsChanged?()
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleDesktopWidgets) {
+            updateDesktopIconsItems()
+            return !changingDesktopWidgets
+        }
         if item.action == #selector(toggleDesktopIcons) {
             updateDesktopIconsItems()
             return !changingDesktopIcons

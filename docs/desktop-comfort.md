@@ -7,7 +7,7 @@ Resume. Choosing a scene keeps the browser open. Changes apply immediately. Idle
 is available separately from the Wallpaper menu.
 
 - **Wallpapers:** Library, animated media imports, collections, previews and Use on Desktop.
-- **Playback & Desktop:** desktop icons, frame rate, crossfade.
+- **Playback & Desktop:** frame rate and crossfade. Desktop visibility stays in the sidebar on every page.
 - **Bedtime:** dimming level, daily schedule, Dim Now / Restore.
 - **Screen Saver:** opens the existing options as an attached sheet.
 
@@ -53,8 +53,8 @@ BUILD_DIR="$PWD/build/next" ./test-wallpaper.sh
 ```
 # Desktop icons
 
-**Wallpaper → Show Desktop Icons** mirrors macOS Desktop & Dock → Show items →
-On Desktop. The same checked toggle is available in the wallpaper and dimming
+**Show on Desktop → Files** in the permanent Idlesse sidebar mirrors macOS Desktop & Dock → Show items →
+On Desktop. **Wallpaper → Show Desktop Files** is also available in the wallpaper and dimming
 menu-bar menus. Uncheck it to hide files without moving or deleting them; check
 it to show them again. The setting persists independently of Idlesse.
 
@@ -64,3 +64,18 @@ preference, not `CreateDesktop=false`, which disables desktop click handling.
 Finder restarts when applying the change. Widget visibility, Stage Manager and
 the click-wallpaper preference are left unchanged. Controls refresh from the
 system preference; Idlesse does not store a competing copy of this setting.
+
+## Desktop widgets
+
+The permanent sidebar also has **Show on Desktop → Widgets**. The matching
+**Show Desktop Widgets** menu item controls the same preference. It changes
+`StandardHideWidgets`, with no Finder restart or overlay window. Stage Manager
+remains separate. This is macOS desktop visibility: revealing the desktop may
+show hidden items again; it does not delete widgets or remove Notification Center.
+The preference is also documented by the [WidgetToggler project](https://github.com/sieren/WidgetToggler).
+
+Verified locally 2026-09-10: Files and Widgets controls are visible from Wallpapers
+and Bedtime; each toggled both directions and refreshed state. Restored files
+hidden/widgets shown; Finder CreateDesktop remains true. Build/signature checks
+passed. Automated bare-desktop right-click was unavailable in the UI driver, so
+this pass does not claim an end-to-end context-menu test.
