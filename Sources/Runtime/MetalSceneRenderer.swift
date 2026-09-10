@@ -33,6 +33,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             // Replicas arrive asynchronously when the looper becomes ready.
             // Outputs are not copied from the template; configure each replica.
             for replica in looper?.loopingPlayerItems ?? player?.items() ?? [] {
+                replica.preferredForwardBufferDuration = 1
                 guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
                 let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -112,6 +113,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var needsFrame = true
     private let gate = DispatchSemaphore(value: 2)
     private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 0)
+    private var framesSinceCacheFlush = 0
+    private var lastObservedLoopCount = 0
 
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void) throws {
@@ -164,7 +167,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 input.texture = try Self.upload(cg, device: device)
             case .video(let url):
                 let item = AVPlayerItem(url: url)
-                item.preferredForwardBufferDuration = 2
+                item.preferredForwardBufferDuration = 1
                 let player = AVQueuePlayer()
                 player.isMuted = true
                 player.preventsDisplaySleepDuringVideoPlayback = false
@@ -245,7 +248,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             input.texture = texture
             changed = true
         }
-        diagnostics.loopCount = inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0
+        let currentLoops = inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0
+        diagnostics.loopCount = currentLoops
+        if currentLoops != lastObservedLoopCount {
+            lastObservedLoopCount = currentLoops
+            CVMetalTextureCacheFlush(cache, 0)
+        }
         return changed
     }
     private func synchronizeVideo(_ input: Input) {
@@ -525,6 +533,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         command.commit()
         needsFrame = false
         diagnostics.frameCount += 1
+        framesSinceCacheFlush += 1
+        if framesSinceCacheFlush >= 120 {
+            framesSinceCacheFlush = 0
+            if let cache { CVMetalTextureCacheFlush(cache, 0) }
+        }
         updateDrawScheduling()
     }
     func refreshSceneTime() {
@@ -729,7 +742,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
 
     func setPreferredFrameRate(_ rate: Int?) {
         guard diagnostics.state != .disposed else { return }
-        metal.preferredFramesPerSecond = rate ?? 60
+        let targetRate = rate ?? 60
+        let requiresHighRefresh = (sourceScene?.usesPointer == true && clock.pointerEnabled) ||
+                                  (sourceScene?.usesAudio == true && clock.audioEnabled) ||
+                                  (roots.flatMap { $0.descendants }.contains { $0.kind == .particles })
+        metal.preferredFramesPerSecond = requiresHighRefresh ? targetRate : min(targetRate, 60)
     }
     func setPaused(_ paused: Bool) {
         bindingSmoother.reset()

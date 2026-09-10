@@ -148,7 +148,7 @@ final class VideoRenderer: SceneRenderer {
         queue.volume = 0
         queue.preventsDisplaySleepDuringVideoPlayback = false
         let item = AVPlayerItem(url: url)
-        item.preferredForwardBufferDuration = 2
+        item.preferredForwardBufferDuration = 1
         let loop = AVPlayerLooper(player: queue, templateItem: item)
         (view.layer as? AVPlayerLayer)?.player = queue
         (view.layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
