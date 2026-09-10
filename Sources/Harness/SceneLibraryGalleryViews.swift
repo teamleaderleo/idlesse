@@ -35,7 +35,7 @@ final class LibraryKeyCollectionView: NSCollectionView {
 final class LibraryGalleryItem: NSCollectionViewItem {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("LibraryGalleryItem")
     let artwork = NSImageView()
-    let title = NSTextField(labelWithString: "")
+    let titleLabel = NSTextField(labelWithString: "")
     let star = NSImageView()
 
     override func loadView() {
@@ -51,10 +51,10 @@ final class LibraryGalleryItem: NSCollectionViewItem {
         artwork.translatesAutoresizingMaskIntoConstraints = false
         artwork.setAccessibilityElement(false)
 
-        title.font = .systemFont(ofSize: 13, weight: .medium)
-        title.lineBreakMode = .byTruncatingTail
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.setAccessibilityElement(false)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.setAccessibilityElement(false)
 
         star.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: nil)
         star.contentTintColor = .white
@@ -66,17 +66,17 @@ final class LibraryGalleryItem: NSCollectionViewItem {
         star.setAccessibilityElement(false)
 
         root.addSubview(artwork)
-        root.addSubview(title)
+        root.addSubview(titleLabel)
         artwork.addSubview(star)
         NSLayoutConstraint.activate([
             artwork.topAnchor.constraint(equalTo: root.topAnchor, constant: 3),
             artwork.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 3),
             artwork.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -3),
             artwork.heightAnchor.constraint(equalTo: artwork.widthAnchor, multiplier: 9.0 / 16.0),
-            title.topAnchor.constraint(equalTo: artwork.bottomAnchor, constant: 7),
-            title.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 4),
-            title.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -4),
-            title.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -2),
+            titleLabel.topAnchor.constraint(equalTo: artwork.bottomAnchor, constant: 7),
+            titleLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 4),
+            titleLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -4),
+            titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -2),
             star.topAnchor.constraint(equalTo: artwork.topAnchor, constant: 8),
             star.trailingAnchor.constraint(equalTo: artwork.trailingAnchor, constant: -8),
             star.widthAnchor.constraint(equalToConstant: 14),
@@ -84,7 +84,7 @@ final class LibraryGalleryItem: NSCollectionViewItem {
         ])
         view = root
         imageView = artwork
-        textField = title
+        textField = titleLabel
         updateSelection()
     }
 
@@ -94,7 +94,7 @@ final class LibraryGalleryItem: NSCollectionViewItem {
 
     func configure(title value: String, favorite: Bool, image: NSImage?) {
         loadViewIfNeeded()
-        title.stringValue = value
+        titleLabel.stringValue = value
         star.isHidden = !favorite
         artwork.image = image ?? NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
         artwork.contentTintColor = image == nil ? .tertiaryLabelColor : nil
