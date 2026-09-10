@@ -8,6 +8,9 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSUIElement</key><true/>
+<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 <key>NSExtension</key><dict>
 <key>NSExtensionPointIdentifier</key><string>com.apple.FinderSync</string>
 <key>NSExtensionPrincipalClass</key><string>IdlesseDesktopMenu.FinderSync</string>

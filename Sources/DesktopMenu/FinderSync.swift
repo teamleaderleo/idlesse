@@ -4,7 +4,7 @@ import Darwin
 
 /// Adds Idlesse actions only to the Desktop folder's contextual menus.
 final class FinderSync: FIFinderSync {
-    private let desktop = URL(fileURLWithPath: String(cString: getpwuid(getuid())!.pointee.pw_dir)).appendingPathComponent("Desktop")
+    private let desktop = URL(fileURLWithPath: String(cString: getpwuid(getuid())!.pointee.pw_dir), isDirectory: true).appendingPathComponent("Desktop", isDirectory: true)
 
     override init() {
         super.init()
@@ -14,7 +14,7 @@ final class FinderSync: FIFinderSync {
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
         guard menuKind == .contextualMenuForContainer || menuKind == .contextualMenuForItems,
               let target = FIFinderSyncController.default().targetedURL(),
-              target.resolvingSymlinksInPath().standardizedFileURL == desktop.resolvingSymlinksInPath().standardizedFileURL else { return nil }
+              target.resolvingSymlinksInPath().standardizedFileURL.path == desktop.resolvingSymlinksInPath().standardizedFileURL.path else { return nil }
         let menu = NSMenu()
         for (title, action) in [("Customize Idlesse Wallpaper…", #selector(customize)),
                                 ("Show / Hide Desktop Icons", #selector(toggleIcons))] {
