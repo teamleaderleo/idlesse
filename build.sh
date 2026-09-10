@@ -239,7 +239,11 @@ case "${1:-all}" in
     log "Cleaned."
     ;;
   all|*)
-    build_app
-    build_saver
+    build_app &
+    pid_app=$!
+    build_saver &
+    pid_saver=$!
+    wait "$pid_app"
+    wait "$pid_saver"
     ;;
 esac
