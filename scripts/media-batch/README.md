@@ -31,3 +31,16 @@ Dependencies retain their upstream licenses, especially the Spine runtimes. This
 Tests: `python3 scripts/media-batch/test_batch.py`.
 
 After exports, run `verify.py --root build/ba-export-study` using the study venv (Pillow). It creates first/middle/last strips and loop-boundary diagnostics for review. Then `archive.py --root build/ba-export-study --drive "<existing Drive sync root>/Idlesse"` copies and hashes videos, provenance, posters and one source/restoration archive. It does not claim cloud sync or delete playback files.
+
+## One-command pipeline
+
+`pipeline.py` chains restoration/export, diagnostic previews and Drive copying, stopping on failures. Completed video checkpoints are reused. Example:
+
+```sh
+python3 scripts/media-batch/pipeline.py \
+  --root build/ba-export-study \
+  --output "$HOME/Pictures/Wallpapers/Blue Archive/Live2D Restored" \
+  --drive "$HOME/Library/CloudStorage/GoogleDrive-leoli.4u@gmail.com/My Drive/Idlesse"
+```
+
+It uses the workspace `.venv/bin/python` for Pillow-based QA, or `--qa-python`. The final human/agent checks are visual review and normal Library import. It does not mutate the running app's Library store behind its back or automatically spend money on a recurring schedule.

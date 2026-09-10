@@ -1,0 +1,8 @@
+{
+  "package": "com.YoStarEN.AzurLane",
+  "skins": [
+    {"asset": "beierfasite_2", "title": "Belfast — Iridescent Rosa"},
+    {"asset": "aidang_2", "title": "Atago — Summer March"},
+    {"asset": "aijier_2", "title": "Ägir — Iron Blood’s Dragon Maid"}
+  ]
+}
