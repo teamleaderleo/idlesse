@@ -131,8 +131,11 @@ uses a nonactivating panel. Native menu-background visibility, menu contrast,
 auto-hide/full-screen behavior, Spaces, crossfade opacity, and drawable-acquisition
 latency still need qualification before enabling it in the installed app.
 In particular a successful GPU copy does not establish that the native menu bar
-shows those pixels. A stalled strip drawable can delay the main-thread draw, so
-this path must remain opt-in until timing has been measured under occlusion.
+shows those pixels. Strip drawable acquisition runs on a dedicated serial queue.
+The main thread consumes only an already-ready drawable; otherwise it skips the
+strip copy. One pending request and one ready drawable bound acquisition state.
+The first ready drawable requests one redraw so static scenes populate the strip
+without acquiring an ongoing redraw loop.
 
 The desktop qualification report includes `menuStripFrames` (submitted copies,
 not presented frames). A local test can run with:
@@ -160,3 +163,13 @@ the strip below the menu bar. The strip now uses a non-key panel that preserves
 its requested frame and assigns level 23 after panel configuration. Live window
 inspection confirmed both displays at their top edge. Its height uses the
 per-screen reserved top inset as well as the status-bar/notch metrics.
+
+Hitch investigation (2026-09-10, Kayoko, both displays): a five-second sample of
+build 9 caught the main thread in strip `nextDrawable` for 2,427 / 3,575 samples.
+After asynchronous acquisition in build 10, the strip wait appears on its worker
+queues, not under main-thread `MenuBarStrip.copy`. The ordinary MTKView still has
+its own drawable acquisition; this change does not claim all rendering waits are
+eliminated. The UI Show / Restore Windows command was exercised in both directions.
+The installed app keeps live strips enabled. Smoke tests explicitly override that
+personal preference in their process argument domain so compatibility-renderer
+assertions remain isolated from the user's selected renderer.
