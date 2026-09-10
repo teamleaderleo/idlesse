@@ -873,16 +873,23 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
 /// Opt-in experiment: a narrow GPU copy, never a second decoder or a disk snapshot loop.
 /// macOS may composite an opaque menu background above this window; do not enable by default.
+private final class MenuStripPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
 private final class MenuBarStrip {
     let window: NSPanel
     private let layer = CAMetalLayer()
     private let height: CGFloat
     private(set) var frames = 0
     init(screen: NSScreen) {
-        height = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top)
+        height = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top,
+            screen.frame.maxY - screen.visibleFrame.maxY)
         let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - height,
             width: screen.frame.width, height: height)
-        window = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+        window = MenuStripPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         window.setFrame(frame, display: false)
         window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
@@ -891,6 +898,8 @@ private final class MenuBarStrip {
         window.hasShadow = false
         window.hidesOnDeactivate = false
         window.isFloatingPanel = false
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
+        window.setFrame(frame, display: false)
         window.isReleasedWhenClosed = false
         window.title = "Idlesse Menu Strip Experiment"
         let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
