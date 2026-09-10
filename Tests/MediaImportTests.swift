@@ -4,11 +4,13 @@ import Foundation
     static func main() async throws {
         for path in CommandLine.arguments.dropFirst() {
             let source = URL(fileURLWithPath: path)
+            guard try await MediaImport.needsConversion(source) else { fatalError("Non-native format bypassed conversion") }
             let original = try Data(contentsOf: source)
             let converted = try await MediaImport.convert(source)
             defer { try? FileManager.default.removeItem(at: converted) }
             guard converted.pathExtension == "mp4", FileManager.default.fileExists(atPath: converted.path),
                   try Data(contentsOf: source) == original else { fatalError("Conversion changed the source or failed") }
+            guard try await !MediaImport.needsConversion(converted) else { fatalError("Playable HEVC should remain native") }
             guard try await MediaImport.convert(source) == converted else { fatalError("Identical import did not reuse its derivative") }
         }
         let bad = FileManager.default.temporaryDirectory.appendingPathComponent("invalid-\(UUID()).webm")
