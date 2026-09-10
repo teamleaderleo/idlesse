@@ -17,6 +17,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
+    private let thumbnails = NSCache<NSString, NSImage>()
     private let poster = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
@@ -143,9 +145,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let toolbar = NSStackView(views: [search, filter, sort, collectionActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
+        column.width = 280
+        column.resizingMask = .autoresizingMask
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 34
+        table.rowHeight = 58
         table.style = .sourceList
         table.delegate = self; table.dataSource = self
         table.target = self; table.doubleAction = #selector(doubleClickScene)
@@ -193,7 +198,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
-            scroll.widthAnchor.constraint(equalToConstant: 210),
+            scroll.widthAnchor.constraint(equalToConstant: 300),
             right.topAnchor.constraint(equalTo: scroll.topAnchor),
             right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
             right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
@@ -292,14 +297,69 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         text.lineBreakMode = .byTruncatingTail
         let cell = NSTableCellView()
         cell.textField = text
+        let thumbnail = NSImageView()
+        thumbnail.imageScaling = .scaleProportionallyUpOrDown
+        thumbnail.wantsLayer = true
+        thumbnail.layer?.cornerRadius = 5
+        thumbnail.layer?.masksToBounds = true
+        thumbnail.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.2).cgColor
+        thumbnail.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Wallpaper preview")
+        thumbnail.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(thumbnail)
+        cell.imageView = thumbnail
+        thumbnails.countLimit = 64
+        if let source = try? url(item) {
+            // A serial queue bounds decoder use; only cells requested by AppKit enqueue work.
+            thumbnailQueue.async { [weak self, weak thumbnail] in
+                guard let self, thumbnail != nil else { return }
+                let accessed = source.startAccessingSecurityScopedResource()
+                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+                let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+                if let image = self.thumbnails.object(forKey: key) {
+                    DispatchQueue.main.async { thumbnail?.image = image }
+                    return
+                }
+                let image: CGImage?
+                if source.pathExtension.lowercased() == "idlesse" {
+                    image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
+                } else if let still = Self.listThumbnail(source) {
+                    image = still
+                } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
+                    ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
+                    image = sidecar
+                } else {
+                    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
+                    generator.appliesPreferredTrackTransform = true
+                    generator.maximumSize = CGSize(width: 192, height: 108)
+                    image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
+                }
+                guard let image else { return }
+                let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                self.thumbnails.setObject(result, forKey: key)
+                DispatchQueue.main.async { thumbnail?.image = result }
+            }
+        }
         text.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(text)
         NSLayoutConstraint.activate([
-            text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            thumbnail.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+            thumbnail.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            thumbnail.widthAnchor.constraint(equalToConstant: 80),
+            thumbnail.heightAnchor.constraint(equalToConstant: 45),
+            text.leadingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
             text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
         ])
         return cell
+    }
+    private static func listThumbnail(_ url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 192
+        ] as CFDictionary)
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
