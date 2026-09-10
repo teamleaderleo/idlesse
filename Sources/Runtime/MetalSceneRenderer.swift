@@ -23,6 +23,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var offlineDuration: Double = 0
         var player: AVQueuePlayer?
         var looper: AVPlayerLooper?
+        var sharedHub: SharedVideoHub?
         var followsClock = false
         var seekInFlight = false
         var transportRevision: UInt64?
@@ -30,10 +31,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var statusObserver: NSKeyValueObservation?
         init(_ node: SceneNode) { self.node = node }
         func prepareOutputs() {
+            guard sharedHub == nil else { return }
             // Replicas arrive asynchronously when the looper becomes ready.
             // Outputs are not copied from the template; configure each replica.
             for replica in looper?.loopingPlayerItems ?? player?.items() ?? [] {
-                replica.preferredForwardBufferDuration = 1
+                replica.preferredForwardBufferDuration = 0.5
                 guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
                 let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -44,9 +46,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         deinit {
             statusObserver?.invalidate()
-            player?.pause()
-            looper?.disableLooping()
-            player?.removeAllItems()
+            if sharedHub == nil {
+                player?.pause()
+                looper?.disableLooping()
+                player?.removeAllItems()
+            }
         }
     }
     /// Completion handlers may outlive renderer teardown. Release wrappers before their cache.
@@ -116,8 +120,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var framesSinceCacheFlush = 0
     private var lastObservedLoopCount = 0
 
+    private var sharedHub: SharedVideoHub?
+
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
-         onError: @escaping (String) -> Void) throws {
+         onError: @escaping (String) -> Void, sharedHub: SharedVideoHub? = nil) throws {
+        self.sharedHub = sharedHub
         let authored = playable
         let playable = try playable.evaluated()
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
@@ -166,33 +173,36 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 }
                 input.texture = try Self.upload(cg, device: device)
             case .video(let url):
-                let item = AVPlayerItem(url: url)
-                item.preferredForwardBufferDuration = 1
-                let player = AVQueuePlayer()
-                player.isMuted = true
-                player.preventsDisplaySleepDuringVideoPlayback = false
-                input.player = player
+                input.sharedHub = sharedHub
                 input.followsClock = authored.timeline?.videosFollowScene == true
-                if input.followsClock {
-                    player.actionAtItemEnd = .pause
-                    player.insert(item, after: nil)
-                    input.prepareOutputs()
-                    input.statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self, weak input] item, _ in
-                        DispatchQueue.main.async { [weak self, weak input] in
-                            guard let self, input != nil, self.diagnostics.state != .disposed else { return }
-                            if item.status == .failed { onError(item.error?.localizedDescription ?? "Video transport failed.") }
-                            if item.status == .readyToPlay { self.needsFrame = true; self.metal.draw() }
+                if sharedHub == nil {
+                    let item = AVPlayerItem(url: url)
+                    item.preferredForwardBufferDuration = 0.5
+                    let player = AVQueuePlayer()
+                    player.isMuted = true
+                    player.preventsDisplaySleepDuringVideoPlayback = false
+                    input.player = player
+                    if input.followsClock {
+                        player.actionAtItemEnd = .pause
+                        player.insert(item, after: nil)
+                        input.prepareOutputs()
+                        input.statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self, weak input] item, _ in
+                            DispatchQueue.main.async { [weak self, weak input] in
+                                guard let self, input != nil, self.diagnostics.state != .disposed else { return }
+                                if item.status == .failed { onError(item.error?.localizedDescription ?? "Video transport failed.") }
+                                if item.status == .readyToPlay { self.needsFrame = true; self.metal.draw() }
+                            }
                         }
-                    }
-                } else {
-                    let looper = AVPlayerLooper(player: player, templateItem: item)
-                    input.looper = looper
-                    input.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak input] looper, _ in
-                        if looper.status == .ready {
-                            DispatchQueue.main.async { [weak input] in input?.prepareOutputs() }
-                        }
-                        if looper.status == .failed {
-                            DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
+                    } else {
+                        let looper = AVPlayerLooper(player: player, templateItem: item)
+                        input.looper = looper
+                        input.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak input] looper, _ in
+                            if looper.status == .ready {
+                                DispatchQueue.main.async { [weak input] in input?.prepareOutputs() }
+                            }
+                            if looper.status == .failed {
+                                DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
+                            }
                         }
                     }
                 }
@@ -228,31 +238,42 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         if !diagnostics.animated { view.draw() }
     }
     @discardableResult private func updateVideos() -> Bool {
-        guard let cache else { return false }
         var changed = false
         let visible = visibleIDs
         for input in inputs where visible.contains(input.node.id) {
-            if input.followsClock { synchronizeVideo(input) }
-            guard let player = input.player,
-                  let output = player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first
-            else { continue }
-            let time = player.currentTime()
-            guard output.hasNewPixelBuffer(forItemTime: time),
-                  let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { continue }
-            var wrapper: CVMetalTexture?
-            guard CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm,
-                CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), 0, &wrapper) == kCVReturnSuccess,
-                  let wrapper, let texture = CVMetalTextureGetTexture(wrapper) else { continue }
-            input.pixelBuffer = buffer
-            input.videoTexture = wrapper
-            input.texture = texture
-            changed = true
+            if let hub = input.sharedHub {
+                if let sample = hub.sample(nodeID: input.node.id, clock: clock, isRunning: diagnostics.state == .running) {
+                    if sample.buffer !== input.pixelBuffer {
+                        input.pixelBuffer = sample.buffer
+                        input.videoTexture = sample.wrapper
+                        input.texture = sample.texture
+                        changed = true
+                    }
+                }
+            } else {
+                guard let cache else { continue }
+                if input.followsClock { synchronizeVideo(input) }
+                guard let player = input.player,
+                      let output = player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first
+                else { continue }
+                let time = player.currentTime()
+                guard output.hasNewPixelBuffer(forItemTime: time),
+                      let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { continue }
+                var wrapper: CVMetalTexture?
+                guard CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm,
+                    CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), 0, &wrapper) == kCVReturnSuccess,
+                      let wrapper, let texture = CVMetalTextureGetTexture(wrapper) else { continue }
+                input.pixelBuffer = buffer
+                input.videoTexture = wrapper
+                input.texture = texture
+                changed = true
+            }
         }
-        let currentLoops = inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0
+        let currentLoops = sharedHub?.loopCount ?? (inputs.filter { $0.player != nil }.map { $0.looper?.loopCount ?? 0 }.min() ?? 0)
         diagnostics.loopCount = currentLoops
         if currentLoops != lastObservedLoopCount {
             lastObservedLoopCount = currentLoops
-            CVMetalTextureCacheFlush(cache, 0)
+            if let cache { CVMetalTextureCacheFlush(cache, 0) }
         }
         return changed
     }
@@ -755,6 +776,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         needsFrame = true
         let visible = visibleIDs
         inputs.forEach { input in
+            guard input.sharedHub == nil else { return }
             if input.followsClock || paused || !visible.contains(input.node.id) { input.player?.pause() } else { input.player?.play() }
         }
         updateDrawScheduling()

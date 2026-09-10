@@ -46,6 +46,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let icons = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
     private let widgets = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
     private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
+    private let batteryThrottle = NSButton(checkboxWithTitle: "Cap to 30 fps on battery", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
@@ -119,7 +120,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         transition.target = self; transition.action = #selector(changePlayback)
         transition.setAccessibilityLabel("Crossfade")
         liveMenu.target = self; liveMenu.action = #selector(changeMenuAnimation)
-        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu]])
+        batteryThrottle.target = self; batteryThrottle.action = #selector(changeBatteryThrottle)
+        batteryThrottle.toolTip = "Automatically caps frame rate to 30 fps when running on battery to conserve energy."
+        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu], [batteryThrottle]])
         schedule.target = self; schedule.action = #selector(changeBedtime)
         amount.target = self; amount.action = #selector(changeBedtime); amount.isContinuous = true
         amount.setAccessibilityLabel("Dimming")
@@ -138,7 +141,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             [label("Dim at"), from], [label("Restore at"), until], [NSView(), dim]])
         let saver = NSButton(title: "Screen Saver Options…", target: self, action: #selector(openSaver))
         saver.bezelStyle = .rounded
-        addTab("Screen Saver", rows: [[NSView(), saver]])
+        let mirror = NSButton(title: "Mirror Active Wallpaper to Screen Saver", target: self, action: #selector(mirrorWallpaperToSaver))
+        mirror.bezelStyle = .rounded
+        addTab("Screen Saver", rows: [[NSView(), saver], [NSView(), mirror]])
         reload()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -183,6 +188,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         updateIcons()
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
+        batteryThrottle.state = SceneFrameRate.throttleOnBattery ? .on : .off
         let values = comfort.bedtimeSettings
         schedule.state = values.enabled ? .on : .off
         amount.doubleValue = values.amount * 100
@@ -197,6 +203,35 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     @objc private func changePlayback() {
         SceneFrameRate.selected = SceneFrameRate.allCases[rate.indexOfSelectedItem]
         wallpaper.transitionDuration = [0.0, 0.5, 1, 2][transition.indexOfSelectedItem]
+    }
+    @objc private func changeBatteryThrottle() {
+        SceneFrameRate.throttleOnBattery = batteryThrottle.state == .on
+    }
+    @objc private func mirrorWallpaperToSaver() {
+        guard let url = wallpaper.selectedURL else {
+            let alert = NSAlert()
+            alert.messageText = "No Active Wallpaper"
+            alert.informativeText = "Choose or play a wallpaper first before mirroring to the Screen Saver."
+            alert.addButton(withTitle: "OK")
+            if let window { alert.beginSheetModal(for: window, completionHandler: nil) }
+            return
+        }
+        do {
+            let targetURL = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+            try IdlessePreferences.shared.saveFolder(targetURL)
+            NotificationCenter.default.post(name: IdlessePreferences.settingsChangedNotification, object: nil)
+            let alert = NSAlert()
+            alert.messageText = "Screen Saver Synchronized"
+            alert.informativeText = "The Idlesse screen saver is now set to use \"\(url.lastPathComponent)\"."
+            alert.addButton(withTitle: "OK")
+            if let window { alert.beginSheetModal(for: window, completionHandler: nil) }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could Not Update Screen Saver"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            if let window { alert.beginSheetModal(for: window, completionHandler: nil) }
+        }
     }
     @objc private func changeBedtime() {
         func minute(_ picker: NSDatePicker) -> Int {

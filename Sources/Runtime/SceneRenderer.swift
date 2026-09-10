@@ -1,5 +1,35 @@
 import AppKit
 import AVFoundation
+import Metal
+import CoreVideo
+import IOKit.ps
+
+enum PowerManagement {
+    private static var powerRunLoopSource: CFRunLoopSource?
+
+    static func startMonitoring() {
+        guard powerRunLoopSource == nil else { return }
+        if let source = IOPSNotificationCreateRunLoopSource({ _ in
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: SceneFrameRate.changed, object: nil)
+            }
+        }, nil)?.takeRetainedValue() {
+            powerRunLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+    }
+
+    static var isBatteryPowered: Bool {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return false }
+        guard let type = IOPSGetProvidingPowerSourceType(blob)?.takeRetainedValue() as String? else { return false }
+        return type == "Battery Power"
+    }
+
+    static var isLowPowerOrBatteryThrottled: Bool {
+        ProcessInfo.processInfo.isLowPowerModeEnabled ||
+            (SceneFrameRate.throttleOnBattery && isBatteryPowered)
+    }
+}
 
 enum SceneFrameRate: Int, CaseIterable {
     case automatic = 0, matchDisplay = -1, fps30 = 30, fps60 = 60, fps120 = 120, fps160 = 160
@@ -8,6 +38,13 @@ enum SceneFrameRate: Int, CaseIterable {
         get { SceneFrameRate(rawValue: UserDefaults.standard.integer(forKey: "sceneFrameRate")) ?? .automatic }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: "sceneFrameRate")
+            NotificationCenter.default.post(name: changed, object: nil)
+        }
+    }
+    static var throttleOnBattery: Bool {
+        get { UserDefaults.standard.object(forKey: "sceneFrameRateThrottleOnBattery") == nil ? true : UserDefaults.standard.bool(forKey: "sceneFrameRateThrottleOnBattery") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "sceneFrameRateThrottleOnBattery")
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }
@@ -20,6 +57,10 @@ enum SceneFrameRate: Int, CaseIterable {
     }
     func requested(maximum: Int) -> Int? {
         let maximum = maximum > 0 ? maximum : 60
+        PowerManagement.startMonitoring()
+        if PowerManagement.isLowPowerOrBatteryThrottled {
+            return min(30, maximum)
+        }
         switch self {
         case .automatic: return nil
         case .matchDisplay: return maximum
@@ -129,6 +170,219 @@ final class StaticImageRenderer: SceneRenderer {
     }
 }
 
+/// Manages a single shared video playback engine across multiple display surfaces.
+/// This prevents multiple hardware decoders (VTDecoderXPCService) from duplicating
+/// uncompressed framebuffers when the same scene or video is displayed across monitors.
+final class SharedVideoHub {
+    final class TrackedVideo {
+        let nodeID: UUID
+        let url: URL
+        let player: AVQueuePlayer
+        var looper: AVPlayerLooper?
+        var statusObserver: NSKeyValueObservation?
+        var followsClock: Bool = false
+        var seekInFlight: Bool = false
+        var lastCorrection: Double = -.infinity
+        var transportRevision: UInt64?
+
+        struct CachedFrame {
+            let buffer: CVPixelBuffer
+            let wrapper: CVMetalTexture?
+            let texture: MTLTexture?
+            let time: CMTime
+        }
+        var recentFrames: [CachedFrame] = []
+        var latestTexture: MTLTexture?
+        var latestWrapper: CVMetalTexture?
+        var latestBuffer: CVPixelBuffer?
+
+        init(nodeID: UUID, url: URL, player: AVQueuePlayer) {
+            self.nodeID = nodeID
+            self.url = url
+            self.player = player
+        }
+
+        func prepareOutputs() {
+            for replica in looper?.loopingPlayerItems ?? player.items() {
+                replica.preferredForwardBufferDuration = 0.5
+                guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferMetalCompatibilityKey as String: true
+                ])
+                output.suppressesPlayerRendering = false
+                replica.add(output)
+            }
+        }
+
+        deinit {
+            statusObserver?.invalidate()
+            player.pause()
+            looper?.disableLooping()
+            player.removeAllItems()
+            recentFrames.removeAll()
+            latestTexture = nil
+            latestWrapper = nil
+            latestBuffer = nil
+        }
+    }
+
+    struct SampledFrame {
+        let texture: MTLTexture?
+        let wrapper: CVMetalTexture?
+        let buffer: CVPixelBuffer?
+    }
+
+    private let lock = NSLock()
+    private var videos: [UUID: TrackedVideo] = [:]
+    private var cache: CVMetalTextureCache?
+    private var isClosed = false
+
+    var primaryPlayer: AVQueuePlayer? {
+        lock.lock(); defer { lock.unlock() }
+        return videos.values.first?.player
+    }
+
+    var loopCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return videos.values.compactMap { $0.looper?.loopCount }.min() ?? 0
+    }
+
+    init(scene: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) {
+        if let device = MTLCreateSystemDefaultDevice() {
+            CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
+        }
+        for node in scene.allNodes {
+            guard case .video(let url) = node.content else { continue }
+            let item = AVPlayerItem(url: url)
+            item.preferredForwardBufferDuration = 0.5
+            let player = AVQueuePlayer()
+            player.isMuted = true
+            player.preventsDisplaySleepDuringVideoPlayback = false
+            let tracked = TrackedVideo(nodeID: node.id, url: url, player: player)
+            tracked.followsClock = scene.timeline?.videosFollowScene == true
+            if tracked.followsClock {
+                player.actionAtItemEnd = .pause
+                player.insert(item, after: nil)
+                tracked.prepareOutputs()
+                tracked.statusObserver = item.observe(\.status, options: [.initial, .new]) { item, _ in
+                    if item.status == .failed {
+                        DispatchQueue.main.async { onError(item.error?.localizedDescription ?? "Video transport failed.") }
+                    }
+                }
+            } else {
+                let looper = AVPlayerLooper(player: player, templateItem: item)
+                tracked.looper = looper
+                tracked.statusObserver = looper.observe(\.status, options: [.initial, .new]) { [weak tracked] looper, _ in
+                    if looper.status == .ready {
+                        DispatchQueue.main.async { tracked?.prepareOutputs() }
+                    }
+                    if looper.status == .failed {
+                        DispatchQueue.main.async { onError(looper.error?.localizedDescription ?? "Video looping failed.") }
+                    }
+                }
+            }
+            videos[node.id] = tracked
+        }
+    }
+
+    func player(for nodeID: UUID) -> AVQueuePlayer? {
+        lock.lock(); defer { lock.unlock() }
+        return videos[nodeID]?.player
+    }
+
+    func setPaused(_ paused: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        guard !isClosed else { return }
+        for video in videos.values {
+            if video.followsClock || paused {
+                video.player.pause()
+            } else {
+                video.player.play()
+            }
+        }
+    }
+
+    func sample(nodeID: UUID, clock: SceneClock, isRunning: Bool) -> SampledFrame? {
+        lock.lock(); defer { lock.unlock() }
+        guard !isClosed, let tracked = videos[nodeID] else { return nil }
+        if tracked.followsClock {
+            synchronizeVideo(tracked, clock: clock, isRunning: isRunning)
+        }
+        guard let output = tracked.player.currentItem?.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else {
+            return SampledFrame(texture: tracked.latestTexture, wrapper: tracked.latestWrapper, buffer: tracked.latestBuffer)
+        }
+        let time = tracked.player.currentTime()
+        if output.hasNewPixelBuffer(forItemTime: time),
+           let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
+            var wrapper: CVMetalTexture?
+            var texture: MTLTexture?
+            if let cache {
+                let width = CVPixelBufferGetWidth(buffer)
+                let height = CVPixelBufferGetHeight(buffer)
+                if CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm, width, height, 0, &wrapper) == kCVReturnSuccess,
+                   let wrapper {
+                    texture = CVMetalTextureGetTexture(wrapper)
+                }
+            }
+            tracked.latestBuffer = buffer
+            tracked.latestWrapper = wrapper
+            tracked.latestTexture = texture
+            tracked.recentFrames.append(TrackedVideo.CachedFrame(buffer: buffer, wrapper: wrapper, texture: texture, time: time))
+            if tracked.recentFrames.count > 2 {
+                tracked.recentFrames.removeFirst()
+            }
+            return SampledFrame(texture: texture, wrapper: wrapper, buffer: buffer)
+        } else {
+            return SampledFrame(texture: tracked.latestTexture, wrapper: tracked.latestWrapper, buffer: tracked.latestBuffer)
+        }
+    }
+
+    private func synchronizeVideo(_ tracked: TrackedVideo, clock: SceneClock, isRunning: Bool) {
+        guard let item = tracked.player.currentItem, item.status == .readyToPlay else { return }
+        let duration = item.duration.seconds
+        guard duration.isFinite, duration > 0 else { return }
+        let wrapped = clock.time.truncatingRemainder(dividingBy: duration)
+        let target = clock.isAtEnd && wrapped < 0.000001 ? max(0, duration - 1.0 / 600) : wrapped
+        let rate = isRunning ? clock.effectiveRate : 0
+        let now = ProcessInfo.processInfo.systemUptime
+        let needsSeek = tracked.transportRevision != clock.revision ||
+            abs(tracked.player.currentTime().seconds - target) > (rate == 0 ? 0.002 : 0.12)
+        guard !tracked.seekInFlight else { return }
+        if needsSeek && (tracked.transportRevision != clock.revision || now - tracked.lastCorrection >= 0.1) {
+            tracked.seekInFlight = true
+            tracked.lastCorrection = now
+            let revision = clock.revision
+            tracked.player.pause()
+            tracked.player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak tracked] completed in
+                DispatchQueue.main.async { [weak tracked] in
+                    guard let tracked else { return }
+                    tracked.seekInFlight = false
+                    if completed { tracked.transportRevision = revision }
+                }
+            }
+        } else if !needsSeek {
+            tracked.player.rate = Float(rate)
+        }
+    }
+
+    func close() {
+        lock.lock(); defer { lock.unlock() }
+        guard !isClosed else { return }
+        isClosed = true
+        for video in videos.values {
+            video.statusObserver?.invalidate()
+            video.player.pause()
+            video.looper?.disableLooping()
+            video.player.removeAllItems()
+        }
+        videos.removeAll()
+        if let cache { CVMetalTextureCacheFlush(cache, 0) }
+    }
+
+    deinit { close() }
+}
+
 final class VideoRenderer: SceneRenderer {
     let view: NSView
     private var player: AVQueuePlayer?
@@ -148,7 +402,7 @@ final class VideoRenderer: SceneRenderer {
         queue.volume = 0
         queue.preventsDisplaySleepDuringVideoPlayback = false
         let item = AVPlayerItem(url: url)
-        item.preferredForwardBufferDuration = 1
+        item.preferredForwardBufferDuration = 0.5
         let loop = AVPlayerLooper(player: queue, templateItem: item)
         (view.layer as? AVPlayerLayer)?.player = queue
         (view.layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill

@@ -105,6 +105,7 @@ build_app() {
     -framework AVFoundation \
     -framework MetalKit \
     -framework Metal \
+    -framework IOKit \
     "${SHARED_SOURCES[@]}" \
     "${SAVER_SOURCES[@]}" \
     "$ROOT/Sources/Runtime/SceneRenderer.swift" \

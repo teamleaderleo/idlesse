@@ -151,9 +151,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let root = window?.contentView else { return }
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        thumbnails.totalCostLimit = 64 * 1024 * 1024
         search.placeholderString = "Search wallpapers"
         search.delegate = self
-        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites"])
+        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         filter.target = self; filter.action = #selector(filterChanged)
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
@@ -269,9 +270,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         reloadSourceActions()
         let previous = id ?? selected?.id
         let collectionID = filter.selectedItem?.representedObject as? String
-        let previousFilter = min(filter.indexOfSelectedItem, 3)
+        let previousFilter = min(filter.indexOfSelectedItem, 6)
         filter.removeAllItems()
-        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites"])
+        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         for collection in store.catalog.collections {
             filter.addItem(withTitle: "Collection: \(collection.name)")
             filter.lastItem?.representedObject = collection.id
@@ -287,6 +288,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
             case 3: return matches && store.catalog.favorites.contains(item.id)
+            case 4:
+                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
+                return matches && (path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video")
+            case 5:
+                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
+                return matches && (item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene")
+            case 6:
+                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
+                return matches && (path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") || path.hasSuffix(".png") || path.hasSuffix(".heic") || item.entry?.mediaType == "image")
             default: return matches
             }
         }.sorted {
@@ -363,7 +373,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 }
                 guard let image else { return }
                 let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-                self.thumbnails.setObject(result, forKey: key)
+                self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
                 DispatchQueue.main.async { thumbnail?.image = result }
             }
         }

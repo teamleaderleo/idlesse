@@ -20,7 +20,7 @@ private final class DesktopWindow: NSPanel {
 }
 
 final class WallpaperSurface {
-    private static var liveMenuStripEnabled: Bool {
+    fileprivate static var liveMenuStripEnabled: Bool {
         ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" ||
             UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip")
     }
@@ -33,7 +33,7 @@ final class WallpaperSurface {
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
-    init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) throws {
+    init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, sharedHub: SharedVideoHub? = nil, onError: @escaping (String) -> Void) throws {
         window = DesktopWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         (window as? NSPanel)?.isFloatingPanel = false
@@ -52,7 +52,7 @@ final class WallpaperSurface {
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
         if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || Self.liveMenuStripEnabled {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
-                scale: screen.backingScaleFactor, clock: clock, onError: onError)
+                scale: screen.backingScaleFactor, clock: clock, onError: onError, sharedHub: sharedHub)
         } else {
             renderer = try LayeredSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError)
@@ -127,6 +127,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var selectedURL: URL?
     private(set) var pausedByUser = false
     private var playable: SceneDescriptor?
+    private var activeSharedVideoHub: SharedVideoHub?
+    private var retiringSharedVideoHub: SharedVideoHub?
     // Only the interactive host persists state; smoke/qualification controllers stay isolated.
     var persistsSelection = false
     var resumeDefaults = UserDefaults.standard
@@ -291,7 +293,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         observe(workspace, NSWorkspace.sessionDidBecomeActiveNotification) { $0.setSessionInactive(false) }
         observe(.default, Notification.Name.NSProcessInfoPowerStateDidChange) { controller in
             controller.clock.setPaused(controller.suspended || controller.shouldPause)
+            controller.activeSharedVideoHub?.setPaused(controller.shouldPause)
             controller.surfaces.forEach { $0.setPaused(controller.shouldPause) }
+            controller.surfaces.forEach { $0.updateFrameRate() }
             controller.updateMenu()
         }
         observe(.default, NSApplication.didChangeScreenParametersNotification) { controller in
@@ -391,15 +395,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     candidateClock.pointerEnabled = reloading && self.clock.pointerEnabled
                     candidateClock.audioEnabled = reloading && self.clock.audioEnabled && playable.usesAudio
                 }
-                let replacement = self.suspended ? [] :
+                let (replacement, newHub) = self.suspended ? ([], nil) :
                     try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
                 let fade = !reloading && self.presentsWindows && !self.suspended && !self.shouldPause &&
                     !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && self.transitionDuration > 0 && !self.surfaces.isEmpty
                 if fade {
                     self.retiring = self.surfaces
                     self.retiring.forEach { $0.setPaused(true) }
+                    self.retiringSharedVideoHub = self.activeSharedVideoHub
                     self.retiringURL = self.scopeStarted ? self.selectedURL : nil
                     self.surfaces = []
+                    self.activeSharedVideoHub = nil
                 } else {
                     self.releaseSurfaces()
                     if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
@@ -424,6 +430,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.revision += 1
                 self.watch(url: url, scene: playable)
                 self.surfaces = replacement
+                self.activeSharedVideoHub = newHub
                 replacement.forEach { $0.setPaused(self.shouldPause) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
@@ -459,14 +466,22 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int) throws -> [WallpaperSurface] {
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
+        let hasVideo = playable.allNodes.contains { $0.kind == .video }
+        let needsMetal = playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || WallpaperSurface.liveMenuStripEnabled
+        let sharedHub = (hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
+            guard let self, self.generation == request,
+                  self.surfaceGeneration == surfaceRequest else { return }
+            self.stop()
+            self.showError(message)
+        } : nil
         do {
             for screen in NSScreen.screens {
                 let surface = try autoreleasepool {
-                    try WallpaperSurface(screen: screen, playable: playable, clock: clock) { [weak self] message in
+                    try WallpaperSurface(screen: screen, playable: playable, clock: clock, sharedHub: sharedHub) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
                         self.stop()
@@ -476,8 +491,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 configureDesktopInteraction(surface)
                 result.append(surface)
             }
-            return result
+            return (result, sharedHub)
         } catch {
+            sharedHub?.close()
             result.forEach { $0.close() }
             throw error
         }
@@ -581,7 +597,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         // Release first on display changes to avoid temporarily doubling players.
         releaseSurfaces()
         do {
-            surfaces = try makeSurfaces(playable: playable, clock: clock, request: generation)
+            let (newSurfaces, newHub) = try makeSurfaces(playable: playable, clock: clock, request: generation)
+            surfaces = newSurfaces
+            activeSharedVideoHub = newHub
             surfaces.forEach { $0.setPaused(shouldPause) }
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
@@ -619,6 +637,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         finishTransition()
         dimmedForBedtime = value
         clock.setPaused(suspended || shouldPause)
+        activeSharedVideoHub?.setPaused(shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
         updateMenu()
     }
@@ -628,6 +647,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         pausedByUser.toggle()
         saveSelection()
         clock.setPaused(suspended || shouldPause)
+        activeSharedVideoHub?.setPaused(shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
         updateMenu()
     }
@@ -642,6 +662,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         watcher = nil
         lastReloadError = nil
         clock.setPaused(true)
+        activeSharedVideoHub?.close()
+        activeSharedVideoHub = nil
         generation += 1
         loadTask?.cancel()
         loadTask = nil
@@ -664,6 +686,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         finishTransition()
         surfaces.forEach { $0.close() }
         surfaces.removeAll()
+        activeSharedVideoHub?.close()
+        activeSharedVideoHub = nil
     }
 
     static func smokeTransitions(imageURL: URL) throws {
@@ -677,9 +701,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         controller.presentsWindows = false
         controller.transitionDuration = 0.5
         let scene = SceneDescriptor(title: "Transition", assetURL: imageURL, kind: .image)
-        controller.retiring = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        controller.retiring = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0).surfaces
         let old = controller.retiring
-        controller.surfaces = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        let (smokeSurfaces1, smokeHub1) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        controller.surfaces = smokeSurfaces1
+        controller.activeSharedVideoHub = smokeHub1
         if let surface = controller.surfaces.first {
             let originalView = surface.window.contentView
             var clicks = 0
@@ -712,7 +738,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         precondition(controller.surfaces.allSatisfy { $0.window.alphaValue == 1 })
         controller.retiring = controller.surfaces
         let interrupted = controller.retiring
-        controller.surfaces = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        let (smokeSurfaces2, smokeHub2) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        controller.surfaces = smokeSurfaces2
+        controller.activeSharedVideoHub = smokeHub2
         controller.beginTransition()
         controller.setDimmedForBedtime(true)
         precondition(controller.transitionTimer == nil && controller.retiring.isEmpty)
@@ -743,6 +771,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         transitionTimer?.invalidate(); transitionTimer = nil
         surfaces.forEach { $0.window.alphaValue = 1 }
         retiring.forEach { $0.close() }; retiring.removeAll()
+        retiringSharedVideoHub?.close(); retiringSharedVideoHub = nil
         retiringURL?.stopAccessingSecurityScopedResource(); retiringURL = nil
     }
 
