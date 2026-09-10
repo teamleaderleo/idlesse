@@ -72,12 +72,15 @@ final class WallpaperSurface {
         updateFrameRate()
     }
 
-    func setCleanDesktop(_ enabled: Bool, click: @escaping () -> Void, menu: @escaping () -> NSMenu) {
+    func setCleanDesktop(_ enabled: Bool, hideWidgets: Bool = false, click: @escaping () -> Void, menu: @escaping () -> NSMenu) {
         guard let desktop = window as? DesktopWindow else { return }
         desktop.desktopClick = enabled ? click : nil
         desktop.desktopMenu = enabled ? menu : nil
         desktop.ignoresMouseEvents = !enabled
-        desktop.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(enabled ? .desktopIconWindow : .desktopWindow)) + 1)
+        // Widgets occupy desktopIconWindow + 2 on Tahoe, above Finder icons.
+        // Cover them with the same surface when the whole desktop is kept clear.
+        let offset = enabled && hideWidgets ? 3 : 1
+        desktop.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(enabled ? .desktopIconWindow : .desktopWindow)) + offset)
         if desktop.isVisible {
             if enabled { desktop.orderFront(nil) } else { desktop.orderBack(nil) }
         }
@@ -541,6 +544,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     private func configureDesktopInteraction(_ surface: WallpaperSurface) {
         surface.setCleanDesktop(comfort?.desktopIconsVisible == false,
+            hideWidgets: comfort?.desktopWidgetsVisible == false,
             click: { [weak self] in self?.revealDesktop() },
             menu: { [weak self] in self?.cleanDesktopMenu() ?? NSMenu() })
     }
@@ -688,6 +692,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
             surface.window.sendEvent(event)
             precondition(clicks == 1, "Clean desktop must handle a click instead of opening an invisible file")
+            surface.setCleanDesktop(true, hideWidgets: true, click: { clicks += 1 }, menu: { NSMenu() })
+            precondition(surface.window.level.rawValue > Int(CGWindowLevelForKey(.desktopIconWindow)) + 2, "Hidden widgets must remain below the clean desktop")
+            precondition(surface.window.contentView === originalView, "Widget hiding must not replace the renderer")
+            surface.window.sendEvent(event)
+            precondition(clicks == 2)
             surface.setCleanDesktop(false, click: {}, menu: { NSMenu() })
             precondition(surface.window.ignoresMouseEvents)
             precondition(surface.window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow)))

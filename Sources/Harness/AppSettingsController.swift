@@ -95,7 +95,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             sidebar.addSubview(control)
         }
         icons.toolTip = "Keep files covered by the active Idlesse wallpaper, even after clicking the desktop. Right-click for desktop controls."
-        widgets.toolTip = "Matches macOS Show Widgets on Desktop. Widgets may reappear when revealing the desktop."
+        widgets.toolTip = "Show desktop widgets. With Files also hidden, the wallpaper keeps widgets covered when revealing the desktop."
         widgets.target = self; widgets.action = #selector(changeWidgets)
         status.frame = NSRect(x: 202, y: 670, width: 750, height: 24)
         status.autoresizingMask = [.width, .minYMargin]

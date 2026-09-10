@@ -55,6 +55,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
                 guard let self else { return }
                 self.changingDesktopWidgets = false
                 self.updateDesktopIconsItems()
+                NotificationCenter.default.post(name: Self.desktopVisibilityChanged, object: nil)
                 if let failure {
                     let alert = NSAlert(); alert.messageText = "Desktop Widgets"
                     alert.informativeText = failure; alert.runModal()
