@@ -1,0 +1,18 @@
+{
+  "version": 21,
+  "title": "Desk Clock",
+  "capabilities": [],
+  "features": [
+    "text",
+    "dynamic-text"
+  ],
+  "metadata": {
+    "author": "Idlesse",
+    "description": "A quiet local-time clock with a date line.",
+    "license": "CC0-1.0",
+    "tags": [
+      "clock",
+      "minimal"
+    ]
+  }
+}

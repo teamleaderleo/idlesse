@@ -209,7 +209,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         if selected != nil { preview() }
     }
     private func allItems() -> [Item] {
-        let names = [("AfterHours", "After Hours"), ("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
+        let names = [("DeskClock", "Desk Clock"), ("AfterHours", "After Hours"), ("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
                      ("AudioAurora", "Audio Aurora"), ("Gradient", "Aurora"), ("BreathingAurora", "Breathing Aurora")]
         let builtins = names.compactMap { name, title -> Item? in
             guard let url = Bundle.main.resourceURL?.appendingPathComponent("Scenes/\(name).idlesse"),
@@ -682,7 +682,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
         precondition(controller.droppedURLs(pasteboard) == [raw])
-        precondition(controller.items.count == 7)
+        precondition(controller.items.count == 8 && controller.items.contains { $0.title == "Desk Clock" })
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]

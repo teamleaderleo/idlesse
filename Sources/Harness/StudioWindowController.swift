@@ -592,7 +592,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         presentationSample = PresentationRateSample()
         updateFrameRate()
         titleLabel.stringValue = scene.title
-        detailLabel.stringValue = "\(scene.nodes.count) layer\(scene.nodes.count == 1 ? "" : "s") · \(engine.indexOfSelectedItem == 1 ? "Experimental SDR preview" : "Standard preview")"
+        detailLabel.stringValue = "\(scene.nodes.count) layer\(scene.nodes.count == 1 ? "" : "s") · \(engine.indexOfSelectedItem == 1 ? "Metal preview" : "Standard preview")"
         updateInspector()
         updatePlayback()
     }
@@ -1075,12 +1075,81 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let menu = NSMenu()
         for (title, action) in [("Gradient", #selector(addGradient)), ("Text", #selector(addText)),
             ("Shape", #selector(addShape)), ("Edit Text / Shape…", #selector(editGraphic)),
-            ("New Control…", #selector(addControl)), ("Local Presets…", #selector(presetBrowser)), ("Scene Details…", #selector(editMetadata))] {
+            ("New Control…", #selector(addControl)), ("Local Presets…", #selector(presetBrowser)), ("My Presets…", #selector(globalPresets)), ("Scene Details…", #selector(editMetadata))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self; menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: addGradientButton.bounds.height), in: addGradientButton)
     }
+    @objc private func globalPresets() {
+        guard !saving else { return }
+        do {
+            let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true).appendingPathComponent("Idlesse/Studio Presets", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]).filter { $0.pathExtension == "idlesse" }
+                .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            let dialog = NSAlert(); dialog.messageText = "My Presets"
+            dialog.addButton(withTitle: "Insert"); dialog.addButton(withTitle: "Cancel")
+            dialog.addButton(withTitle: "Save Selection…"); dialog.addButton(withTitle: "Show in Finder")
+            let picker = NSPopUpButton()
+            picker.addItems(withTitles: entries.map { $0.deletingPathExtension().lastPathComponent })
+            picker.frame.size = NSSize(width: 360, height: 28); dialog.accessoryView = picker
+            dialog.buttons[0].isEnabled = !entries.isEmpty && (scene.components?.count ?? 0) < 8
+            dialog.buttons[2].isEnabled = editor.selectedNode != nil
+            dialog.beginSheetModal(for: window) { [weak self] response in
+                guard let self else { return }
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3 {
+                    NSWorkspace.shared.open(root); return
+                }
+                if response.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 {
+                    guard let node = self.editor.selectedNode else { return }
+                    let panel = NSSavePanel(); panel.directoryURL = root
+                    panel.allowedContentTypes = [.init(filenameExtension: "idlesse")!]
+                    panel.nameFieldStringValue = node.displayName + ".idlesse"
+                    panel.beginSheetModal(for: self.window) { [weak self] answer in
+                        guard let self, answer == .OK, let destination = panel.url else { return }
+                        do {
+                            let captured = try SceneComponent.capture(node, from: self.scene).scene
+                            self.saving = true; self.updateInspector()
+                            Task { @MainActor [weak self] in
+                                let scoped = destination.startAccessingSecurityScopedResource()
+                                defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+                                do {
+                                    try await Task.detached { try ScenePackageWriter.write(captured, to: destination) }.value
+                                    self?.detailLabel.stringValue = "Preset saved"
+                                } catch { self?.detailLabel.stringValue = error.localizedDescription }
+                                self?.saving = false; self?.updateInspector()
+                            }
+                        } catch { self.detailLabel.stringValue = error.localizedDescription }
+                    }
+                    return
+                }
+                guard response == .alertFirstButtonReturn, entries.indices.contains(picker.indexOfSelectedItem) else { return }
+                let url = entries[picker.indexOfSelectedItem]
+                self.saving = true; self.updateInspector()
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.saving = false; self.updateInspector() }
+                    do {
+                        let loaded = try await SceneDocument.read(url).scene
+                        guard loaded.nodes.count == 1 else { throw SceneError.invalid("A preset needs one root layer or group.") }
+                        let component = try SceneComponent.capture(loaded.nodes[0], from: loaded)
+                        let id = UUID().uuidString
+                        var next = self.scene
+                        if next.components == nil { next.components = [:] }
+                        next.components?[id] = component
+                        next = try component.inserting(into: next, id: id)
+                        let selected = next.allNodes.firstIndex { $0.id == next.nodes.last!.id } ?? 0
+                        self.saving = false
+                        _ = self.applyEdit(next.nodes, selected: selected, name: "Insert Shared Preset", controls: next)
+                    } catch { self.detailLabel.stringValue = error.localizedDescription }
+                }
+            }
+        } catch { detailLabel.stringValue = error.localizedDescription }
+    }
+
     @objc private func presetBrowser() {
         guard !saving else { return }
         let dialog = NSAlert(); dialog.messageText = "Local Presets"
@@ -1142,6 +1211,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
         let names: [String], values: [String]
         let picker = NSPopUpButton()
+        let sourcePicker = NSPopUpButton()
+        sourcePicker.addItems(withTitles: ["Static Text"] + SceneNode.Typography.LiveSource.allCases.map(\.title))
+        if let source = original.typography?.liveSource,
+           let index = SceneNode.Typography.LiveSource.allCases.firstIndex(of: source) { sourcePicker.selectItem(at: index + 1) }
+        if original.typography != nil {
+            stack.addArrangedSubview(NSTextField(labelWithString: "Content"))
+            stack.addArrangedSubview(sourcePicker)
+        }
         if let text = original.typography {
             names = ["Text", "Font name", "Font size", "Fill (#RRGGBB or #RRGGBBAA)", "Line spacing", "Width", "Height"]
             values = [text.text, text.font, String(text.size), text.fill, String(text.lineSpacing), String(text.width), String(text.height)]
@@ -1206,6 +1283,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 byte(color.redComponent), byte(color.greenComponent), byte(color.blueComponent), byte(color.alphaComponent))
             if var text = node.typography {
                 fields[0].stringValue = textEditor.string
+                text.liveSource = sourcePicker.indexOfSelectedItem == 0 ? nil : SceneNode.Typography.LiveSource.allCases[sourcePicker.indexOfSelectedItem - 1]
                 text.text = fields[0].stringValue; text.font = fields[1].stringValue
                 text.size = Double(fields[2].stringValue) ?? .nan; text.fill = fields[3].stringValue
                 text.lineSpacing = Double(fields[4].stringValue) ?? .nan

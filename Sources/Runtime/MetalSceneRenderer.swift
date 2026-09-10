@@ -13,6 +13,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
 
     private final class Input {
+        var resolvedText: String?
         var node: SceneNode
         var texture: MTLTexture?
         var videoTexture: CVMetalTexture?
@@ -533,7 +534,33 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         updateDrawScheduling()
         metal.draw()
     }
+    private let textOrigin = Date()
+    private var textTimer: Timer?
+    private func updateText(at date: Date) throws {
+        guard let device = metal.device else { return }
+        for input in inputs where input.node.typography?.liveSource != nil {
+            let text = input.node.typography!.resolved(at: date)
+            guard text != input.resolvedText else { continue }
+            var node = input.node
+            var typography = node.typography!
+            typography.text = text; typography.liveSource = nil; node.content = .text(typography)
+            input.texture = try Self.upload(Self.rasterize(node, pixelLimit: SceneBudget.imagePixels(sourceScene?.nodes ?? inputs.map(\.node))), device: device)
+            input.resolvedText = text
+            needsFrame = true
+        }
+    }
     private func updateDrawScheduling() {
+        let liveText = diagnostics.state == .running && inputs.contains { $0.node.typography?.liveSource != nil }
+        if liveText && textTimer == nil {
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                do { try self.updateText(at: Date()); if self.needsFrame { self.metal.draw() } }
+                catch { self.onError(error.localizedDescription) }
+            }
+            timer.tolerance = 0.1
+            textTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        } else if !liveText { textTimer?.invalidate(); textTimer = nil }
+
         // A completed once scene has no moving clock. Independent videos,
         // pointer input and smoothing may still change its final composition.
         let independentVideo = inputs.contains { visibleIDs.contains($0.node.id) && $0.node.kind == .video && !$0.followsClock }
@@ -595,6 +622,15 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         precondition(lit > 100 && lit < 16384, "CoreText should draw visible glyphs with a transparent surrounding canvas")
         let repeated = try text.renderFrame(width: 256, height: 128)
         precondition(repeated == letters, "Static text must be deterministic")
+        let clockNode = SceneNode(content: .text(.init(liveSource: .timeWithSeconds, text: "", size: 60, width: 512, height: 128)))
+        let clockRenderer = try MetalSceneRenderer(playable: .init(title: "Clock", nodes: [clockNode]),
+            bounds: NSRect(x: 0, y: 0, width: 512, height: 128), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
+        defer { clockRenderer.releaseResources() }
+        let zero = try clockRenderer.renderFrame(signals: .init(time: 0), width: 512, height: 128, referenceDate: Date(timeIntervalSince1970: 0))
+        let one = try clockRenderer.renderFrame(signals: .init(time: 1), width: 512, height: 128, referenceDate: Date(timeIntervalSince1970: 0))
+        let zeroAgain = try clockRenderer.renderFrame(signals: .init(time: 0), width: 512, height: 128, referenceDate: Date(timeIntervalSince1970: 0))
+        precondition(zero != one && zero == zeroAgain, "Clock text must update and offline seeking must reproduce glyphs")
+
         guard let device = MTLCreateSystemDefaultDevice() else { throw SceneError.invalid("Metal unavailable") }
         let pool = GroupTexturePool()
         let size = CGSize(width: 7680, height: 4320)
@@ -624,9 +660,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     func renderProbe(signals: SceneSignals? = nil, dimension: Int = 32) throws -> [UInt8] {
         try renderFrame(signals: signals, width: dimension, height: dimension)
     }
-    func renderFrame(signals: SceneSignals? = nil, width: Int, height: Int, sampleVideo: Bool = true) throws -> [UInt8] {
+    func renderFrame(signals: SceneSignals? = nil, width: Int, height: Int, sampleVideo: Bool = true, referenceDate: Date? = nil) throws -> [UInt8] {
         guard (32...3840).contains(width), (32...2160).contains(height) else { throw SceneError.invalid("Frame size must be 32–3840 by 32–2160 pixels.") }
         if let signals { updateSignals(signals) }
+        try updateText(at: (referenceDate ?? textOrigin).addingTimeInterval(signals?.time ?? 0))
         guard let device = metal.device, let queue else { throw SceneError.invalid("Renderer disposed.") }
         if sampleVideo { updateVideos() }
         let spec = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
@@ -707,6 +744,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         if !diagnostics.animated || inputs.contains(where: { $0.followsClock }) { metal.draw() }
     }
     func releaseResources() {
+        textTimer?.invalidate(); textTimer = nil
         metal.isPaused = true
         metal.delegate = nil
         inputs.removeAll()
@@ -945,7 +983,7 @@ extension MetalSceneRenderer {
                 .font: CTFontCreateWithName(text.font as CFString, text.size, nil),
                 .foregroundColor: NSColor(cgColor: color(text.fill))!,
                 .paragraphStyle: paragraph]
-            let string = NSAttributedString(string: text.text, attributes: attributes)
+            let string = NSAttributedString(string: text.resolved(at: Date()), attributes: attributes)
             let setter = CTFramesetterCreateWithAttributedString(string)
             let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0),
                 CGPath(rect: rect.insetBy(dx: 4, dy: 4), transform: nil), nil)

@@ -19,7 +19,14 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         status.stringValue = "Wallpaper: " + wallpaper.statusDescription
         pause.title = wallpaper.pausedByUser ? "Resume" : "Pause"
         pause.isEnabled = wallpaper.isRunning
+        liveMenu.state = UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip") ? .on : .off
         updateIcons()
+    }
+    @objc private func changeMenuAnimation() {
+        UserDefaults.standard.set(liveMenu.state == .on, forKey: "comfort.liveMenuStrip")
+        if let url = wallpaper.selectedURL {
+            wallpaper.select(url, automatic: true, restoringPause: wallpaper.pausedByUser)
+        }
     }
     @objc private func togglePlayback() { wallpaper.togglePause(); updateStatus() }
     @objc private func navigate(_ sender: NSButton) { selectPage(sender.tag) }
@@ -33,6 +40,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     private let icons = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
     private let widgets = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
+    private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
@@ -100,7 +108,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         transition.addItems(withTitles: ["None", "0.5 seconds", "1 second", "2 seconds"])
         transition.target = self; transition.action = #selector(changePlayback)
         transition.setAccessibilityLabel("Crossfade")
-        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition]])
+        liveMenu.target = self; liveMenu.action = #selector(changeMenuAnimation)
+        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu]])
         schedule.target = self; schedule.action = #selector(changeBedtime)
         amount.target = self; amount.action = #selector(changeBedtime); amount.isContinuous = true
         amount.setAccessibilityLabel("Dimming")
