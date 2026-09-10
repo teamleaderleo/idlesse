@@ -7,6 +7,18 @@ images, videos, and `.idlesse` packages without changing the desktop. Aurora is 
 built-in starter scene. Standard remains the default; Metal is an experimental
 comparison renderer, independent of editing.
 
+## Persistent inspector
+
+Studio now keeps the layer list on the left, canvas in the middle, a selection-following inspector on the right, and the timeline below the canvas. The inspector uses collapsible **Layer**, **Content**, **Transform**, **Appearance**, **Compositing**, **Motion**, and **Scene** sections so frequent edits stay visible without expanding every control at once.
+
+**Content** follows the selected layer. Text layers expose source, text, font, size, fill, alignment, spacing and local canvas dimensions; native graphic layers expose primitive, fill and geometry; particle layers expose emitter values and sprite choice. Image/video layers show their current source. Content drafts commit with **Apply Content/Emitter**, producing one scene Undo action through the same editor commit path used by the former sheets.
+
+**Transform** keeps X/Y, scale, rotation and opacity directly editable. Numeric properties owned by bindings show **Driven**; keyframe-owned properties show **Keyframed**. Typed scene-control targets such as text, fill, visibility and blend show **Controlled**. Driven fields display their static fallback but stay read-only until ownership changes through Motion. Locked layers keep content, transform, appearance and compositing edits disabled while the lock control remains available.
+
+**Appearance** keeps ellipse mask, exposure, saturation, vignette and the ordered effect editor together. **Compositing** keeps blend mode, mask source and mask channel together. Each section collects its local edits and commits on Apply, preserving the existing single-Undo edit-session behavior. The selected layer's active drivers and tracks are summarized in **Motion**, and **Controls…**, **Bind…**, and **Keyframes…** remain available for the full advanced workflows. **Scene** keeps playback, details and document actions nearby; preset management and Scene Details continue to use focused sheets.
+
+This redesign changes Studio interaction only. Scene revision 21 data, renderer semantics, live `updateScene` mutation, media preservation and document Undo/Redo continue through the existing `SceneDocument` / `SceneEditorController` / `StudioWindowController.applyEdit` path.
+
 ## Editing
 
 The left list shows frontmost layers first. Select there or click a layer’s rectangle
