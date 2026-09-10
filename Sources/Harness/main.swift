@@ -56,6 +56,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         installMenu()
+        wallpaper.persistsSelection = true
         wallpaper.onStart = { [weak self] in
             self?.saverView?.stopAnimation()
             self?.window?.orderOut(nil)
@@ -125,6 +126,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         ])
         window.minSize = NSSize(width: 900, height: 360)
 
+        wallpaper.restoreSelection()
         showLibrary()
         NSApp.activate(ignoringOtherApps: true)
 
@@ -164,6 +166,22 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
+    @objc private func copyDiagnostics() {
+        let bundle = Bundle.main
+        var lines = ["Idlesse \(bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "unknown") (\(bundle.object(forInfoDictionaryKey: "CFBundleVersion") ?? "unknown"))",
+            "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            "Memory: \(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) GiB"]
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+            let mode = id.flatMap { CGDisplayCopyDisplayMode($0) }
+            lines.append("Display \(index + 1): \(mode?.pixelWidth ?? 0) × \(mode?.pixelHeight ?? 0) pixels; maximum \(screen.maximumFramesPerSecond) Hz; scale \(screen.backingScaleFactor)")
+        }
+        lines.append(wallpaper.diagnosticSummary)
+        lines.append("Report excludes scene titles, file paths, display names, and asset contents.")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         scenePreview.mayQuit() ? .terminateNow : .terminateCancel
     }
@@ -171,7 +189,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func applicationWillTerminate(_ notification: Notification) {
         library?.windowWillClose(notification)
         wallpaper.onStop = nil
-        wallpaper.stop()
+        wallpaper.shutdown()
         saverView?.stopAnimation()
     }
 
@@ -328,6 +346,12 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let dim = wallpaperMenu.addItem(withTitle: "Dim / Restore Display", action: #selector(DesktopComfortController.toggle), keyEquivalent: "d")
         dim.keyEquivalentModifierMask = [.command, .option]
         dim.target = comfort
+        let helpItem = NSMenuItem()
+        let help = NSMenu(title: "Help")
+        let diagnostics = help.addItem(withTitle: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
+        diagnostics.target = self
+        helpItem.submenu = help
+        mainMenu.addItem(helpItem)
         NSApp.mainMenu = mainMenu
     }
 }
@@ -457,6 +481,16 @@ if let index = CommandLine.arguments.firstIndex(of: "--smoke-audio"), CommandLin
         exit(EXIT_SUCCESS)
     } catch {
         fputs("Audio checks failed: \(error)\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-resume"), CommandLine.arguments.count > index + 1 {
+    do {
+        try WallpaperController.smokeResume(url: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        exit(EXIT_SUCCESS)
+    } catch {
+        fputs("Resume checks failed: \(error)\n", stderr)
         exit(EXIT_FAILURE)
     }
 }

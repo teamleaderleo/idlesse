@@ -10,3 +10,5 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=24' 
 "${BUILD_DIR:-$PWD/build}/Idlesse.app/Contents/MacOS/Idlesse" --smoke-library "$fixture_dir/library.png" "$fixture_dir/loop.mp4"
 
 "${BUILD_DIR:-$PWD/build}/Idlesse.app/Contents/MacOS/Idlesse" --smoke-export "$fixture_dir/loop.mp4"
+
+"${BUILD_DIR:-$PWD/build}/Idlesse.app/Contents/MacOS/Idlesse" --smoke-resume "$fixture_dir/loop.mp4"

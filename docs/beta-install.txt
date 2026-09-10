@@ -1,0 +1,27 @@
+Idlesse beta test build
+
+A "local" archive is ad-hoc signed, NOT notarized or ready for public distribution.
+Do not disable Gatekeeper to install it. Public distribution requires the
+Developer ID signed and notarized artifact.
+
+Install
+Quit an existing Idlesse before replacing its app bundle. Drag Idlesse.app into
+Applications. Open it to browse Wallpapers. Studio is available from the menu.
+Double-click Idlesse.saver only if you also want the separate screen saver.
+Native supported media works without FFmpeg. Additional formats may require
+FFmpeg installed separately; Idlesse does not install Homebrew automatically.
+Audio and pointer input remain opt-in. Desktop icon and bedtime controls are
+under Playback & Desktop and Bedtime. Finder actions may not appear on an
+iCloud-managed Desktop; the app controls remain available.
+
+Report a problem
+Use Help > Copy Diagnostics. Paste the report alongside the steps that caused
+it. The report omits scene titles and paths. It is copied locally, never sent.
+
+Uninstall
+Restore desktop icons and turn off bedtime scheduling in Idlesse if enabled.
+Stop Wallpaper, then quit. Remove Idlesse.app from Applications. If installed,
+remove Idlesse.saver from your Library/Screen Savers folder. Imported originals
+remain in their original folders. Library data and preferences are retained;
+remove Library/Application Support/Idlesse only if you want to discard its
+Library, drafts and recovery data too. Export any unsaved work first.

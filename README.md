@@ -20,6 +20,12 @@ Screensaver features:
 - show the same sequence on every display or offset the sequence per display
 - Timing presets and keyboard-friendly preview playback controls
 
+## Beta preparation
+
+The Library is the front door. Choose a scene, use it on your desktop, or open Studio to edit it. Collections, schedules and crossfades organize everyday playback. Help → Copy Diagnostics provides a local report without scene names or file paths.
+
+[Beta readiness and packaging](docs/beta-readiness.md) tracks the remaining release gates. Local builds are not notarized public releases.
+
 ## Current status
 
 Under active development. The build produces **Idlesse.app** (Library, Studio, wallpaper, and Desktop Comfort) and **Idlesse.saver**, a separate ScreenSaver-framework bundle. The app does not replace the installed saver's own preferences or host lifecycle.
@@ -153,7 +159,7 @@ Photos album playback is not implemented.
 See [measured performance and limitations](docs/performance-2026-09-08.md).
 Run `python3 Benchmarks/run.py` after a release build for isolated stress tests.
 
-## Wallpaper prototype
+## Desktop wallpapers
 
 The app now includes **Wallpaper…** for a desktop image or muted looping MP4/MOV,
 with a menu-bar Stop control. This is separate from the screensaver and leaves
@@ -195,7 +201,7 @@ Scene format v2 adds typed nodes, positioning, rotation, scale and a built-in
 animated Metal gradient. Open packages hot-reload on save, preserving the last
 working scene on invalid edits. See [the creative runtime](docs/creative-runtime.md)
 and the self-contained `Examples/Gradient.idlesse` example. The shared clock drives
-procedural time; independent video players are not yet synchronized to it.
+procedural time; opted-in videos approximately follow scene transport with seeking and drift correction. This is not frame-exact multi-video synchronization.
 
 If the system Options button stops responding, check `./build.sh installed-status`.
 Building or pushing does not update the installed saver. Close System Settings
