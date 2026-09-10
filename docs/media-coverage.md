@@ -1,13 +1,11 @@
 # Media coverage — September 10, 2026
 
-The reconciled 112-item Blue Archive wishlist has 85 completed/imported entries and 27 previously excluded entries. Kazusa and Kazusa (Band) are additional completed and imported 4K60 files. This count does not prove every variant mentioned earlier in the conversation was completed.
+The reconciled 112-item Blue Archive wishlist has 90 completed/imported entries and 22 excluded scene variants. Kazusa and Kazusa (Band) are additional completed and imported 4K60 files. This count does not prove every variant mentioned earlier in the conversation was completed.
 
 ## Previous Blue Archive exclusions
 
-These were previous scene-specific decisions, not a ban on these characters or on official animations. Himari and Kasumi were reassessed individually as nonsexual and are now imported; the old blanket rationale was too broad. The remaining list is retained as an audit of what was not processed, not a claim that every item has just been conclusively re-reviewed.
+These are scene-specific decisions, not a ban on these characters or on official animations. Himari and Kasumi were reassessed individually and imported first. A second individual review of all 27 remaining entries reversed Hina, Aris, Koharu (Swimsuit), Fubuki (Swimsuit), and Ui (Swimsuit); all five are now restored and imported. See the [review follow-up](media-review-follow-up.md) for the retained decisions and the two additional requests.
 
-- Hina
-- Aris
 - Shigure (Hot Spring)
 - Mimori (Swimsuit)
 - Toki (Bunny)
@@ -17,17 +15,14 @@ These were previous scene-specific decisions, not a ban on these characters or o
 - Karin (Bunny)
 - Megu
 - Chinatsu (Hot Spring)
-- Koharu (Swimsuit)
 - Hanako
 - Hanako (Swimsuit)
 - Satsuki
 - Eimi
 - Eimi (Swimsuit)
 - Hiyori (Swimsuit)
-- Fubuki (Swimsuit)
 - Hasumi (Track)
 - Ayane (Swimsuit)
-- Ui (Swimsuit)
 - Tsubaki
 - Asuna
 - Mashiro
@@ -40,4 +35,4 @@ These were previous scene-specific decisions, not a ban on these characters or o
 
 ## Earlier requests not established by this catalog
 
-Kisaki, regular Iori, and the second Himari/Rio variants need a separate inventory reconciliation; the 112-item completion count should not be presented as proof they are done.
+Kisaki, regular Iori, and the second Rio variant need a separate inventory reconciliation; the 112-item completion count should not be presented as proof they are done. Himari (Battle Suit/Armed) and Hibiki (Cheer Squad) were individually inspected in the follow-up and not imported.
