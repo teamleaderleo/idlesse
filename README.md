@@ -162,8 +162,9 @@ Run `python3 Benchmarks/run.py` after a release build for isolated stress tests.
 ## Desktop wallpapers
 
 The app now includes **Wallpaper…** for a desktop image or muted looping MP4/MOV,
-with a menu-bar Stop control. This is separate from the screensaver and leaves
-your saved macOS wallpaper intact. See [wallpaper mode](docs/wallpaper-prototype.md)
+with a menu-bar Stop control. This is separate from the screensaver. The interactive
+host sets a small matching still as the underlying macOS wallpaper for menu-bar
+and Show Desktop consistency; the still remains when playback stops. See [wallpaper mode](docs/wallpaper-prototype.md)
 for controls, measured resource use, verification and current limitations.
 
 ## Studio

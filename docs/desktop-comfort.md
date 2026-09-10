@@ -51,31 +51,67 @@ To build and smoke-test changes without replacing a running dimmer's bundle:
 BUILD_DIR="$PWD/build/next" ./build.sh app
 BUILD_DIR="$PWD/build/next" ./test-wallpaper.sh
 ```
-# Desktop icons
+# Persistent clean desktop
 
-**Show on Desktop → Files** in the permanent Idlesse sidebar mirrors macOS Desktop & Dock → Show items →
-On Desktop. **Wallpaper → Show Desktop Files** is also available in the wallpaper and dimming
-menu-bar menus. Uncheck it to hide files without moving or deleting them; check
-it to show them again. The setting persists independently of Idlesse.
+Uncheck **Show on Desktop → Files** in Idlesse's sidebar while a wallpaper is
+playing. This now enables Idlesse's own clean desktop surface, rather than
+macOS's hide-until-click setting. The same command is in the Wallpaper menu.
 
-The toggle keeps Finder's desktop surface enabled, preserving click-wallpaper
-to reveal the desktop. It changes WindowManager's `StandardHideDesktopIcons`
-preference, not `CreateDesktop=false`, which disables desktop click handling.
-Finder restarts when applying the change. Widget visibility, Stage Manager and
-the click-wallpaper preference are left unchanged. Controls refresh from the
-system preference; Idlesse does not store a competing copy of this setting.
+The existing wallpaper windows move just above the desktop icon layer. They
+handle clicks, so invisible Finder icons cannot receive accidental double-clicks.
+The clean cover reuses the running renderer. Separately, a bounded offscreen
+render prepares the system wallpaper still once per successful scene selection.
+
+- Left click requests macOS Show Desktop via Mission Control's `1` argument.
+- Right click / Control-click opens Idlesse's native context menu: Change
+  Wallpaper, Open Desktop Folder, Show / Restore Windows, and visibility controls.
+- This is an Idlesse context menu, not a complete replica of Finder's menu.
+- Re-enabling Files returns the wallpaper to its normal click-through layer.
+- Stopping/quitting Idlesse removes the cover. The mode is restored with playback.
+- No file is moved, renamed, hidden with file flags, or removed. Finder is not
+  restarted or disabled. Existing macOS icon visibility preferences are unchanged.
+- No active wallpaper means no cover; the sidebar Files control is disabled.
+
+The implementation relies on desktop window levels and Mission Control behavior
+that need continued qualification across Spaces and macOS versions. It is a
+local experimental replacement for the unsuccessful system visibility toggle.
 
 ## Desktop widgets
 
-The permanent sidebar also has **Show on Desktop → Widgets**. The matching
-**Show Desktop Widgets** menu item controls the same preference. It changes
-`StandardHideWidgets`, with no Finder restart or overlay window. Stage Manager
-remains separate. This is macOS desktop visibility: revealing the desktop may
-show hidden items again; it does not delete widgets or remove Notification Center.
-The preference is also documented by the [WidgetToggler project](https://github.com/sieren/WidgetToggler).
+Widgets still controls macOS `StandardHideWidgets`. It is not a promise that
+widgets remain hidden during Show Desktop. Stage Manager is separate. The
+preference is documented by [WidgetToggler](https://github.com/sieren/WidgetToggler).
+Independent visible widgets above the clean wallpaper layer are not qualified.
 
-Verified locally 2026-09-10: Files and Widgets controls are visible from Wallpapers
-and Bedtime; each toggled both directions and refreshed state. Restored files
-hidden/widgets shown; Finder CreateDesktop remains true. Build/signature checks
-passed. Automated bare-desktop right-click was unavailable in the UI driver, so
-this pass does not claim an end-to-end context-menu test.
+## Verification
+
+Build/signature and wallpaper/Library/export/restart checks passed. Both live
+surfaces were observed above Finder's icon layer. Unit checks verify layer
+switching, renderer reuse and local left-click dispatch on an unshown window.
+The UI driver cannot target these low-level wallpaper windows, including via
+exposed screen coordinates. Real right-click and repeated Show Desktop behavior
+therefore remain unverified; do not describe them as passed physical tests.
+
+## Focus and underlying macOS wallpaper
+
+Desktop surfaces are non-activating NSPanel windows. They still receive desktop
+mouse actions but should not make Idlesse the active app on a normal click.
+
+The interactive host sets a matching SDR JPEG underneath each live surface,
+rendered once per successful scene selection, capped at 1280 pixels on the long
+edge. This replaces the previous macOS wallpaper selection so menu-bar materials
+and Show Desktop regions use matching artwork instead of an unrelated image.
+Two alternating files per display avoid unbounded storage and stale URL caching.
+Preparation is cancellation/generation guarded and skipped by test controllers.
+The still remains after Stop/Quit as a fallback; the old macOS shuffle collection
+is not automatically reconstructed. It is a representative frame, not a live
+frame-synchronized menu-bar background. Audio/pointer inputs are not granted to
+the offline renderer.
+
+2026-09-10 follow-up: installed non-activating panels and verified both macOS
+wallpaper URLs point to generated JPEGs (1280×720 and 1280×828, 444 KB total).
+Show / Restore Windows was invoked twice through the regular Wallpaper menu:
+normal windows moved offscreen and returned; both clean wallpaper surfaces stayed
+above Finder's icon layer. Direct desktop pointer delivery/focus remains outside
+the UI driver's supported targeting; user reported the initial clean cover works
+better and identified activation/menu-bar issues addressed by this follow-up.

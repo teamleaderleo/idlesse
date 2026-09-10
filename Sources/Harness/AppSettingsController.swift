@@ -19,6 +19,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         status.stringValue = "Wallpaper: " + wallpaper.statusDescription
         pause.title = wallpaper.pausedByUser ? "Resume" : "Pause"
         pause.isEnabled = wallpaper.isRunning
+        updateIcons()
     }
     @objc private func togglePlayback() { wallpaper.togglePause(); updateStatus() }
     @objc private func navigate(_ sender: NSButton) { selectPage(sender.tag) }
@@ -75,7 +76,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             control.setAccessibilityLabel(index == 0 ? "Show desktop files" : "Show desktop widgets")
             sidebar.addSubview(control)
         }
-        icons.toolTip = "Hide files without moving them or disabling desktop interaction. Finder restarts to apply changes."
+        icons.toolTip = "Keep files covered by the active Idlesse wallpaper, even after clicking the desktop. Right-click for desktop controls."
         widgets.toolTip = "Matches macOS Show Widgets on Desktop. Widgets may reappear when revealing the desktop."
         widgets.target = self; widgets.action = #selector(changeWidgets)
         status.frame = NSRect(x: 202, y: 670, width: 750, height: 24)
@@ -154,7 +155,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { reload() }
     private func updateIcons() {
         icons.state = comfort.desktopIconsVisible ? .on : .off
-        icons.isEnabled = !comfort.changingDesktopIcons
+        icons.isEnabled = wallpaper.isRunning && !comfort.changingDesktopIcons
         widgets.state = comfort.desktopWidgetsVisible ? .on : .off
         widgets.isEnabled = !comfort.changingDesktopWidgets
     }

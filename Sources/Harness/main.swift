@@ -325,7 +325,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         for (title, action) in [
             ("Choose Wallpaper…", #selector(WallpaperController.chooseWallpaper)),
             ("Pause / Resume Video", #selector(WallpaperController.togglePause)),
-            ("Stop Wallpaper", #selector(WallpaperController.stop))
+            ("Stop Wallpaper", #selector(WallpaperController.stop)),
+            ("Show / Restore Windows", #selector(WallpaperController.revealDesktop))
         ] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = wallpaper
