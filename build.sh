@@ -145,6 +145,15 @@ build_app() {
     cp -R "$ROOT/Examples/$scene.idlesse" "$APP/Contents/Resources/Scenes/"
   done
   chmod +x "$APP/Contents/MacOS/Idlesse"
+  local extension="$APP/Contents/PlugIns/IdlesseDesktopMenu.appex"
+  mkdir -p "$extension/Contents/MacOS"
+  xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    -swift-version 5 "${SWIFT_OPT[@]}" -module-name IdlesseDesktopMenu \
+    -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
+    "$ROOT/Sources/DesktopMenu/FinderSync.swift" -framework AppKit -framework FinderSync \
+    -o "$extension/Contents/MacOS/IdlesseDesktopMenu"
+  cp "$ROOT/Sources/DesktopMenu/Info.plist" "$extension/Contents/Info.plist"
+  codesign --force --sign - --entitlements "$ROOT/Sources/DesktopMenu/Entitlements.plist" "$extension" >/dev/null
   codesign --force --sign - "$APP" >/dev/null
 
   log "Development preview ready: $APP"
