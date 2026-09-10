@@ -50,7 +50,8 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || Self.liveMenuStripEnabled {
+        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient].contains($0.kind) || $0.needsComposition }
+        if playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || (Self.liveMenuStripEnabled && hasCreativeLayers) {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError, sharedHub: sharedHub)
         } else {
@@ -151,12 +152,20 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     func displayURL(for displayID: UInt32) -> URL? {
         guard let data = resumeDefaults.data(forKey: "\(Self.resumeKey).\(displayID)") else { return selectedURL }
         var stale = false
-        return try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
+        if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale) {
+            return url
+        }
+        return try? URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
     func setDisplayURL(_ url: URL, for displayID: UInt32) {
         do {
-            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            let data: Data
+            if let scoped = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                data = scoped
+            } else {
+                data = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            }
             resumeDefaults.set(data, forKey: "\(Self.resumeKey).\(displayID)")
             rebuild()
             updateMenu()
@@ -168,8 +177,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
               let data = resumeDefaults.data(forKey: Self.resumeKey) else { return }
         do {
             var stale = false
-            let url = try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
-                relativeTo: nil, bookmarkDataIsStale: &stale)
+            let url: URL
+            if let resolved = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                url = resolved
+            } else {
+                url = try URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
+            }
             select(url, automatic: true, restoringPause: resumeDefaults.bool(forKey: Self.pauseKey))
         } catch {
             lastReloadError = "The previous wallpaper is unavailable. Choose it again in Wallpapers."
@@ -220,8 +233,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func saveSelection() {
         guard persistsSelection, let selectedURL else { return }
         do {
-            let data = try selectedURL.bookmarkData(options: .withSecurityScope,
-                includingResourceValuesForKeys: nil, relativeTo: nil)
+            let data: Data
+            if let scoped = try? selectedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                data = scoped
+            } else {
+                data = try selectedURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            }
             resumeDefaults.set(data, forKey: Self.resumeKey)
             resumeDefaults.set(pausedByUser, forKey: Self.pauseKey)
         } catch {
@@ -459,6 +476,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.watch(url: url, scene: playable)
                 self.surfaces = replacement
                 self.activeSharedVideoHub = newHub
+                self.activeSharedVideoHub?.setPaused(self.shouldPause)
                 replacement.forEach { $0.setPaused(self.shouldPause) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
@@ -499,7 +517,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         let hasVideo = playable.allNodes.contains { $0.kind == .video }
-        let needsMetal = playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || WallpaperSurface.liveMenuStripEnabled
+        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient].contains($0.kind) || $0.needsComposition }
+        let needsMetal = playable.requiresMetal || ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" || (WallpaperSurface.liveMenuStripEnabled && hasCreativeLayers)
         let sharedHub = (sameWallpaperOnAllDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
@@ -644,6 +663,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             let (newSurfaces, newHub) = try makeSurfaces(playable: playable, clock: clock, request: generation)
             surfaces = newSurfaces
             activeSharedVideoHub = newHub
+            activeSharedVideoHub?.setPaused(shouldPause)
             surfaces.forEach { $0.setPaused(shouldPause) }
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
