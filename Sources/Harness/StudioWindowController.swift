@@ -1066,8 +1066,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func showParticleSample() {
         guard mayDiscard() else { return }
         showSample()
-        var particles = SceneNode(name: "Fireflies", content: .particles(.init()))
-        particles.style.effects = [.init(type: .bloom, amount: 1)]
+        let particles = SceneNode(name: "Fireflies", content: .particles(.init()))
         let background = SceneNode(name: "Night", content: .gradient, opacity: 0.25)
         let sample = SceneDescriptor(title: "Fireflies", nodes: [background, particles], timeline: .init(duration: 6, mode: .loop))
         _ = applyEdit(sample.nodes, selected: 1, name: "Create Fireflies", controls: sample)

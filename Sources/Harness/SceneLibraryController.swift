@@ -87,7 +87,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         rotationTimer?.invalidate()
         rotationTimer = nil
         rotationCollectionID = nil
-        collectionActions.item(at: 0)?.title = "Collections"
+        collectionActions.item(at: 0)?.title = "Organize…"
     }
     private func advanceRotation() {
         guard let id = rotationCollectionID,
@@ -135,7 +135,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
         let add = NSButton(title: "Add Scenes…", target: self, action: #selector(addScenes))
-        collectionActions.addItem(withTitle: "Collections")
+        collectionActions.addItem(withTitle: "Organize…")
         collectionActions.target = self
         collectionActions.action = #selector(collectionAction)
         let toolbar = NSStackView(views: [search, filter, sort, add])
@@ -304,7 +304,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
         collectionActions.removeAllItems()
-        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
+        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Organize…" : "Organize · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
             collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
                 "Move Collection Up", "Move Collection Down", "Move Scene Earlier", "Move Scene Later", "Play Collection in Order", "Shuffle Collection", "Playback & Schedule…"])

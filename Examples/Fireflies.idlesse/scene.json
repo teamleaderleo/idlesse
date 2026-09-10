@@ -12,15 +12,6 @@
         "gravity": 0,
         "size": 0.008,
         "seed": 1234
-      },
-      "style": {
-        "effects": [
-          {
-            "id": "736789d7-6acb-4992-9ecd-cdef5b5bdded",
-            "type": "bloom",
-            "amount": 1
-          }
-        ]
       }
     }
   ],
