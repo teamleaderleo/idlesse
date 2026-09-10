@@ -349,19 +349,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
                 try clock.seek(to: previewTime)
-                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 512), scale: 1, clock: clock, onError: { _ in })
+                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 288), scale: 1, clock: clock, onError: { _ in })
                 defer { renderer.releaseResources() }
                 try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : previewTime,
-                                                       size: CGSize(width: 512, height: 512))
+                                                       size: CGSize(width: 512, height: 288))
                 try Task.checkCancellation()
-                let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 512, height: 512, sampleVideo: false)
+                let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 512, height: 288, sampleVideo: false)
                 guard let provider = CGDataProvider(data: Data(bytes) as CFData),
-                      let frame = CGImage(width: 512, height: 512, bitsPerComponent: 8, bitsPerPixel: 32,
+                      let frame = CGImage(width: 512, height: 288, bitsPerComponent: 8, bitsPerPixel: 32,
                         bytesPerRow: 2048, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
                         provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
                 else { throw SceneError.invalid("Could not prepare the Library preview.") }
-                image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 512))
+                image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 288))
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 let after = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
