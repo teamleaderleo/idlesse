@@ -81,6 +81,8 @@ build_saver() {
   fi
 
   cp "$ROOT/Sources/Saver/Info.plist" "$SAVER/Contents/Info.plist"
+  mkdir -p "$SAVER/Contents/Resources"
+  cp "$ROOT/Assets/Idlesse.icns" "$SAVER/Contents/Resources/Idlesse.icns"
   chmod +x "$SAVER/Contents/MacOS/Idlesse"
   codesign --force --sign - "$SAVER" >/dev/null
 
@@ -141,6 +143,7 @@ build_app() {
 
   cp "$ROOT/Sources/Harness/Info.plist" "$APP/Contents/Info.plist"
   mkdir -p "$APP/Contents/Resources/Scenes"
+  cp "$ROOT/Assets/Idlesse.icns" "$APP/Contents/Resources/Idlesse.icns"
   for scene in DeskClock AfterHours Undertow Fireflies Ripple AudioAurora Gradient BreathingAurora; do
     cp -R "$ROOT/Examples/$scene.idlesse" "$APP/Contents/Resources/Scenes/"
   done

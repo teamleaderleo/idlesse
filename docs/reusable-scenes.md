@@ -70,7 +70,7 @@ Feature requirements replace a loosely comparable minimum-engine string.
 
 + Create… → Scene Details… edits metadata. Library posters use previewTime
 (default 2 seconds), with the existing authored timeline/video-follow semantics.
-Revision invalidation, the eight-image RAM cache, and no disk cache remain intact.
+Revision invalidation, the bounded RAM cache, and no disk cache remain intact.
 
 ## Validation and remaining work
 

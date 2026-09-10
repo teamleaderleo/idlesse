@@ -16,7 +16,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         tabs.addTabViewItem(item)
     }
     func updateStatus() {
-        status.stringValue = "Wallpaper: " + wallpaper.statusDescription
+        status.stringValue = SceneLibraryController.displayTitle(wallpaper.statusDescription)
         pause.title = wallpaper.pausedByUser ? "Resume" : "Pause"
         pause.isEnabled = wallpaper.isRunning
         liveMenu.state = UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip") ? .on : .off
@@ -33,7 +33,12 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private func selectPage(_ index: Int) {
         guard index < tabs.numberOfTabViewItems else { return }
         tabs.selectTabViewItem(at: index)
-        for button in navigation { button.state = button.tag == index ? .on : .off }
+        for button in navigation {
+            let selected = button.tag == index
+            button.state = selected ? .on : .off
+            button.layer?.backgroundColor = (selected ? NSColor.controlAccentColor.withAlphaComponent(0.16) : .clear).cgColor
+            button.contentTintColor = selected ? .controlAccentColor : .labelColor
+        }
         if index == 3 { onLibraryVisible?() }
     }
     func windowWillClose(_ notification: Notification) { onClose?() }
@@ -68,6 +73,11 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         for (row, entry) in [(3, "Wallpapers"), (0, "Playback & Desktop"), (1, "Bedtime"), (2, "Screen Saver")].enumerated() {
             let button = NSButton(title: entry.1, target: self, action: #selector(navigate(_:)))
             button.tag = entry.0; button.setButtonType(.pushOnPushOff); button.bezelStyle = .rounded
+            button.isBordered = false; button.alignment = .left
+            button.font = .systemFont(ofSize: 13, weight: .medium)
+            button.image = NSImage(systemSymbolName: ["photo.on.rectangle", "slider.horizontal.3", "moon", "sparkles.tv"][row], accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.wantsLayer = true; button.layer?.cornerRadius = 7
             button.frame = NSRect(x: 12, y: 660 - row * 42, width: 156, height: 32)
             button.autoresizingMask = [.minYMargin]
             sidebar.addSubview(button); navigation.append(button)

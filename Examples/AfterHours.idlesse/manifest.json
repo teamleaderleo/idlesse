@@ -3,19 +3,16 @@
   "title": "After Hours",
   "capabilities": [],
   "features": [
-    "motion",
     "particles",
-    "shapes",
-    "text",
     "typed-controls"
   ],
   "metadata": {
     "author": "Idlesse",
-    "description": "Quiet geometric orbits and editable typography. Entirely procedural; no image or video assets.",
+    "description": "The last lights across the city. A sleeping cat and a few quiet motes by the window.",
     "tags": [
       "night",
-      "typography",
-      "procedural"
+      "cozy",
+      "illustration"
     ],
     "license": "CC0-1.0",
     "createdWith": "Idlesse",

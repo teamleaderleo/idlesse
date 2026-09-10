@@ -2,174 +2,35 @@
   "nodes": [
     {
       "id": "63479172-E0F5-4F26-96A7-2C45EFDFA9B7",
-      "type": "shape",
-      "shape": {
-        "primitive": "rectangle",
-        "fill": "#111221",
-        "width": 1024,
-        "height": 1024,
-        "cornerRadius": 64,
-        "lineWidth": 8
-      },
-      "transform": {
-        "x": 0,
-        "y": 0,
-        "scale": 2,
-        "rotation": 0
-      }
-    },
-    {
-      "id": "B191D9BB-0F03-465A-8FBD-69243DCBFE67",
-      "type": "shape",
-      "shape": {
-        "primitive": "ellipse",
-        "fill": "#B966CE",
-        "width": 1024,
-        "height": 1024,
-        "cornerRadius": 64,
-        "lineWidth": 8
-      },
-      "transform": {
-        "x": 0.26,
-        "y": 0.05,
-        "scale": 0.72,
-        "rotation": 0
-      }
-    },
-    {
-      "id": "476EEA6D-F17B-450B-B5DD-40DC72AF1799",
-      "type": "shape",
-      "shape": {
-        "primitive": "ellipse",
-        "fill": "#594D98",
-        "width": 1024,
-        "height": 1024,
-        "cornerRadius": 64,
-        "lineWidth": 8
-      },
-      "transform": {
-        "x": 0.3,
-        "y": 0.12,
-        "scale": 0.59,
-        "rotation": 0
-      }
-    },
-    {
-      "id": "59C51B2C-940A-40CF-8178-EAD20E1E6DDB",
-      "type": "shape",
-      "shape": {
-        "primitive": "ellipse",
-        "fill": "#D99DB4",
-        "width": 1024,
-        "height": 1024,
-        "cornerRadius": 64,
-        "lineWidth": 8
-      },
-      "transform": {
-        "x": 0.35,
-        "y": 0.2,
-        "scale": 0.43,
-        "rotation": 0
-      }
-    },
-    {
-      "id": "600BFECE-5AA6-4076-A2C4-289F4BA4B6E1",
-      "type": "shape",
-      "shape": {
-        "primitive": "line",
-        "fill": "#D99DB4",
-        "width": 1024,
-        "height": 64,
-        "cornerRadius": 64,
-        "lineWidth": 8
-      },
-      "transform": {
-        "x": -0.12,
-        "y": -0.27,
-        "scale": 0.55,
-        "rotation": 0
-      }
+      "type": "image",
+      "name": "Night Window",
+      "asset": "assets/night-window.jpg"
     },
     {
       "id": "383DE06E-2CC5-463E-ABDB-684A61F5A3AB",
       "type": "particles",
-      "opacity": 0.3,
+      "name": "Window Motes",
+      "opacity": 0.2,
+      "transform": {
+        "x": 0.65,
+        "y": -0.35,
+        "scale": 0.3,
+        "rotation": 0
+      },
       "emitter": {
-        "count": 64,
+        "count": 12,
         "lifetime": 12,
-        "speed": 0.012,
-        "wind": 0.003,
+        "speed": 0.006,
+        "wind": 0.002,
         "gravity": 0,
-        "size": 0.002,
-        "seed": 2026
-      }
-    },
-    {
-      "id": "424A5F5C-98B6-4702-988D-741F1BB67409",
-      "type": "text",
-      "typography": {
-        "text": "AFTER\nHOURS",
-        "font": "HelveticaNeue-Bold",
-        "size": 154,
-        "alignment": "left",
-        "fill": "#F7ECDC",
-        "lineSpacing": 4,
-        "width": 1024,
-        "height": 512
-      },
-      "transform": {
-        "x": -0.12,
-        "y": 0.03,
-        "scale": 0.66,
-        "rotation": 0
-      }
-    },
-    {
-      "id": "7C2D7ADF-D71D-4888-B845-178D50DF21C7",
-      "type": "text",
-      "typography": {
-        "text": "A LITTLE SPACE TO BREATHE",
-        "font": "HelveticaNeue",
-        "size": 24,
-        "alignment": "left",
-        "fill": "#B9B2C7",
-        "lineSpacing": 4,
-        "width": 1024,
-        "height": 128
-      },
-      "transform": {
-        "x": -0.12,
-        "y": -0.34,
-        "scale": 0.66,
-        "rotation": 0
+        "size": 0.0015,
+        "seed": 418
       }
     }
   ],
   "parameters": {
-    "title": {
-      "name": "Title",
-      "type": "string",
-      "default": "AFTER\nHOURS",
-      "targets": [
-        {
-          "nodeID": "424A5F5C-98B6-4702-988D-741F1BB67409",
-          "property": "text"
-        }
-      ]
-    },
-    "accent": {
-      "name": "Accent",
-      "type": "color",
-      "default": "#B966CE",
-      "targets": [
-        {
-          "nodeID": "B191D9BB-0F03-465A-8FBD-69243DCBFE67",
-          "property": "fill"
-        }
-      ]
-    },
-    "dust": {
-      "name": "Show Dust",
+    "motes": {
+      "name": "Window Motes",
       "type": "boolean",
       "default": true,
       "targets": [
@@ -179,18 +40,5 @@
         }
       ]
     }
-  },
-  "bindings": [
-    {
-      "target": {
-        "nodeID": "59C51B2C-940A-40CF-8178-EAD20E1E6DDB",
-        "property": "transform.x"
-      },
-      "signal": "sine",
-      "parameter": "",
-      "scale": 0.015,
-      "offset": 0.35,
-      "period": 12
-    }
-  ]
+  }
 }

@@ -18,11 +18,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let sort = NSPopUpButton()
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let poster = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "Choose a scene")
+    private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
-    private let apply = NSButton(title: "Use on Desktop", target: nil, action: nil)
-    private let edit = NSButton(title: "Open in Studio", target: nil, action: nil)
+    private let apply = NSButton(title: "Set Wallpaper", target: nil, action: nil)
+    private let edit = NSButton(title: "Edit in Studio", target: nil, action: nil)
+    private let more = NSPopUpButton(frame: .zero, pullsDown: true)
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
     private enum PosterRevision: Equatable, Sendable {
         case package(ScenePackageWriter.Revision)
@@ -88,7 +89,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         rotationTimer?.invalidate()
         rotationTimer = nil
         rotationCollectionID = nil
-        collectionActions.item(at: 0)?.title = "Organize…"
+        collectionActions.item(at: 0)?.title = "Collections…"
     }
     private func advanceRotation() {
         guard let id = rotationCollectionID,
@@ -129,22 +130,22 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let root = window?.contentView else { return }
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        search.placeholderString = "Search scenes"
+        search.placeholderString = "Search wallpapers"
         search.delegate = self
-        filter.addItems(withTitles: ["All Scenes", "Built-in", "Imported", "Favorites"])
+        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites"])
         filter.target = self; filter.action = #selector(filterChanged)
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
-        let add = NSButton(title: "Add Scenes…", target: self, action: #selector(addScenes))
-        collectionActions.addItem(withTitle: "Organize…")
+        let add = NSButton(title: "Import…", target: self, action: #selector(addScenes))
+        collectionActions.addItem(withTitle: "Collections…")
         collectionActions.target = self
         collectionActions.action = #selector(collectionAction)
-        let toolbar = NSStackView(views: [search, filter, sort, add])
+        let toolbar = NSStackView(views: [search, filter, sort, collectionActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 28
+        table.rowHeight = 34
         table.style = .sourceList
         table.delegate = self; table.dataSource = self
         table.target = self; table.doubleAction = #selector(doubleClickScene)
@@ -163,12 +164,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         apply.target = self; apply.action = #selector(useScene)
         edit.target = self; edit.action = #selector(editScene)
         remove.target = self; remove.action = #selector(removeScene)
-        let refresh = NSButton(title: "Refresh Preview", target: self, action: #selector(refreshPreview))
-        let actions = NSStackView(views: [favorite, refresh, remove])
-        let duplicate = NSButton(title: "Make a Copy in Studio", target: self, action: #selector(duplicateScene))
-        let primary = NSStackView(views: [edit, duplicate, apply])
-        for button in [add, favorite, apply, edit, remove, refresh, duplicate] { button.bezelStyle = .rounded }
-        let right = NSStackView(views: [titleLabel, collectionActions, poster, detail, actions, primary])
+        more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library"])
+        more.menu?.autoenablesItems = false
+        more.target = self; more.action = #selector(moreAction)
+        favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
+        let heading = NSStackView(views: [titleLabel, NSView(), favorite])
+        heading.orientation = .horizontal
+        let primary = NSStackView(views: [apply, edit, more])
+        primary.spacing = 10
+        for button in [add, apply, edit] { button.bezelStyle = .rounded }
+        apply.bezelColor = .controlAccentColor
+        apply.contentTintColor = .white
+        detail.font = .systemFont(ofSize: 12)
+        let right = NSStackView(views: [poster, heading, detail, primary])
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
@@ -185,13 +193,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
-            scroll.widthAnchor.constraint(equalToConstant: 250),
+            scroll.widthAnchor.constraint(equalToConstant: 210),
             right.topAnchor.constraint(equalTo: scroll.topAnchor),
             right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
             right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            right.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
+            right.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
             poster.widthAnchor.constraint(equalTo: right.widthAnchor),
-            poster.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            poster.heightAnchor.constraint(equalTo: poster.widthAnchor, multiplier: 9.0 / 16.0),
+            heading.widthAnchor.constraint(equalTo: right.widthAnchor),
             detail.widthAnchor.constraint(equalTo: right.widthAnchor)
         ])
     }
@@ -208,6 +217,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         NSApp.activate(ignoringOtherApps: true)
         if selected != nil { preview() }
     }
+    /// Presentation only: preserve catalog titles and filenames for round trips.
+    static func displayTitle(_ title: String) -> String {
+        let suffixes = ["-Restored-4K60", "-Restored-4K-HEVC", "-4K-HEVC", "-4K60"]
+        guard let suffix = suffixes.first(where: { title.hasSuffix($0) }) else { return title }
+        let name = String(title.dropLast(suffix.count))
+        let variants = ["Kayoko-Dress": "Kayoko (Dress)", "Hina-Dress": "Hina (Dress)",
+            "Hare-Camping": "Hare (Camping)", "Shiroko-Terror": "Shiroko (Terror)", "Vivian-Trust": "Vivian (Trust)"]
+        return variants[name] ?? name.replacingOccurrences(of: "-", with: " ")
+    }
     private func allItems() -> [Item] {
         let names = [("DeskClock", "Desk Clock"), ("AfterHours", "After Hours"), ("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
                      ("AudioAurora", "Audio Aurora"), ("Gradient", "Aurora"), ("BreathingAurora", "Breathing Aurora")]
@@ -216,7 +234,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                   FileManager.default.fileExists(atPath: url.path) else { return nil }
             return Item(id: "builtin.\(name)", title: title, builtin: url, entry: nil)
         }
-        return builtins + store.catalog.entries.map { Item(id: $0.id, title: $0.title, builtin: nil, entry: $0) }
+        return builtins + store.catalog.entries.map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
     }
     @objc private func filterChanged() { reload() }
     func controlTextDidChange(_ obj: Notification) { reload() }
@@ -225,7 +243,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let collectionID = filter.selectedItem?.representedObject as? String
         let previousFilter = min(filter.indexOfSelectedItem, 3)
         filter.removeAllItems()
-        filter.addItems(withTitles: ["All Scenes", "Built-in", "Imported", "Favorites"])
+        filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites"])
         for collection in store.catalog.collections {
             filter.addItem(withTitle: "Collection: \(collection.name)")
             filter.lastItem?.representedObject = collection.id
@@ -304,8 +322,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         apply.isEnabled = selected != nil
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
+        more.isEnabled = selected != nil
+        more.item(at: 3)?.isEnabled = selected?.entry != nil
         collectionActions.removeAllItems()
-        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Organize…" : "Organize · Rotating every \(rotationMinutes)m", "New Collection…"])
+        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
             collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
                 "Move Collection Up", "Move Collection Down", "Move Scene Earlier", "Move Scene Later", "Play Collection in Order", "Shuffle Collection", "Playback & Schedule…"])
@@ -322,7 +342,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         guard let selected else { titleLabel.stringValue = "No scenes"; detail.stringValue = "Add a scene or change the search/filter."; return }
         titleLabel.stringValue = selected.title
-        favorite.title = store.catalog.favorites.contains(selected.id) ? "★ Favorited" : "☆ Favorite"
+        favorite.title = store.catalog.favorites.contains(selected.id) ? "★" : "☆"
         detail.stringValue = "Preparing still preview…"
         task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -346,23 +366,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let image: NSImage
                 let previewTime = scene.metadata?.previewTime ?? 2
                 let sourceDetails = try await Self.sourceDetails(url)
-                let note = "Preview · \(String(format: "%g", previewTime))s" + sourceDetails
+                let note = sourceDetails.isEmpty ? (scene.animated ? "Animated scene" : "Scene") : String(sourceDetails.dropFirst(3))
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
                 try clock.seek(to: previewTime)
-                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 512, height: 288), scale: 1, clock: clock, onError: { _ in })
+                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 1024, height: 576), scale: 1, clock: clock, onError: { _ in })
                 defer { renderer.releaseResources() }
                 try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : previewTime,
-                                                       size: CGSize(width: 512, height: 288))
+                                                       size: CGSize(width: 1024, height: 576))
                 try Task.checkCancellation()
-                let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 512, height: 288, sampleVideo: false)
+                let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 1024, height: 576, sampleVideo: false)
                 guard let provider = CGDataProvider(data: Data(bytes) as CFData),
-                      let frame = CGImage(width: 512, height: 288, bitsPerComponent: 8, bitsPerPixel: 32,
-                        bytesPerRow: 2048, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                      let frame = CGImage(width: 1024, height: 576, bitsPerComponent: 8, bitsPerPixel: 32,
+                        bytesPerRow: 4096, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
                         provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
                 else { throw SceneError.invalid("Could not prepare the Library preview.") }
-                image = NSImage(cgImage: frame, size: NSSize(width: 512, height: 288))
+                image = NSImage(cgImage: frame, size: NSSize(width: 1024, height: 576))
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 let after = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
@@ -370,7 +390,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 guard token == self.generation else { return }
                 guard after == revision else { throw SceneError.invalid("Scene changed while preparing its preview. Select it again to retry.") }
                 self.cacheOrder.removeAll { $0 == selected.id }
-                while self.cacheOrder.count >= 8 { self.cache.removeValue(forKey: self.cacheOrder.removeFirst()) }
+                while self.cacheOrder.count >= 4 { self.cache.removeValue(forKey: self.cacheOrder.removeFirst()) }
                 self.cacheOrder.append(selected.id)
                 self.cache[selected.id] = (image, note, revision)
                 self.poster.image = image
@@ -479,6 +499,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 alert.informativeText = failures.joined(separator: "\n")
                 if let window = self.presentationWindow { await alert.beginSheetModal(for: window) }
             }
+        }
+    }
+    @objc private func moreAction() {
+        switch more.indexOfSelectedItem {
+        case 1: refreshPreview()
+        case 2: duplicateScene()
+        case 3: removeScene()
+        default: break
         }
     }
     @objc private func toggleFavorite() {
@@ -774,7 +802,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             while controller.task != nil && Date() < videoDeadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))
             }
-            precondition(controller.poster.image != nil && controller.detail.stringValue.hasPrefix("Preview · 2s"), controller.detail.stringValue)
+            precondition(controller.poster.image != nil && controller.detail.stringValue.contains("fps") && controller.detail.stringValue.contains("×"), controller.detail.stringValue)
             // A transparent video must produce black, not a thumbnail of the raw asset.
             var video = SceneNode(content: .video(videoURL))
             video.opacity = 0
