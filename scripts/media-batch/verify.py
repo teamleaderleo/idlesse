@@ -3,8 +3,9 @@
 import argparse,json,subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
-p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p.parse_args()
-job=a.root/'batch-2026-09-10';state=json.loads((job/'state.json').read_text());report={}
+p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--job-name',default='batch-2026-09-10');a=p.parse_args()
+if Path(a.job_name).name != a.job_name or a.job_name in ('', '.', '..'):p.error('Invalid job name')
+job=a.root/a.job_name;state=json.loads((job/'state.json').read_text());report={}
 for key,item in state['items'].items():
     path=Path(item['path']);frames=int(item['probe']['streams'][0]['nb_read_frames'])
     times=[0,1/60,frames/120,(frames-1)/60]

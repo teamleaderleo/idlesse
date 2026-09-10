@@ -3,6 +3,7 @@
     "@esotericsoftware/spine-pixi-v7": "4.2",
     "@pixi-spine/runtime-3.8": "^4.0.6",
     "esbuild": "^0.28.2",
+    "mediabunny": "1.56.1",
     "pixi.js": "^7.4.3"
   }
 }
