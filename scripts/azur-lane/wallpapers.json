@@ -1,0 +1,82 @@
+{
+  "items": [
+    {
+      "id": "kelaimengsuo_2",
+      "title": "Clemenceau - Splendid Breeze",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "lisailiu_2",
+      "title": "Richelieu - Fleuron of the Waves",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "lisailiu_3",
+      "title": "Richelieu - Evergreen Prophecy",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "pulimaosi_3",
+      "title": "Plymouth - An Angelic Physical",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "qianwei_2",
+      "title": "Vanguard - Half-Hearted Masquerade",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "rangbaer_3",
+      "title": "Jean Bart - Private Apr\u00e8s Midi",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "rangbaer_4",
+      "title": "Jean Bart - First Snow Upon the Cutlass's Edge",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "rangbaer_5",
+      "title": "Jean Bart - Springlight \u00c9toiles",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "yingxianzuo_3",
+      "title": "Perseus - Spring's Lackadaisical Leisure",
+      "kind": "live2d",
+      "animation": "idle"
+    },
+    {
+      "id": "hu",
+      "title": "Tiger",
+      "kind": "spine",
+      "animation": "normal"
+    },
+    {
+      "id": "hu_2",
+      "title": "Tiger - Maiden of the Stars",
+      "kind": "spine",
+      "animation": "normal"
+    },
+    {
+      "id": "qianwei",
+      "title": "Vanguard",
+      "kind": "spine",
+      "animation": "normal"
+    },
+    {
+      "id": "makesi",
+      "title": "Max Immelmann",
+      "kind": "spine",
+      "animation": "normal"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows game assets via BA-AD, client 1.72.0",
+  "items": [
+    {
+      "id": "kazusa_home",
+      "title": "Kazusa",
+      "stem": "kazusa_home",
+      "animation": "Idle_01",
+      "seconds": 13.333333333333334
+    },
+    {
+      "id": "ch0250_home",
+      "title": "Kazusa-Band",
+      "stem": "CH0250_home",
+      "animation": "Idle_01",
+      "seconds": 6.666666666666667
+    }
+  ]
+}

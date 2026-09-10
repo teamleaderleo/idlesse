@@ -1,6 +1,6 @@
 # Azur Lane animated skins: ingestion study
 
-Checked 2026-09-10. Three game bundles were retrieved for inspection; no Azur Lane wallpaper has been imported yet.
+Checked 2026-09-10. The connected-device study below was followed by a working public-viewer export route: nine Live2D and four Spine clips now render at 4K60. See [the batch report](azur-lane-first-batch.md). Library import remains pending while the Mac is locked.
 
 ## Recommended first route
 
