@@ -24,6 +24,9 @@ jobs:
       - name: Smoke-test settings UI
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
 
+      - name: Smoke-test Library gallery
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-library "$RUNNER_TEMP/idlesse-library.png"'
+
       - name: Verify bounded image decoding
         run: bash test.sh
 

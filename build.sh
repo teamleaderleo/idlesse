@@ -128,6 +128,28 @@ build_app() {
     "$ROOT/Sources/Harness/MediaImport.swift" \
     "$ROOT/Sources/Harness/SceneLibraryStore.swift" \
     "$ROOT/Sources/Harness/SceneLibraryController.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryGalleryViews.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryThumbnailSupport.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryRotation.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySetup.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySetupBrowser.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryReload.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryBrowserViews.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryBrowserInteraction.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryThumbnailPolicy.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryThumbnailRequests.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryThumbnailComposition.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryDetailPreview.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySourceDetails.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySourceScan.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryImporting.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySourceActions.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryCollectionActions.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryPlaybackEditor.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryItemActions.swift" \
+    "$ROOT/Sources/Harness/SceneLibraryInteractionActions.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySmokeSupport.swift" \
+    "$ROOT/Sources/Harness/SceneLibrarySmoke.swift" \
     "$ROOT/Sources/Harness/StudioInspector.swift" \
     "$ROOT/Sources/Harness/StudioWindowController.swift" \
     "$ROOT/Sources/Harness/Benchmark.swift" \
