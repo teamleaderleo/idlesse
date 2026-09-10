@@ -173,3 +173,17 @@ eliminated. The UI Show / Restore Windows command was exercised in both directio
 The installed app keeps live strips enabled. Smoke tests explicitly override that
 personal preference in their process argument domain so compatibility-renderer
 assertions remain isolated from the user's selected renderer.
+
+### Widget reveal coverage (2026-09-10)
+
+Tahoe Calendar/Weather windows were observed at desktopIconWindow + 2, above
+Idlesse’s previous +1 clean-desktop level. When Files and Widgets are both hidden,
+the same wallpaper surface now uses +3. Switching Widgets updates existing surfaces
+immediately, preserving renderer identity and click-to-reveal handling. With Files
+shown, widget visibility still follows macOS and can reappear during Show Desktop;
+independent widget-only covering is not implemented.
+
+Installed build 15 verification: after Show / Restore Windows, both wallpaper
+surfaces were at -2147483600, above Forecast and Month at -2147483601.
+The smoke suite checks same-renderer retention and click handling through the
+widget-hidden transition. Wallpaper/Library/export/resume checks passed.
