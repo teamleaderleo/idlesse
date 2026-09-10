@@ -30,7 +30,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     }
     func windowWillClose(_ notification: Notification) { onClose?() }
 
-    private let icons = NSButton(checkboxWithTitle: "Show desktop icons", target: nil, action: nil)
+    private let icons = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
+    private let widgets = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
@@ -62,6 +63,21 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             button.autoresizingMask = [.minYMargin]
             sidebar.addSubview(button); navigation.append(button)
         }
+        let desktopLabel = NSTextField(labelWithString: "Show on Desktop")
+        desktopLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        desktopLabel.textColor = .secondaryLabelColor
+        desktopLabel.frame = NSRect(x: 20, y: 446, width: 150, height: 18)
+        desktopLabel.autoresizingMask = [.minYMargin]
+        sidebar.addSubview(desktopLabel)
+        for (index, control) in [icons, widgets].enumerated() {
+            control.frame = NSRect(x: 20, y: 414 - index * 30, width: 148, height: 24)
+            control.autoresizingMask = [.minYMargin]
+            control.setAccessibilityLabel(index == 0 ? "Show desktop files" : "Show desktop widgets")
+            sidebar.addSubview(control)
+        }
+        icons.toolTip = "Hide files without moving them or disabling desktop interaction. Finder restarts to apply changes."
+        widgets.toolTip = "Matches macOS Show Widgets on Desktop. Widgets may reappear when revealing the desktop."
+        widgets.target = self; widgets.action = #selector(changeWidgets)
         status.frame = NSRect(x: 202, y: 670, width: 750, height: 24)
         status.autoresizingMask = [.width, .minYMargin]
         status.lineBreakMode = .byTruncatingMiddle
@@ -83,7 +99,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         transition.addItems(withTitles: ["None", "0.5 seconds", "1 second", "2 seconds"])
         transition.target = self; transition.action = #selector(changePlayback)
         transition.setAccessibilityLabel("Crossfade")
-        addTab("Wallpaper", rows: [[label("Desktop"), icons], [label("Frame rate"), rate], [label("Crossfade"), transition]])
+        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition]])
         schedule.target = self; schedule.action = #selector(changeBedtime)
         amount.target = self; amount.action = #selector(changeBedtime); amount.isContinuous = true
         amount.setAccessibilityLabel("Dimming")
@@ -139,6 +155,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private func updateIcons() {
         icons.state = comfort.desktopIconsVisible ? .on : .off
         icons.isEnabled = !comfort.changingDesktopIcons
+        widgets.state = comfort.desktopWidgetsVisible ? .on : .off
+        widgets.isEnabled = !comfort.changingDesktopWidgets
     }
     private func reload() {
         updateStatus()
@@ -154,6 +172,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         from.isEnabled = values.enabled; until.isEnabled = values.enabled
         dim.title = comfort.isDimmed ? "Restore Display" : "Dim Now"
     }
+    @objc private func changeWidgets() { comfort.toggleDesktopWidgets(); updateIcons() }
     @objc private func changeIcons() { comfort.toggleDesktopIcons(); updateIcons() }
     @objc private func changePlayback() {
         SceneFrameRate.selected = SceneFrameRate.allCases[rate.indexOfSelectedItem]
