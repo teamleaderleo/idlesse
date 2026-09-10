@@ -7,6 +7,11 @@ import CoreText
 /// Experimental SDR compositor. One drawable per display; groups use bounded offscreen passes.
 /// Keep the layer renderer as the default until color and power parity are measured.
 final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
+    // Optional GPU-only presentation consumer; it must not retain the source drawable.
+    var mirrorFrame: ((MTLCommandBuffer, MTLTexture) -> Void)? {
+        didSet { metal.framebufferOnly = mirrorFrame == nil }
+    }
+
     private final class Input {
         var node: SceneNode
         var texture: MTLTexture?
@@ -514,6 +519,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         drawable.addPresentedHandler { drawable in
             presentations.record(presentedTime: drawable.presentedTime)
         }
+        mirrorFrame?(command, drawable.texture)
         command.present(drawable)
         command.commit()
         needsFrame = false

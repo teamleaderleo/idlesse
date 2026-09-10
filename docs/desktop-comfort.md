@@ -115,3 +115,40 @@ normal windows moved offscreen and returned; both clean wallpaper surfaces staye
 above Finder's icon layer. Direct desktop pointer delivery/focus remains outside
 the UI driver's supported targeting; user reported the initial clean cover works
 better and identified activation/menu-bar issues addressed by this follow-up.
+
+### Live menu strip experiment
+
+`IDLESSE_LIVE_MENU_STRIP=1` opts a development process into a narrow Metal
+presentation strip at `mainMenu - 1`. It forces the Metal renderer for that
+process. The strip copies the top rows of the existing compositor drawable into
+a two-drawable CAMetalLayer on the same command buffer. It creates no second
+video player, performs no CPU pixel readback, and writes no wallpaper frames to
+disk. The matching system-wallpaper still remains the fallback.
+
+This is **not a supported user setting yet**. The strip ignores mouse events and
+uses a nonactivating panel. Native menu-background visibility, menu contrast,
+auto-hide/full-screen behavior, Spaces, crossfade opacity, and drawable-acquisition
+latency still need qualification before enabling it in the installed app.
+In particular a successful GPU copy does not establish that the native menu bar
+shows those pixels. A stalled strip drawable can delay the main-thread draw, so
+this path must remain opt-in until timing has been measured under occlusion.
+
+The desktop qualification report includes `menuStripFrames` (submitted copies,
+not presented frames). A local test can run with:
+
+```sh
+IDLESSE_LIVE_MENU_STRIP=1 build/Idlesse.app/Contents/MacOS/Idlesse \
+  --qualify-desktop Examples/Gradient.idlesse build/menu-strip-report.json 12 1
+```
+
+The qualification process removes its surfaces when finished and does not change
+the selected wallpaper or system background. It exercises synthetic lifecycle
+transitions, not physical sleep or display hotplug.
+
+Local validation (2026-09-10): debug build on the two attached displays completed
+40 seconds of Gradient playback with 2,094 / 2,109 strip copies submitted.
+Synthetic pause, overlapping suspension/session states, suspended selection,
+failed replacement, and teardown passed; final surface count was zero.
+Wallpaper, Library, export/cancellation, and restart-recovery smoke tests passed.
+These counts are not visible menu-bar FPS. The test process could not be selected
+by the UI inspection tool, so composite menu-bar appearance remains unverified.
