@@ -30,9 +30,9 @@ existing live-update behavior.
 Text and shape layers require Metal. Text uses CoreText, with font name, size,
 alignment, fill, line spacing and a 32–4096 pixel local canvas. Missing fonts use
 the system font fallback; font files are not bundled, so typography can differ on
-another Mac. Text is static content, not a live clock or lyric source.
+another Mac. Text can be static or use the bounded local time/date sources described below.
 
-Shapes support rectangle, ellipse, line and rounded rectangle. Text and shapes
+Shapes support rectangle, ellipse, line and rounded rectangle. Static text and shapes
 rasterize once at preparation and participate in the shared 32-million-pixel image
 allowance, with the existing per-input limit. They do not create animation timers.
 Normal transforms, masks, blends, effects and scalar motion apply to both.
@@ -88,3 +88,38 @@ The bundled After Hours sample demonstrates editable typography, an accent contr
 optional particles and slow geometric motion without media assets. Native UI checks
 covered Library selection, controls, preset capture, duplication, insertion and
 resetting the temporary draft.
+
+## Shared Studio shelf and live text
+
+Studio → + Create… → My Presets… saves the selected subtree as a normal
+self-contained .idlesse package under Application Support/Idlesse/Studio Presets.
+The package writer copies its assets, validates it and refuses overwrites. Insert
+reads and validates a shelf package, captures its root and inserts a fresh snapshot
+with remapped node/effect/control identities. Save/Save As then copies its assets
+into the destination document. Keep the shelf package available until the document
+has been saved. This is a shared snapshot shelf, not external live linking.
+Show in Finder exposes the packages for ordinary file management. Local Presets
+remain the definitions inside one document; neither workflow silently propagates
+edits to earlier instances.
+
+Text Layer → Content now offers Static Text, Time, Time with Seconds, Date and
+Weekday. Dynamic text adds the `dynamic-text` feature to revision 21 packages.
+Formatting follows the user's locale/time zone. A one-second timer checks live
+text only while the renderer is running; textures are regenerated only if the
+formatted string changes. Clock-only scenes retain event-driven Metal drawing,
+and pause/disposal stops the timer. Fonts, fill, masks and effects remain usable.
+
+Offline rendering captures a reference date at renderer creation and advances it
+by the supplied scene time. Tests may pass an explicit referenceDate to renderFrame
+for reproducible output. Library posters remain snapshots, rather than live clocks.
+The Desk Clock built-in demonstrates time and date without video or image assets.
+
+Playback & Desktop also exposes Animate menu bar. Changing it prepares a replacement
+renderer with the saved pause state; it does not require restarting the app.
+
+Validation (2026-09-10): model/decoder/recovery/audio/comfort/Library suites and
+wallpaper/Library/export/restart smoke suites passed. GPU probes checked second-by-
+second text changes and exact replay at a supplied reference date. Native UI checks
+saved Time.idlesse to the shelf, reopened it, inserted a new Time 1 layer and undid
+that insertion. Screenshots of the seconds clock advanced from 02:04:31 to 02:04:53.
+The temporary test document was discarded; the reusable Time preset remains.

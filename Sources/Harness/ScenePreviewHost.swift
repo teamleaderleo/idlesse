@@ -29,7 +29,7 @@ final class ScenePreviewHost {
     func performanceText() -> String {
         guard let renderer else { return "" }
         guard renderer.diagnostics.state == .running else { return "Paused · no continuous rendering" }
-        guard renderer.diagnostics.animated else { return "Still image · redraws only when needed" }
+        guard renderer.diagnostics.animated else { return "Updates when needed" }
         guard let count = renderer.presentedFrameCount else { return "Presentation rate unavailable for this renderer" }
         let now = ProcessInfo.processInfo.systemUptime
         if let measurement, let gpu = renderer.gpuTotals, now - measurement.time >= 10 {

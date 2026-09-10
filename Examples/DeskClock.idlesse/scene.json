@@ -1,0 +1,48 @@
+{
+  "nodes": [
+    {
+      "id": "F6D6F590-7995-496E-8A7F-925BB4B39F75",
+      "type": "text",
+      "name": "Time",
+      "typography": {
+        "liveSource": "time",
+        "text": "",
+        "font": "HelveticaNeue-Light",
+        "size": 120,
+        "alignment": "center",
+        "fill": "#FFFFFF",
+        "lineSpacing": 8,
+        "width": 1024,
+        "height": 256
+      },
+      "transform": {
+        "x": 0,
+        "y": 0.06,
+        "scale": 0.6,
+        "rotation": 0
+      }
+    },
+    {
+      "id": "9A001595-2D02-4106-B63C-C265D5C1AA40",
+      "type": "text",
+      "name": "Date",
+      "typography": {
+        "liveSource": "date",
+        "text": "",
+        "font": "HelveticaNeue-Light",
+        "size": 48,
+        "alignment": "center",
+        "fill": "#C5C9D5",
+        "lineSpacing": 8,
+        "width": 1024,
+        "height": 256
+      },
+      "transform": {
+        "x": 0,
+        "y": -0.2,
+        "scale": 0.6,
+        "rotation": 0
+      }
+    }
+  ]
+}

@@ -268,7 +268,7 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
 enum SceneFormat {
     static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets"]
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text"]
     static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
@@ -279,6 +279,7 @@ enum SceneFormat {
         if !scene.bindings.isEmpty || scene.timeline != nil { result.insert("motion") }
         if scene.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) { result.insert("typed-controls") }
         if scene.allNodes.contains(where: { $0.kind == .text }) { result.insert("text") }
+        if scene.allNodes.contains(where: { $0.typography?.liveSource != nil }) { result.insert("dynamic-text") }
         if scene.allNodes.contains(where: { $0.kind == .shape }) { result.insert("shapes") }
         if !(scene.components?.isEmpty ?? true) { result.insert("local-presets") }
         for component in scene.components?.values ?? Dictionary<String, SceneComponent>().values {
@@ -492,6 +493,25 @@ struct SceneNode: Codable, Sendable {
     }
     struct Typography: Codable, Sendable, Equatable {
         enum Alignment: String, Codable, Sendable { case left, center, right }
+        enum LiveSource: String, Codable, Sendable, CaseIterable {
+            case time, timeWithSeconds, date, weekday
+            var title: String {
+                switch self { case .time: return "Time"; case .timeWithSeconds: return "Time with Seconds"
+                case .date: return "Date"; case .weekday: return "Weekday" }
+            }
+        }
+        var liveSource: LiveSource? = nil
+        func resolved(at date: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+            guard let source = liveSource else { return text }
+            let formatter = DateFormatter(); formatter.locale = locale; formatter.timeZone = timeZone
+            switch source {
+            case .time: formatter.setLocalizedDateFormatFromTemplate("jmm")
+            case .timeWithSeconds: formatter.setLocalizedDateFormatFromTemplate("jmmss")
+            case .date: formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+            case .weekday: formatter.setLocalizedDateFormatFromTemplate("EEEE")
+            }
+            return formatter.string(from: date)
+        }
         var text: String = "Hello, world"
         var font: String = "HelveticaNeue"
         var size: Double = 96

@@ -638,6 +638,21 @@ import Foundation
         var modifiedText = lettering; modifiedText.content = .text(.init(text: "Different"))
         precondition(sceneResourceOrder(from: [lettering], to: [modifiedText]) == nil)
         precondition(SceneBudget.imagePixels([lettering, modifiedText]) == 16_000_000)
+        var clockText = SceneNode.Typography()
+        clockText.liveSource = .timeWithSeconds
+        let epoch = Date(timeIntervalSince1970: 0)
+        let locale = Locale(identifier: "en_GB")
+        let zone = TimeZone(secondsFromGMT: 0)!
+        precondition(clockText.resolved(at: epoch, locale: locale, timeZone: zone) == "00:00:00")
+        precondition(clockText.resolved(at: epoch.addingTimeInterval(1), locale: locale, timeZone: zone) == "00:00:01")
+        clockText.liveSource = .weekday
+        precondition(clockText.resolved(at: epoch, locale: locale, timeZone: zone) == "Thursday")
+        let clockScene = SceneDescriptor(title: "Clock", nodes: [SceneNode(content: .text(clockText))])
+        precondition(SceneFormat.features(clockScene).contains("dynamic-text"))
+        let clockURL = root.appendingPathComponent("clock.idlesse")
+        try ScenePackageWriter.write(clockScene, to: clockURL)
+        let clockRead = try await LocalSceneSource().resolve(clockURL)
+        precondition(clockRead.nodes[0].typography?.liveSource == .weekday)
         print("Scene tests passed: legacy formats, typed controls, features, text, shapes, independent presets, budgets and audio capabilities")
     }
 }
