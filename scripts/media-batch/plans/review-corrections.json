@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "model": "realesr-animevideov3 x4 downsampled to 2x; original alpha Lanczos",
+  "source": "Blue Archive Japan Windows game assets via BA-AD, client 1.72.0",
+  "items": [
+    {
+      "id": "ch0089_home",
+      "title": "Kasumi",
+      "stem": "CH0089_home",
+      "animation": "Idle_01",
+      "seconds": 10
+    },
+    {
+      "id": "ch0159_home",
+      "title": "Himari",
+      "stem": "CH0159_home",
+      "animation": "Idle_01",
+      "seconds": 6.666666666666667
+    }
+  ]
+}

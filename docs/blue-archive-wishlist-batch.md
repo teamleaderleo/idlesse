@@ -1,6 +1,6 @@
 # Blue Archive wishlist batch — 2026-09-10
 
-76 additional game-asset scenes were restored, rendered, visually sampled and imported through Idlesse’s native Library panel. Together with seven previously imported wishlist entries, this covers 83 of the 112 requests. The other 29 entries were excluded because they depict underage characters sexually; no derivatives of those scenes were produced in this batch.
+76 additional game-asset scenes were restored, rendered, visually sampled and imported through Idlesse’s native Library panel. Together with seven previously imported wishlist entries, this covers 83 of the 112 requests. 29 entries were excluded at that checkpoint. A later individual review reversed the Himari/Kasumi exclusions; both are now restored and imported, bringing wishlist coverage to 85/112. See [current coverage](media-coverage.md); the original blanket rationale was too broad.
 
 All new clips are 3840×2160, 60 fps, HEVC. This is restored/upscaled texture detail, not native 4K source detail. Spine-only rendering may omit Unity effects or physics. Complete authored idle cycles are preserved, including Akari’s separate 66.67-second background and Seia’s 77.67-second loop.
 

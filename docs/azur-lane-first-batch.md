@@ -38,3 +38,7 @@ See [scripts/azur-lane](../scripts/azur-lane/README.md). The reviewed plan, came
 Sources are complete game models mirrored by [Nagami](https://azurlane.nagami.moe/live2d-viewer), not publisher-distributed wallpapers. Captured data revisions: Live2D 1788878728; Spine 1788951076. Original manifests, textures, motions and receipts are retained with the archive.
 
 Publisher notices corroborate the requested [February outfits](https://azurlane.yo-star.com/news/2026/02/25/maintenance-notice-2-26-12-a-m-utc-7/) and [September dynamic additions](https://azurlane.yo-star.com/news/2026/09/07/maintenance-notice-9-8-12-a-m-utc-7/). The latter also lists two possible future adult-character additions: Illustrious — Wandering Glow of Midnight and Lion — Alleyway Temptress. They have not been downloaded.
+
+## Import completion
+
+The Mac UI helper was restarted on September 10. All 13 animations, two stills, and both Kazusa versions were imported through the native Library; the catalog reached 105 entries. Subsequent Himari/Kasumi corrections brought it to 107. Kayoko New Year remained active.
