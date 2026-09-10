@@ -367,7 +367,8 @@ variable emission-rate integration or per-particle scripting. Seeking to the sam
 time with the same evaluated properties reproduces the same result. Stateful
 smoothing retains its existing seek-reset semantics.
 
-`Examples/Fireflies.idlesse` is a six-second looping particle scene with bloom.
+`Examples/Fireflies.idlesse` is a six-second looping particle scene. Its particles
+already have soft radial glows; the default omits a costly full-scene bloom pass.
 
 ## V18 wave displacement
 

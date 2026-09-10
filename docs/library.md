@@ -4,8 +4,8 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 
 - Six bundled scenes: Undertow, Fireflies, Ripple, Audio Aurora, Aurora, Breathing Aurora.
 - Search by name; filter built-in/imported/favorites; sort by name or recently opened.
-- Use Collections → New Collection to create a named group. Select scenes in All
-  Scenes, then use Collections → Add to to assign them. Named collections appear
+- Use Organize… → New Collection to create a named group. Select scenes in All
+  Scenes, then use Organize… → Add to to assign them. Named collections appear
   in the filter menu. Within a collection, the same menu offers rename, delete,
   and removal of the selected scene. These operations never delete source media.
   Up to 32 collections hold up to 256 distinct scene references each; old indexes
