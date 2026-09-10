@@ -26,6 +26,8 @@ The Library is the front door. Choose a scene, use it on your desktop, or open S
 
 [Beta readiness and packaging](docs/beta-readiness.md) tracks the remaining release gates. Local builds are not notarized public releases.
 
+See the [Developer Log: Multi-Monitor Optimization & Feature Toggles (10 Sep 2026)](docs/dev-log-2026-09-10.md) for architectural notes on the 90% memory reduction (1.6 GB → 173 MB), dual-display shared video engine, and feature toggles.
+
 ## Current status
 
 Under active development. The build produces **Idlesse.app** (Library, Studio, wallpaper, and Desktop Comfort) and **Idlesse.saver**, a separate ScreenSaver-framework bundle. The app does not replace the installed saver's own preferences or host lifecycle.
