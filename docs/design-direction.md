@@ -1,7 +1,7 @@
 # Idlesse visual direction
 
 Idlesse should feel like a quiet place for artwork, with a small amount of personality.
-The sleeping cat and lilac star mark the app; the artwork supplies most of the color.
+The curled sleeping cat marks the app; the artwork supplies most of the color.
 Controls retain macOS appearance, accessibility, keyboard behavior and accent color.
 
 The Library uses a large 16:9 artwork preview, a compact title/favorite row and one
@@ -37,3 +37,8 @@ The application menu includes the native About panel, Hide (⌘H), Hide Others
 Validated in installed build 14: native About icon/version, Library layout and clean
 display names, More actions and disabled removal for included scenes. Wallpaper,
 Library, export and resume smoke suites passed. The active wallpaper was preserved.
+
+The final cat uses tapered closed eyes, whiskers and asymmetric tucked paws on
+a muted plum tile. Assets/Idlesse.png has true alpha outside the rounded tile,
+removing the pale border from the earlier Dock version. Installed build 17
+embeds the replacement ICNS at standard macOS sizes.
