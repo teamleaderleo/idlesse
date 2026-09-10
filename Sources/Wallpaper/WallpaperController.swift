@@ -66,6 +66,7 @@ final class WallpaperSurface {
            let metal = renderer as? MetalSceneRenderer {
             let strip = MenuBarStrip(screen: screen)
             menuStrip = strip
+            strip.onFirstDrawable = { [weak metal] in metal?.refreshSceneTime() }
             metal.mirrorFrame = { [weak strip] command, texture in strip?.copy(command: command, texture: texture) }
         }
         updateFrameRate()
@@ -884,6 +885,24 @@ private final class MenuBarStrip {
     private let layer = CAMetalLayer()
     private let height: CGFloat
     private(set) var frames = 0
+    var onFirstDrawable: (() -> Void)?
+    private let acquisition = DispatchQueue(label: "Idlesse.MenuStrip.Drawable", qos: .userInteractive)
+    // Accessed only on the main thread. At most one ready drawable and one request.
+    private var readyDrawable: CAMetalDrawable?
+    private var acquiring = false
+    private func requestDrawable() {
+        guard !acquiring, readyDrawable == nil else { return }
+        acquiring = true
+        acquisition.async { [weak self, layer] in
+            let drawable = autoreleasepool { layer.nextDrawable() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.acquiring = false
+                self.readyDrawable = drawable
+                if drawable != nil && self.frames == 0 { self.onFirstDrawable?() }
+            }
+        }
+    }
     init(screen: NSScreen) {
         height = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top,
             screen.frame.maxY - screen.visibleFrame.maxY)
@@ -919,7 +938,10 @@ private final class MenuBarStrip {
         let size = CGSize(width: texture.width, height: rows)
         if layer.device == nil { layer.device = texture.device }
         if layer.drawableSize != size { layer.drawableSize = size }
-        guard let target = layer.nextDrawable(), let blit = command.makeBlitCommandEncoder() else { return }
+        guard let target = readyDrawable else { requestDrawable(); return }
+        readyDrawable = nil
+        guard target.texture.width == texture.width, target.texture.height == rows,
+              let blit = command.makeBlitCommandEncoder() else { requestDrawable(); return }
         blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
             sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
             sourceSize: MTLSize(width: texture.width, height: rows, depth: 1),
@@ -928,5 +950,6 @@ private final class MenuBarStrip {
         blit.endEncoding()
         command.present(target)
         frames += 1
+        requestDrawable()
     }
 }
