@@ -315,7 +315,7 @@ final class StudioLayerInspector: NSScrollView {
             let edit = NSButton(title: "Edit Metal Shader…", target: self, action: #selector(editShader))
             edit.isEnabled = editable
             edit.setAccessibilityLabel("Edit Metal shader source")
-            views = [info("Metal Shader", value: "\(shader.source.utf8.count) chars · \(shader.speed)×",
+            views = [info("Metal Shader", value: "\(shader.source.utf8.count) bytes · \(shader.speed)×",
                           tooltip: "Metal fragment source compiled by the runtime."), edit]
         }
         contentSection.setViews(views)
