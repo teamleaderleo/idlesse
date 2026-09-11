@@ -895,9 +895,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     static func smokeTransitions(imageURL: URL) throws {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "wallpaperTransitionSeconds")
+        let previousStyle = defaults.object(forKey: "wallpaperTransitionStyle")
         defer {
             if let previous { defaults.set(previous, forKey: "wallpaperTransitionSeconds") }
             else { defaults.removeObject(forKey: "wallpaperTransitionSeconds") }
+            if let previousStyle { defaults.set(previousStyle, forKey: "wallpaperTransitionStyle") }
+            else { defaults.removeObject(forKey: "wallpaperTransitionStyle") }
         }
         let controller = WallpaperController()
         controller.presentsWindows = false
@@ -938,6 +941,23 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         precondition(controller.transitionTimer == nil && controller.retiring.isEmpty)
         precondition(old.allSatisfy { $0.diagnostics.activeResources == 0 })
         precondition(controller.surfaces.allSatisfy { $0.window.alphaValue == 1 })
+        for style in TransitionStyle.allCases {
+            controller.transitionStyle = style
+            controller.retiring = controller.surfaces
+            let (styledSurfaces, styledHub) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+            controller.surfaces = styledSurfaces
+            controller.activeSharedVideoHub = styledHub
+            controller.surfaces.forEach { $0.window.alphaValue = 0 }
+            controller.beginTransition()
+            let styleDeadline = Date(timeIntervalSinceNow: 2)
+            while controller.transitionTimer != nil && Date() < styleDeadline {
+                _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+            }
+            precondition(controller.transitionTimer == nil && controller.retiring.isEmpty, "\(style) must complete")
+            precondition(controller.surfaces.allSatisfy { $0.window.alphaValue == 1 }, "\(style) must land opaque")
+            precondition(controller.surfaces.allSatisfy { $0.window.contentView?.layer?.affineTransform().isIdentity ?? true },
+                "\(style) must restore an identity transform")
+        }
         controller.retiring = controller.surfaces
         let interrupted = controller.retiring
         let (smokeSurfaces2, smokeHub2) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
@@ -951,6 +971,23 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         precondition(controller.surfaces.isEmpty)
     }
 
+    /// Transition gallery for scene changes. Duration 0 means instant (also
+    /// forced under Reduce Motion); otherwise the chosen style runs at 60 Hz.
+    enum TransitionStyle: String, CaseIterable {
+        case crossfade, dip, zoom
+        var title: String {
+            switch self {
+            case .crossfade: return "Crossfade"
+            case .dip: return "Dip to black"
+            case .zoom: return "Zoom fade"
+            }
+        }
+    }
+    var transitionStyle: TransitionStyle {
+        get { TransitionStyle(rawValue: UserDefaults.standard.string(forKey: "wallpaperTransitionStyle") ?? "") ?? .crossfade }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "wallpaperTransitionStyle") }
+    }
+
     private func beginTransition() {
         if presentsWindows {
             for (next, old) in zip(surfaces, retiring) {
@@ -959,10 +996,39 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         let start = ProcessInfo.processInfo.systemUptime
         let duration = transitionDuration
+        let style = transitionStyle
+        if style == .zoom {
+            surfaces.forEach { surface in
+                surface.window.contentView?.wantsLayer = true
+                surface.window.contentView?.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            }
+        }
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             guard let self else { return }
             let progress = min(1, (ProcessInfo.processInfo.systemUptime - start) / max(0.01, duration))
-            self.surfaces.forEach { $0.window.alphaValue = progress * progress * (3 - 2 * progress) }
+            let eased = progress * progress * (3 - 2 * progress)
+            switch style {
+            case .crossfade:
+                self.surfaces.forEach { $0.window.alphaValue = eased }
+            case .dip:
+                // Old scene out in the first half, new scene in during the second.
+                self.retiring.forEach { $0.window.alphaValue = 1 - min(1, eased * 2) }
+                self.surfaces.forEach { $0.window.alphaValue = max(0, eased * 2 - 1) }
+            case .zoom:
+                self.surfaces.forEach { surface in
+                    surface.window.alphaValue = eased
+                    let scale = 1.06 - 0.06 * eased
+                    if let view = surface.window.contentView, let layer = view.layer {
+                        let size = view.bounds.size
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
+                        layer.setAffineTransform(CGAffineTransform(translationX: size.width / 2, y: size.height / 2)
+                            .scaledBy(x: scale, y: scale)
+                            .translatedBy(x: -size.width / 2, y: -size.height / 2))
+                        CATransaction.commit()
+                    }
+                }
+            }
             if progress >= 1 { self.finishTransition() }
         }
         transitionTimer = timer
@@ -971,7 +1037,15 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     private func finishTransition() {
         transitionTimer?.invalidate(); transitionTimer = nil
-        surfaces.forEach { $0.window.alphaValue = 1 }
+        surfaces.forEach {
+            $0.window.alphaValue = 1
+            if let layer = $0.window.contentView?.layer {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                layer.setAffineTransform(.identity)
+                CATransaction.commit()
+            }
+        }
         retiring.forEach { $0.close() }; retiring.removeAll()
         retiringSharedVideoHub?.close(); retiringSharedVideoHub = nil
         retiringURL?.stopAccessingSecurityScopedResource(); retiringURL = nil
@@ -979,6 +1053,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     @objc private func changeTransition(_ sender: NSMenuItem) {
         transitionDuration = sender.representedObject as? Double ?? 0
+        updateMenu()
+    }
+    @objc private func changeTransitionStyle(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let style = TransitionStyle(rawValue: raw) {
+            transitionStyle = style
+        }
         updateMenu()
     }
 
@@ -1016,9 +1096,15 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let transition = NSMenuItem(title: "Scene Transition", action: nil, keyEquivalent: "")
         let choices = NSMenu()
         for seconds in [0.0, 0.5, 1.0, 2.0] {
-            let item = addItem(choices, seconds == 0 ? "Instant" : "Crossfade · \(seconds) seconds", #selector(changeTransition(_:)))
+            let item = addItem(choices, seconds == 0 ? "Instant" : "\(seconds) seconds", #selector(changeTransition(_:)))
             item.representedObject = seconds
             item.state = transitionDuration == seconds ? .on : .off
+        }
+        choices.addItem(.separator())
+        for style in TransitionStyle.allCases {
+            let item = addItem(choices, style.title, #selector(changeTransitionStyle(_:)))
+            item.representedObject = style.rawValue
+            item.state = transitionStyle == style ? .on : .off
         }
         transition.submenu = choices; menu.addItem(transition)
         if NSScreen.screens.count > 1 {

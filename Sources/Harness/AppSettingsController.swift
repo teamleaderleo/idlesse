@@ -51,6 +51,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let sameDisplays = NSButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
+    private let transitionStyle = NSPopUpButton()
     private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
     private let amount = NSSlider(value: 90, minValue: 20, maxValue: 98, target: nil, action: nil)
     private let percent = NSTextField(labelWithString: "90%")
@@ -135,12 +136,16 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         transition.addItems(withTitles: ["None", "0.5 seconds", "1 second", "2 seconds"])
         transition.target = self; transition.action = #selector(changePlayback)
         transition.setAccessibilityLabel("Crossfade")
+        transitionStyle.addItems(withTitles: WallpaperController.TransitionStyle.allCases.map(\.title))
+        transitionStyle.target = self; transitionStyle.action = #selector(changePlayback)
+        transitionStyle.setAccessibilityLabel("Transition style")
+        let transitionRow = NSStackView(views: [transition, transitionStyle]); transitionRow.spacing = 8
         liveMenu.target = self; liveMenu.action = #selector(changeMenuAnimation)
         batteryThrottle.target = self; batteryThrottle.action = #selector(changeBatteryThrottle)
         batteryThrottle.toolTip = "Automatically caps frame rate to 30 fps when running on battery to conserve energy."
         sameDisplays.target = self; sameDisplays.action = #selector(changeSameDisplays)
         sameDisplays.toolTip = "Synchronizes the same wallpaper across all monitors for maximum performance and efficiency."
-        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Crossfade"), transition], [liveMenu], [batteryThrottle], [sameDisplays]])
+        addTab("Wallpaper", rows: [[label("Frame rate"), rate], [label("Transition"), transitionRow], [liveMenu], [batteryThrottle], [sameDisplays]])
         schedule.target = self; schedule.action = #selector(changeBedtime)
         amount.target = self; amount.action = #selector(changeBedtime); amount.isContinuous = true
         amount.setAccessibilityLabel("Dimming")
@@ -233,6 +238,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         updateIcons()
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
+        transitionStyle.selectItem(at: WallpaperController.TransitionStyle.allCases.firstIndex(of: wallpaper.transitionStyle) ?? 0)
         batteryThrottle.state = SceneFrameRate.throttleOnBattery ? .on : .off
         sameDisplays.state = wallpaper.sameWallpaperOnAllDisplays ? .on : .off
         let values = comfort.bedtimeSettings
@@ -324,6 +330,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     @objc private func changePlayback() {
         SceneFrameRate.selected = SceneFrameRate.allCases[rate.indexOfSelectedItem]
         wallpaper.transitionDuration = [0.0, 0.5, 1, 2][transition.indexOfSelectedItem]
+        wallpaper.transitionStyle = WallpaperController.TransitionStyle.allCases[transitionStyle.indexOfSelectedItem]
     }
     @objc private func changeBatteryThrottle() {
         SceneFrameRate.throttleOnBattery = batteryThrottle.state == .on
