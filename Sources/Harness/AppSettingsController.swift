@@ -1,6 +1,49 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Session frame restore that refuses garbage: a saved frame from a different
+/// screen layout (or a runaway resize) that dwarfs the default size is
+/// discarded in favor of a centered default. Self-heals poisoned defaults.
+///
+/// Deliberately manual (no setFrameAutosaveName): AppKit's lazy autosave
+/// restore races validation and re-applies rejected frames after showing.
+extension NSWindow {
+    private static func managedFrameKey(_ name: String) -> String { "NSWindow Frame \(name)" }
+    func restoreManagedFrame(name: String, defaultSize: NSSize) {
+        var applied = false
+        if let saved = NSWindow.managedFrame(name: name),
+           saved.width <= defaultSize.width + 320, saved.height <= defaultSize.height + 230,
+           saved.width >= 400, saved.height >= 300 {
+            setFrame(saved, display: false)
+            applied = true
+        }
+        if !applied {
+            setContentSize(defaultSize)
+            center()
+            saveManagedFrame(name: name)
+        }
+        // Bust stale accessibility caches (window managers, System Events):
+        // programmatic frame changes can leave AX reporting ghost frames.
+        NSAccessibility.post(element: self, notification: .windowMoved)
+        NSAccessibility.post(element: self, notification: .windowResized)
+    }
+    private static func managedFrame(name: String) -> NSRect? {
+        guard let raw = UserDefaults.standard.string(forKey: managedFrameKey(name)) else { return nil }
+        let parts = raw.split(separator: " ").compactMap { Double($0) }
+        guard parts.count >= 4 else { return nil }
+        return NSRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+    }
+    func saveManagedFrame(name: String) {
+        // Never persist absurd frames: a externally-imposed giant rect must
+        // not become the new normal.
+        let f = frame
+        guard f.width <= 1500, f.height <= 950, f.width >= 400, f.height >= 300 else { return }
+        UserDefaults.standard.set(
+            "\(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height)) 0 0 0 0",
+            forKey: Self.managedFrameKey(name))
+    }
+}
+
 final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let comfort: DesktopComfortController
     private let wallpaper: WallpaperController
@@ -13,6 +56,10 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     var onClose: (() -> Void)?
     func installLibrary(_ view: NSView) {
         guard tabs.numberOfTabViewItems == 3 else { return }
+        // Fill the tab page and track its size, so a resized window never
+        // leaves the Library clustered with a void above it.
+        view.frame = NSRect(x: 0, y: 0, width: tabs.frame.width, height: tabs.frame.height)
+        view.autoresizingMask = [.width, .height]
         let item = NSTabViewItem(identifier: "Library"); item.view = view
         tabs.addTabViewItem(item)
     }
@@ -43,6 +90,12 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         if index == 3 { onLibraryVisible?() }
     }
     func windowWillClose(_ notification: Notification) { onClose?() }
+    func windowDidMove(_ notification: Notification) {
+        (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseSettings")
+    }
+    func windowDidResize(_ notification: Notification) {
+        (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseSettings")
+    }
 
     private let icons = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
     private let widgets = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
@@ -82,8 +135,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         window.center()
-        window.setFrameAutosaveName("IdlesseSettings")
-        window.setFrameUsingName("IdlesseSettings")
+        window.restoreManagedFrame(name: "IdlesseSettings", defaultSize: NSSize(width: 1180, height: 720))
         guard let root = window.contentView else { return }
         let sidebar = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 180, height: 720))
         sidebar.material = .sidebar; sidebar.blendingMode = .behindWindow
@@ -227,6 +279,16 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         window?.deminiaturize(nil)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        // Re-validate after showing: AppKit can restore a saved frame lazily
+        // on first show, after init-time validation already ran.
+        window?.restoreManagedFrame(name: "IdlesseSettings", defaultSize: NSSize(width: 1180, height: 720))
+        // Late re-validation: window managers can impose a remembered rect
+        // after showing; absurd sizes get stomped back to sane bounds.
+        if let window {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak window] in
+                window?.restoreManagedFrame(name: "IdlesseSettings", defaultSize: NSSize(width: 1180, height: 720))
+            }
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
     func windowDidBecomeKey(_ notification: Notification) { reload() }

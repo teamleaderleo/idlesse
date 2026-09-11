@@ -155,8 +155,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.isReleasedWhenClosed = false
         window?.delegate = self
         window?.center()
-        window?.setFrameAutosaveName("IdlesseLibrary")
-        window?.setFrameUsingName("IdlesseLibrary")
+        window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         setup()
         reload(selecting: UserDefaults.standard.string(forKey: "Idlesse.library.selectedID"))
     }
@@ -299,6 +298,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func show() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         NSApp.activate(ignoringOtherApps: true)
         startHoverMonitor()
         if selected != nil { preview() }
@@ -1178,6 +1178,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
         stopHoverMonitor()
         onEndPeek?(true)
+    }
+    func windowDidMove(_ notification: Notification) {
+        (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary")
+    }
+    func windowDidResize(_ notification: Notification) {
+        (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary")
     }
     deinit {
         if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
