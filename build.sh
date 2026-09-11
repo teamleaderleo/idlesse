@@ -114,6 +114,7 @@ APP_SOURCES=(
   "$ROOT/Sources/Harness/SceneLibraryStore.swift"
   "$ROOT/Sources/Harness/LibraryGridView.swift"
   "$ROOT/Sources/Harness/SceneLibraryController.swift"
+  "$ROOT/Sources/Harness/StudioShaderAuthoring.swift"
   "$ROOT/Sources/Harness/StudioInspector.swift"
   "$ROOT/Sources/Harness/StudioWindowController.swift"
   "$ROOT/Sources/Harness/Benchmark.swift"
