@@ -36,6 +36,20 @@ Text and shapes now also have GPU readback checks for color, visible glyphs,
 deterministic static output and aspect-fit through effect passes. These are SDR
 checks; they do not close the color/HDR or energy gates.
 
+## HDR verdict (2026-09-11 investigation)
+
+Kept SDR-only. The compositor is sRGB end to end (`bgra8Unorm` drawables,
+sRGB view colorspace, sRGB probes and JPEG stills), so HDR sources are
+tone-mapped down at decode/display rather than carried through. Native
+`AVPlayerLayer` video wallpapers keep whatever the source and display
+negotiate, including HDR — the Metal path is the only place HDR is lost,
+and only when a scene actually requires Metal.
+
+Full HDR would mean float drawables, an extended colorspace, an SDR
+tone-map fallback, HDR stills/posters, and re-qualified probes — a project,
+not a flag. Revisit when HDR sources are common in the Library; until then
+this stays a documented limitation, not a silent clamp.
+
 ## Promotion gates
 
 - Real desktop inspection, including nonuniform image orientation, rotated video,
