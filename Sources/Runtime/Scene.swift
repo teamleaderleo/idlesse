@@ -268,7 +268,7 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
 enum SceneFormat {
     static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text"]
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders"]
     static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
@@ -281,6 +281,7 @@ enum SceneFormat {
         if scene.allNodes.contains(where: { $0.kind == .text }) { result.insert("text") }
         if scene.allNodes.contains(where: { $0.typography?.liveSource != nil }) { result.insert("dynamic-text") }
         if scene.allNodes.contains(where: { $0.kind == .shape }) { result.insert("shapes") }
+        if scene.allNodes.contains(where: { $0.kind == .shader }) { result.insert("shaders") }
         if !(scene.components?.isEmpty ?? true) { result.insert("local-presets") }
         for component in scene.components?.values ?? Dictionary<String, SceneComponent>().values {
             result.formUnion(features(component.scene))
@@ -635,7 +636,7 @@ struct SceneNode: Codable, Sendable {
             case .roundedRectangle: return "Rounded Rectangle"
             }
         }
-        return kind == .group ? "Group" : kind == .particles ? "Particles" : "Gradient"
+        return kind == .group ? "Group" : kind == .particles ? "Particles" : kind == .shader ? "Shader" : "Gradient"
     }
     var content: Content
     var visible = true
@@ -717,6 +718,7 @@ struct LocalSceneSource: SceneSource {
             let emitter: SceneNode.Emitter?
             let typography: SceneNode.Typography?
             let shape: SceneNode.Shape?
+            let shader: SceneNode.Shader?
             let type: SceneDescriptor.Kind
             let asset: String?
             let visible: Bool?
@@ -828,6 +830,12 @@ struct LocalSceneSource: SceneSource {
                 } else if node.type == .shape, let shape = node.shape {
                     try shape.validate(); content = .shape(shape)
                 } else { throw SceneError.invalid("Text or shape content is missing.") }
+            } else if node.type == .shader {
+                guard manifest.version == SceneFormat.revision, node.asset == nil, node.children == nil, let shader = node.shader else {
+                    throw SceneError.invalid("Shader nodes require revision 21 Metal source, without assets or children.")
+                }
+                try shader.validate()
+                content = .shader(shader)
             } else if node.type == .gradient {
                 guard node.children == nil, manifest.version >= 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
                 content = .gradient
@@ -841,7 +849,8 @@ struct LocalSceneSource: SceneSource {
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
             guard node.type == .particles || node.emitter == nil else { throw SceneError.invalid("Only particle nodes accept an emitter.") }
-            guard node.type == .text || node.typography == nil, node.type == .shape || node.shape == nil else { throw SceneError.invalid("Content fields must match the node type.") }
+            guard node.type == .text || node.typography == nil, node.type == .shape || node.shape == nil,
+                  node.type == .shader || node.shader == nil else { throw SceneError.invalid("Content fields must match the node type.") }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             guard manifest.version >= 18 || !(node.style?.effects.contains { $0.type == .displacement } ?? false) else {
@@ -1063,6 +1072,7 @@ enum ScenePackageWriter {
             if let emitter = node.emitter { json["emitter"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(emitter)) }
             if let text = node.typography { json["typography"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(text)) }
             if let shape = node.shape { json["shape"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(shape)) }
+            if let shader = node.shader { json["shader"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(shader)) }
             if node.style != .plain {
                 json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
             }

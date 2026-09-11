@@ -148,6 +148,7 @@ final class StudioLayerInspector: NSScrollView {
     private var sceneActionViews: [NSView] = []
     private var currentScene = SceneDescriptor(title: "Inspector", nodes: [SceneNode(content: .gradient)])
     private var currentNode: SceneNode?
+    private var shaderEditor: StudioShaderEditorController?
     private var busy = false
     private var contentApply: (() throws -> Void)?
     private var appearanceApply: (() throws -> Void)?
@@ -311,7 +312,11 @@ final class StudioLayerInspector: NSScrollView {
         case .particles(let emitter):
             views = emitterViews(node: node, emitter: emitter, editable: editable)
         case .shader(let shader):
-            views = [info("Shader", value: "\(shader.source.utf8.count) chars · ×\(shader.speed)", tooltip: "Metal fragment snippet; edit the source in the scene JSON.")]
+            let edit = NSButton(title: "Edit Metal Shader…", target: self, action: #selector(editShader))
+            edit.isEnabled = editable
+            edit.setAccessibilityLabel("Edit Metal shader source")
+            views = [info("Metal Shader", value: "\(shader.source.utf8.count) bytes · \(shader.speed)×",
+                          tooltip: "Metal fragment source compiled by the runtime."), edit]
         }
         contentSection.setViews(views)
     }
@@ -737,6 +742,20 @@ final class StudioLayerInspector: NSScrollView {
     @objc private func editControls() { onEditControls?() }
     @objc private func editBinding() { onEditBinding?() }
     @objc private func editKeyframes() { onEditKeyframes?() }
+    @objc private func editShader() {
+        guard !busy, shaderEditor == nil, let node = currentNode, !node.locked,
+              let shader = node.shader, let parent = window else { return }
+        let nodeID = node.id
+        let editor = StudioShaderEditorController(shader: shader, title: node.displayName)
+        editor.onApply = { [weak self] shader in
+            guard let self, var next = self.currentNode, next.id == nodeID, !next.locked else { return }
+            next.content = .shader(shader)
+            self.onCommitNode?(next, "Edit Shader")
+        }
+        editor.onClose = { [weak self] in self?.shaderEditor = nil }
+        shaderEditor = editor
+        editor.present(on: parent)
+    }
     @objc private func applyContent() { perform(contentApply) }
     @objc private func applyAppearance() { perform(appearanceApply) }
     @objc private func applyCompositing() { perform(compositingApply) }
@@ -745,5 +764,206 @@ final class StudioLayerInspector: NSScrollView {
         guard !busy, currentNode?.locked == false, let operation else { return }
         do { try operation() }
         catch { onError?(error.localizedDescription) }
+    }
+}
+
+final class StudioShaderEditorController: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    var onApply: ((SceneNode.Shader) -> Void)?
+    var onClose: (() -> Void)?
+
+    private let sourceView = NSTextView()
+    private let speedField = NSTextField(string: "")
+    private let presets = NSPopUpButton()
+    private let diagnostics = NSTextField(wrappingLabelWithString: "Ready to compile Metal fragment source.")
+    private weak var parentWindow: NSWindow?
+    private var closed = false
+
+    init(shader: SceneNode.Shader, title: String) {
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 590),
+                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        super.init()
+        window.title = "Metal Shader — \(title)"
+        window.delegate = self
+        window.minSize = NSSize(width: 620, height: 460)
+
+        presets.addItems(withTitles: ["Templates…"] + SceneNode.Shader.studioPresets.map(\.name))
+        presets.target = self
+        presets.action = #selector(choosePreset)
+        presets.setAccessibilityLabel("Shader template")
+
+        speedField.stringValue = String(shader.speed)
+        speedField.setAccessibilityLabel("Shader speed multiplier")
+        speedField.widthAnchor.constraint(equalToConstant: 90).isActive = true
+
+        sourceView.isRichText = false
+        sourceView.isAutomaticQuoteSubstitutionEnabled = false
+        sourceView.isAutomaticDashSubstitutionEnabled = false
+        sourceView.isAutomaticTextReplacementEnabled = false
+        sourceView.isAutomaticSpellingCorrectionEnabled = false
+        sourceView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        sourceView.textContainerInset = NSSize(width: 8, height: 8)
+        sourceView.string = shader.source
+        sourceView.allowsUndo = true
+        sourceView.setAccessibilityLabel("Metal shader source")
+        sourceView.isVerticallyResizable = true
+        sourceView.isHorizontallyResizable = true
+        sourceView.autoresizingMask = [.width]
+        sourceView.textContainer?.widthTracksTextView = false
+        sourceView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        let sourceScroll = NSScrollView()
+        sourceScroll.borderType = .bezelBorder
+        sourceScroll.hasVerticalScroller = true
+        sourceScroll.hasHorizontalScroller = true
+        sourceScroll.documentView = sourceView
+        sourceScroll.translatesAutoresizingMaskIntoConstraints = false
+
+        diagnostics.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        diagnostics.textColor = .secondaryLabelColor
+        diagnostics.maximumNumberOfLines = 5
+        diagnostics.lineBreakMode = .byWordWrapping
+        diagnostics.isSelectable = true
+        diagnostics.setAccessibilityLabel("Shader compiler diagnostics")
+
+        let compile = NSButton(title: "Compile", target: self, action: #selector(compileSource))
+        compile.keyEquivalent = ""
+        let apply = NSButton(title: "Apply", target: self, action: #selector(applySource))
+        apply.keyEquivalent = "\r"
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        cancel.keyEquivalent = "\u{1b}"
+
+        let speedLabel = NSTextField(labelWithString: "Speed")
+        let range = NSTextField(labelWithString: "0.01–10×")
+        range.textColor = .secondaryLabelColor
+        let top = NSStackView(views: [presets, speedLabel, speedField, range])
+        top.spacing = 8
+        top.alignment = .centerY
+
+        let hint = NSTextField(wrappingLabelWithString:
+            "Entry: fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]). " +
+            "ShaderU provides time, resolution, pointer, audio and opacity. Custom typed uniforms remain a follow-up through scene controls.")
+        hint.textColor = .secondaryLabelColor
+        hint.font = .systemFont(ofSize: 11)
+
+        let buttons = NSStackView(views: [compile, apply, cancel])
+        buttons.spacing = 8
+        let spacer = NSView()
+        let bottom = NSStackView(views: [diagnostics, spacer, buttons])
+        bottom.spacing = 10
+        bottom.alignment = .centerY
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        diagnostics.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        diagnostics.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let content = window.contentView!
+        for view in [top, hint, sourceScroll, bottom] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
+        NSLayoutConstraint.activate([
+            top.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            top.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            hint.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10),
+            hint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            hint.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            sourceScroll.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 10),
+            sourceScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            sourceScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            sourceScroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -12),
+            bottom.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            bottom.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            bottom.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            diagnostics.widthAnchor.constraint(greaterThanOrEqualToConstant: 300)
+        ])
+    }
+
+    func present(on parent: NSWindow) {
+        parentWindow = parent
+        parent.beginSheet(window)
+        window.makeFirstResponder(sourceView)
+    }
+
+    @objc private func choosePreset() {
+        let index = presets.indexOfSelectedItem - 1
+        guard SceneNode.Shader.studioPresets.indices.contains(index) else { return }
+        let preset = SceneNode.Shader.studioPresets[index]
+        replaceDraft(source: preset.source, speed: String(preset.speed))
+        diagnostics.stringValue = "Loaded \(preset.name). Compile to validate, then Apply."
+        diagnostics.textColor = .secondaryLabelColor
+    }
+
+    private func replaceDraft(source: String, speed: String) {
+        let oldSource = sourceView.string
+        let oldSpeed = speedField.stringValue
+        sourceView.undoManager?.registerUndo(withTarget: self) { target in
+            target.replaceDraft(source: oldSource, speed: oldSpeed)
+        }
+        sourceView.string = source
+        speedField.stringValue = speed
+    }
+
+    @objc private func compileSource() { _ = compileDraft(selectFirstError: true) }
+
+    @objc private func applySource() {
+        guard let shader = compileDraft(selectFirstError: true) else { return }
+        onApply?(shader)
+        closeSheet()
+    }
+
+    @objc private func cancel() { closeSheet() }
+
+    private func draft() throws -> SceneNode.Shader {
+        guard let speed = Double(speedField.stringValue), speed.isFinite else {
+            throw SceneError.invalid("Speed must be a finite number from 0.01 through 10.")
+        }
+        let shader = SceneNode.Shader(source: sourceView.string, speed: speed)
+        try shader.validate()
+        return shader
+    }
+
+    private func compileDraft(selectFirstError: Bool) -> SceneNode.Shader? {
+        do {
+            let shader = try draft()
+            try MetalShaderCompiler.validate(shader)
+            diagnostics.stringValue = "Compiled successfully · \(shader.source.utf8.count) bytes · \(shader.speed)×"
+            diagnostics.textColor = .systemGreen
+            return shader
+        } catch let error as MetalShaderCompilationError {
+            diagnostics.stringValue = error.errorDescription ?? error.fallback
+            diagnostics.textColor = .systemRed
+            if selectFirstError, let line = error.diagnostics.compactMap(\.line).first { select(line: line) }
+        } catch {
+            diagnostics.stringValue = error.localizedDescription
+            diagnostics.textColor = .systemRed
+        }
+        return nil
+    }
+
+    private func select(line: Int) {
+        guard line > 0 else { return }
+        let ns = sourceView.string as NSString
+        var current = 1
+        var location = 0
+        while current < line && location < ns.length {
+            let range = ns.lineRange(for: NSRange(location: location, length: 0))
+            location = NSMaxRange(range)
+            current += 1
+        }
+        guard current == line, location <= ns.length else { return }
+        let range = ns.lineRange(for: NSRange(location: location, length: 0))
+        sourceView.setSelectedRange(range)
+        sourceView.scrollRangeToVisible(range)
+        window.makeFirstResponder(sourceView)
+    }
+
+    private func closeSheet() {
+        guard !closed else { return }
+        closed = true
+        if let parentWindow { parentWindow.endSheet(window) }
+        else { window.close() }
+        onClose?()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        closeSheet()
+        return false
     }
 }

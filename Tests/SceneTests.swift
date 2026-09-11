@@ -653,6 +653,28 @@ import Foundation
         try ScenePackageWriter.write(clockScene, to: clockURL)
         let clockRead = try await LocalSceneSource().resolve(clockURL)
         precondition(clockRead.nodes[0].typography?.liveSource == .weekday)
-        print("Scene tests passed: legacy formats, typed controls, features, text, shapes, independent presets, budgets and audio capabilities")
+        let savedShader = SceneNode.Shader(source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float3 color = float3(in.uv, 0.25 + 0.25 * sin(u.time));
+            return float4(color * u.opacity, u.opacity);
+        }
+        """, speed: 1.25)
+        let shaderNode = SceneNode(content: .shader(savedShader))
+        let shaderScene = SceneDescriptor(title: "Shader Roundtrip", nodes: [shaderNode])
+        precondition(SceneFormat.revision == 21 && SceneFormat.supported.contains("shaders"))
+        precondition(SceneFormat.features(shaderScene).contains("shaders") && shaderNode.displayName == "Shader")
+        let shaderPackage = root.appendingPathComponent("Shader.idlesse")
+        try ScenePackageWriter.write(shaderScene, to: shaderPackage)
+        let shaderRead = try await source.resolve(shaderPackage)
+        precondition(shaderRead.nodes[0].shader == savedShader && shaderRead.requiresMetal)
+        let shaderManifestURL = shaderPackage.appendingPathComponent("manifest.json")
+        var shaderManifest = try JSONSerialization.jsonObject(with: Data(contentsOf: shaderManifestURL)) as! [String: Any]
+        precondition(shaderManifest["version"] as? Int == 21)
+        precondition((shaderManifest["features"] as? [String])?.contains("shaders") == true)
+        shaderManifest["version"] = 20
+        shaderManifest.removeValue(forKey: "features")
+        try JSONSerialization.data(withJSONObject: shaderManifest).write(to: shaderManifestURL)
+        do { _ = try await source.resolve(shaderPackage); fatalError("Accepted shader content before revision 21") } catch is SceneError {}
+        print("Scene tests passed: legacy formats, typed controls, features, text, shapes, shaders, independent presets, budgets and audio capabilities")
     }
 }
