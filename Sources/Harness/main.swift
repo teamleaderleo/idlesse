@@ -8,6 +8,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var pauseButton: NSButton!
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
+    private lazy var modes = AmbientModesController(wallpaper: wallpaper, comfort: comfort)
     private lazy var appSettings = AppSettingsController(comfort: comfort, wallpaper: wallpaper,
         showSaver: { [weak self] in self?.showSaverSettings(asSheet: true) })
     private var library: SceneLibraryController?
@@ -68,6 +69,12 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        if let stampURL = Bundle.main.url(forResource: "build-stamp", withExtension: "txt"),
+           let stamp = try? String(contentsOf: stampURL).trimmingCharacters(in: .whitespacesAndNewlines),
+           !stamp.isEmpty {
+            NSLog("Idlesse build %@", stamp)
+            try? ("Idlesse build \(stamp)\n".data(using: .utf8)?.write(to: URL(fileURLWithPath: "/tmp/idlesse-state.log")))
+        }
         installMenu()
         wallpaper.persistsSelection = true
         wallpaper.onStart = { [weak self] in
@@ -84,10 +91,13 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         comfort.onDimmingChanged = { [weak self] value in
             self?.wallpaper.setDimmedForBedtime(value)
             self?.appSettings.updateDimming()
+            self?.modes.refresh()
         }
         comfort.onShowSettings = { [weak self] in self?.showLibrary(); self?.appSettings.present(tab: 1) }
         wallpaper.onShowSettings = { [weak self] in self?.showSettings() }
         comfort.start()
+        appSettings.modes = modes
+        modes.start()
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),

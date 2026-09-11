@@ -90,60 +90,79 @@ build_saver() {
   file "$SAVER/Contents/MacOS/Idlesse"
 }
 
+APP_SOURCES=(
+  "$ROOT/Sources/Runtime/SceneRenderer.swift"
+  "$ROOT/Sources/Runtime/SceneClock.swift"
+  "$ROOT/Sources/Runtime/AudioBandAnalyzer.swift"
+  "$ROOT/Sources/Runtime/SystemAudioInput.swift"
+  "$ROOT/Sources/Runtime/SceneWatcher.swift"
+  "$ROOT/Sources/Runtime/GradientRenderer.swift"
+  "$ROOT/Sources/Runtime/MetalSceneRenderer.swift"
+  "$ROOT/Sources/Wallpaper/WallpaperController.swift"
+  "$ROOT/Sources/Wallpaper/AmbientModesController.swift"
+  "$ROOT/Sources/Wallpaper/DesktopComfortController.swift"
+  "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift"
+  "$ROOT/Sources/Harness/SceneTimelineView.swift"
+  "$ROOT/Sources/Harness/ScenePreviewHost.swift"
+  "$ROOT/Sources/Harness/SceneVideoExporter.swift"
+  "$ROOT/Sources/Harness/SceneParameterControls.swift"
+  "$ROOT/Sources/Harness/SceneLayerList.swift"
+  "$ROOT/Sources/Harness/SceneCanvasInteraction.swift"
+  "$ROOT/Sources/Harness/SceneEditorController.swift"
+  "$ROOT/Sources/Harness/SceneDocument.swift"
+  "$ROOT/Sources/Harness/MediaImport.swift"
+  "$ROOT/Sources/Harness/SceneLibraryStore.swift"
+  "$ROOT/Sources/Harness/LibraryGridView.swift"
+  "$ROOT/Sources/Harness/SceneLibraryController.swift"
+  "$ROOT/Sources/Harness/StudioInspector.swift"
+  "$ROOT/Sources/Harness/StudioWindowController.swift"
+  "$ROOT/Sources/Harness/Benchmark.swift"
+  "$ROOT/Sources/Harness/AudioSmoke.swift"
+  "$ROOT/Sources/Harness/SceneConformance.swift"
+  "$ROOT/Sources/Harness/DesktopQualification.swift"
+  "$ROOT/Sources/Harness/AppSettingsController.swift"
+  "$ROOT/Sources/Harness/main.swift"
+)
+
+APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver UniformTypeIdentifiers )
+
+app_framework_args() {
+  local f
+  for f in "${APP_FRAMEWORKS[@]}"; do printf ' -framework %s' "$f"; done
+}
+
+# Full whole-module build. Used for release (-O -wmo) and as the fallback.
+compile_app_full() {
+  local arch="$1"
+  local args=( -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" -swift-version 5
+    "${SWIFT_OPT[@]}" -module-name IdlesseApp )
+  local f
+  for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
+  xcrun swiftc "${args[@]}" "${SHARED_SOURCES[@]}" "${SAVER_SOURCES[@]}" "${APP_SOURCES[@]}" \
+    -o "$APP/Contents/MacOS/Idlesse"
+}
+
+# NOTE: per-file object caching was tried here (output-file-map + -incremental)
+# and reverted: this toolchain's driver never persists the build record for an
+# emit-executable link, so every build re-ran the full frontend anyway while the
+# cache only added disk weight and failure modes. Full debug builds run ~20s on
+# Apple Silicon. The structural fix is a SwiftPM/Xcode project with real
+# incremental state (plus scene content already hot-reloads via SceneWatcher,
+# so content iteration never needs a rebuild). Until then: NO_CACHE is gone,
+# builds are always full and honest about it.
+compile_app_incremental() { return 1; }
+
 build_app() {
   local arch="$(uname -m)"
   log "Building development preview for $arch"
   rm -rf "$APP"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-  xcrun swiftc \
-    -sdk "$SDK" \
-    -target "$arch-apple-macosx$MIN_MACOS" \
-    -swift-version 5 \
-    "${SWIFT_OPT[@]}" \
-    -module-name IdlesseApp \
-    -framework AVFoundation \
-    -framework ApplicationServices \
-    -framework MetalKit \
-    -framework Metal \
-    -framework IOKit \
-    "${SHARED_SOURCES[@]}" \
-    "${SAVER_SOURCES[@]}" \
-    "$ROOT/Sources/Runtime/SceneRenderer.swift" \
-    "$ROOT/Sources/Runtime/SceneClock.swift" \
-    "$ROOT/Sources/Runtime/AudioBandAnalyzer.swift" \
-    "$ROOT/Sources/Runtime/SystemAudioInput.swift" \
-    "$ROOT/Sources/Runtime/SceneWatcher.swift" \
-    "$ROOT/Sources/Runtime/GradientRenderer.swift" \
-    "$ROOT/Sources/Runtime/MetalSceneRenderer.swift" \
-    "$ROOT/Sources/Wallpaper/WallpaperController.swift" \
-    "$ROOT/Sources/Wallpaper/DesktopComfortController.swift" \
-    "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift" \
-    "$ROOT/Sources/Harness/SceneTimelineView.swift" \
-    "$ROOT/Sources/Harness/ScenePreviewHost.swift" \
-    "$ROOT/Sources/Harness/SceneVideoExporter.swift" \
-    "$ROOT/Sources/Harness/SceneParameterControls.swift" \
-    "$ROOT/Sources/Harness/SceneLayerList.swift" \
-    "$ROOT/Sources/Harness/SceneCanvasInteraction.swift" \
-    "$ROOT/Sources/Harness/SceneEditorController.swift" \
-    "$ROOT/Sources/Harness/SceneDocument.swift" \
-    "$ROOT/Sources/Harness/MediaImport.swift" \
-    "$ROOT/Sources/Harness/SceneLibraryStore.swift" \
-    "$ROOT/Sources/Harness/LibraryGridView.swift" \
-    "$ROOT/Sources/Harness/SceneLibraryController.swift" \
-    "$ROOT/Sources/Harness/StudioInspector.swift" \
-    "$ROOT/Sources/Harness/StudioWindowController.swift" \
-    "$ROOT/Sources/Harness/Benchmark.swift" \
-    "$ROOT/Sources/Harness/AudioSmoke.swift" \
-    "$ROOT/Sources/Harness/SceneConformance.swift" \
-    "$ROOT/Sources/Harness/DesktopQualification.swift" \
-    "$ROOT/Sources/Harness/AppSettingsController.swift" \
-    "$ROOT/Sources/Harness/main.swift" \
-    -framework AppKit \
-    -framework Photos \
-    -framework ScreenSaver \
-    -framework UniformTypeIdentifiers \
-    -o "$APP/Contents/MacOS/Idlesse"
+  if [[ "$CONFIG" != "release" && "${NO_CACHE:-0}" != "1" ]] && compile_app_incremental "$arch"; then
+    log "Incremental link reused cached objects"
+  else
+    compile_app_full "$arch"
+  fi
 
   cp "$ROOT/Sources/Harness/Info.plist" "$APP/Contents/Info.plist"
   mkdir -p "$APP/Contents/Resources/Scenes"
@@ -162,6 +181,11 @@ build_app() {
   cp "$ROOT/Sources/DesktopMenu/Info.plist" "$extension/Contents/Info.plist"
   codesign --force --sign - --entitlements "$ROOT/Sources/DesktopMenu/Entitlements.plist" "$extension" >/dev/null
   codesign --force --sign - "$APP" >/dev/null
+  local stamp_sha
+  stamp_sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  if ! git -C "$ROOT" diff --quiet 2>/dev/null; then stamp_sha="$stamp_sha-dirty"; fi
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$stamp_sha" \
+    > "$APP/Contents/Resources/build-stamp.txt"
 
   log "Development preview ready: $APP"
 }

@@ -375,7 +375,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
     var isRunning: Bool { selectedURL != nil }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
-    private var shouldPause: Bool { pausedByUser || dimmedForBedtime || ProcessInfo.processInfo.isLowPowerModeEnabled }
+    /// Set by AmbientModesController while a scheduled scene is showing so the
+    /// bedtime shade doesn't pause the night scene it just switched to.
+    var modeOverrideActive = false
+    private var shouldPause: Bool { pausedByUser || (dimmedForBedtime && !modeOverrideActive) || ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     override init() {
         super.init()
@@ -456,6 +459,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     var onManualSelection: (() -> Void)?
+    /// Fires after any successful (non-reload) selection with the adopted URL.
+    var onSelectionCommitted: ((URL) -> Void)?
     func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil) {
         if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
@@ -546,6 +551,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.syncSystemBackdrop(scene: playable, sourceURL: url, request: request)
                 self.saveSelection()
                 self.logState("select-done")
+                if !reloading { self.onSelectionCommitted?(url) }
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
@@ -649,7 +655,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    /// A small SDR still gives macOS matching material for menu-bar/Show Desktop
+    /// A full-resolution SDR still gives macOS matching material for menu-bar/Show Desktop
     /// regions it composites from the system wallpaper rather than our window.
     private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int) {
         guard persistsSelection && presentsWindows else { return }
@@ -666,9 +672,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 for screen in screens {
                     try Task.checkCancellation()
                     rememberOriginalBackdrop(for: screen)
-                    let factor = min(1, 1280 / max(screen.frame.width, screen.frame.height))
-                    let width = max(1, Int(screen.frame.width * factor))
-                    let height = max(1, Int(screen.frame.height * factor))
+                    // Native backing resolution (within probe limits) so the still
+                    // stays sharp in Mission Control, lock screen and Spaces.
+                    let scale = max(1, screen.backingScaleFactor)
+                    var width = Int((screen.frame.width * scale).rounded())
+                    var height = Int((screen.frame.height * scale).rounded())
+                    let fit = min(1.0, 3840 / Double(max(1, width)), 2160 / Double(max(1, height)))
+                    width = max(32, Int((Double(width) * fit).rounded()))
+                    height = max(32, Int((Double(height) * fit).rounded()))
                     let clock = SceneClock(now: { 0 })
                     try clock.configure(timeline: scene.timeline)
                     let time = scene.metadata?.previewTime ?? 2

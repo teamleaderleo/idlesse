@@ -423,18 +423,25 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 image = poster
             } else if source.pathExtension.lowercased() == "idlesse" {
                 image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
-            } else if let still = Self.listThumbnail(source) {
+                    ?? Self.listThumbnail(source.appendingPathComponent("preview.png"))
+                    ?? Self.packageAssetThumbnail(source)
+            } else if let still = Self.listThumbnail(source) ?? Self.decodedStill(source) {
                 image = still
             } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
                 ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
                 image = sidecar
-            } else {
+            } else if ["mp4", "mov", "m4v"].contains(source.pathExtension.lowercased()) {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 320, height: 180)
                 image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
+            } else {
+                image = nil
             }
-            guard let image else { return }
+            guard let image else {
+                Self.appendThumbLine("THUMB-MISS \(source.path)")
+                return
+            }
             let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
             self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
             DispatchQueue.main.async { completion(result) }
@@ -447,6 +454,50 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: 320
         ] as CFDictionary)
+    }
+    /// Fallback for scene packages without a baked preview: thumbnail the
+    /// package's own asset (single image, video poster frame, gradient probe).
+    private static func packageAssetThumbnail(_ package: URL) -> CGImage? {
+        guard let scene = try? LocalSceneSource.read(package) else { return nil }
+        let candidates: [URL] = ([scene.assetURL] + scene.allNodes.map(\.assetURL)).compactMap { $0 }
+        for url in candidates {
+            if let thumb = listThumbnail(url) ?? decodedStill(url) { return thumb }
+            if ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) {
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 320, height: 180)
+                if let frame = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil) {
+                    return frame
+                }
+            }
+        }
+        return nil
+    }
+    private static func appendThumbLine(_ line: String) {
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        let path = "/tmp/idlesse-thumb.log"
+        if FileManager.default.fileExists(atPath: path),
+           let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+            try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+    private static func decodedStill(_ url: URL) -> CGImage? {
+        guard ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"].contains(url.pathExtension.lowercased()),
+              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let full = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let maxSide = max(full.width, full.height)
+        guard maxSide > 320 else { return full }
+        let scale = 320.0 / Double(maxSide)
+        let w = max(1, Int((Double(full.width) * scale).rounded()))
+        let h = max(1, Int((Double(full.height) * scale).rounded()))
+        guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return full }
+        context.interpolationQuality = .high
+        context.draw(full, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return context.makeImage() ?? full
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil

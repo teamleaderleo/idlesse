@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let comfort: DesktopComfortController
@@ -56,6 +57,18 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let from = NSDatePicker()
     private let until = NSDatePicker()
     private let dim = NSButton(title: "Dim Now", target: nil, action: nil)
+    var modes: AmbientModesController?
+    private let nightChoose = NSButton(title: "Choose night wallpaper…", target: nil, action: nil)
+    private let nightClear = NSButton(title: "Clear", target: nil, action: nil)
+    private let followSun = NSButton(checkboxWithTitle: "Follow the sun", target: nil, action: nil)
+    private let sunTimes = NSTextField(labelWithString: "")
+    private let myLocation = NSButton(checkboxWithTitle: "Use my location", target: nil, action: nil)
+    private let latField = NSTextField(string: "")
+    private let lonField = NSTextField(string: "")
+    private let weatherEnabled = NSButton(checkboxWithTitle: "Weather scenes", target: nil, action: nil)
+    private let clearSceneBtn = NSButton(title: "Clear", target: nil, action: nil)
+    private let cloudySceneBtn = NSButton(title: "Cloudy", target: nil, action: nil)
+    private let precipSceneBtn = NSButton(title: "Precipitation", target: nil, action: nil)
 
     init(comfort: DesktopComfortController, wallpaper: WallpaperController, showSaver: @escaping () -> Void) {
         self.comfort = comfort; self.wallpaper = wallpaper; self.showSaver = showSaver
@@ -140,8 +153,35 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             picker.setAccessibilityLabel(name)
         }
         dim.bezelStyle = .rounded; dim.target = self; dim.action = #selector(toggleDim)
+        nightChoose.bezelStyle = .rounded; nightChoose.target = self; nightChoose.action = #selector(chooseModeScene(_:))
+        nightChoose.tag = 0
+        nightClear.bezelStyle = .rounded; nightClear.target = self; nightClear.action = #selector(clearModeScene(_:))
+        nightClear.tag = 0
+        let nightRow = NSStackView(views: [nightChoose, nightClear]); nightRow.spacing = 8
+        followSun.target = self; followSun.action = #selector(changeModes)
+        followSun.toolTip = "Dim window and night scenes follow local sunrise and sunset."
+        sunTimes.textColor = .secondaryLabelColor
+        let sunRow = NSStackView(views: [followSun, sunTimes]); sunRow.spacing = 8
+        myLocation.target = self; myLocation.action = #selector(changeModes)
+        myLocation.toolTip = "Use your current location for sun times and weather. Otherwise enter coordinates."
+        latField.target = self; latField.action = #selector(changeCoords)
+        lonField.target = self; lonField.action = #selector(changeCoords)
+        for field in [latField, lonField] {
+            field.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        }
+        let locRow = NSStackView(views: [myLocation, NSTextField(labelWithString: "Lat"), latField,
+            NSTextField(labelWithString: "Lon"), lonField]); locRow.spacing = 6
+        weatherEnabled.target = self; weatherEnabled.action = #selector(changeModes)
+        weatherEnabled.toolTip = "Switch scenes by current condition (Open-Meteo, checked every 15 minutes)."
+        for (index, entry) in [(clearSceneBtn, "weather.clear"), (cloudySceneBtn, "weather.cloudy"), (precipSceneBtn, "weather.precip")].enumerated() {
+            entry.0.bezelStyle = .rounded; entry.0.target = self; entry.0.action = #selector(chooseModeScene(_:))
+            entry.0.tag = index + 1
+        }
+        let weatherRow = NSStackView(views: [weatherEnabled, clearSceneBtn, cloudySceneBtn, precipSceneBtn]); weatherRow.spacing = 8
         addTab("Bedtime", rows: [[label("Dimming"), level], [NSView(), schedule],
-            [label("Dim at"), from], [label("Restore at"), until], [NSView(), dim]])
+            [label("Dim at"), from], [label("Restore at"), until], [NSView(), dim],
+            [label("Night"), nightRow], [label("Sun"), sunRow], [label("Location"), locRow],
+            [label("Weather"), weatherRow]])
         let saver = NSButton(title: "Screen Saver Options…", target: self, action: #selector(openSaver))
         saver.bezelStyle = .rounded
         let mirror = NSButton(title: "Mirror Active Wallpaper to Screen Saver", target: self, action: #selector(mirrorWallpaperToSaver))
@@ -201,6 +241,81 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         until.dateValue = DimSchedule.pickerDate(minute: values.end, on: Date())
         from.isEnabled = values.enabled; until.isEnabled = values.enabled
         dim.title = comfort.isDimmed ? "Restore Display" : "Dim Now"
+        reloadModes()
+    }
+    private func modeSlotTitle(_ slot: String, fallback: String) -> String {
+        modes?.sceneURL(for: slot)?.lastPathComponent ?? fallback
+    }
+    private func reloadModes() {
+        guard let modes else {
+            for control in [nightChoose, nightClear, followSun, myLocation, latField, lonField,
+                            weatherEnabled, clearSceneBtn, cloudySceneBtn, precipSceneBtn] as [NSControl] {
+                control.isEnabled = false
+            }
+            return
+        }
+        nightChoose.title = modeSlotTitle("night", fallback: "Choose night wallpaper…")
+        followSun.state = modes.followSun ? .on : .off
+        if let sun = modes.solarTimes {
+            func clock(_ minutes: Int) -> String {
+                String(format: "%d:%02d", (minutes / 60) % 24, minutes % 60)
+            }
+            sunTimes.stringValue = "Rise \(clock(sun.rise)) · Set \(clock(sun.set))"
+        } else {
+            sunTimes.stringValue = modes.followSun ? "Sun times unavailable" : ""
+        }
+        myLocation.state = modes.useMyLocation ? .on : .off
+        latField.stringValue = String(format: "%.4f", modes.manualLatitude)
+        lonField.stringValue = String(format: "%.4f", modes.manualLongitude)
+        latField.isEnabled = !modes.useMyLocation; lonField.isEnabled = !modes.useMyLocation
+        weatherEnabled.state = modes.weatherEnabled ? .on : .off
+        clearSceneBtn.title = modeSlotTitle("weather.clear", fallback: "Clear")
+        cloudySceneBtn.title = modeSlotTitle("weather.cloudy", fallback: "Cloudy")
+        precipSceneBtn.title = modeSlotTitle("weather.precip", fallback: "Precipitation")
+        for button in [clearSceneBtn, cloudySceneBtn, precipSceneBtn] { button.isEnabled = modes.weatherEnabled }
+    }
+    @objc private func changeModes() {
+        guard let modes else { return }
+        modes.followSun = followSun.state == .on
+        modes.useMyLocation = myLocation.state == .on
+        modes.weatherEnabled = weatherEnabled.state == .on
+        reloadModes()
+    }
+    @objc private func changeCoords() {
+        guard let modes else { return }
+        let lat = min(90, max(-90, latField.doubleValue))
+        let lon = min(180, max(-180, lonField.doubleValue))
+        modes.manualLatitude = lat
+        modes.manualLongitude = lon
+        reloadModes()
+    }
+    private static let modeSlots = ["night", "weather.clear", "weather.cloudy", "weather.precip"]
+    private func modeSlot(for sender: NSButton) -> String? {
+        guard (0..<Self.modeSlots.count).contains(sender.tag) else { return nil }
+        return Self.modeSlots[sender.tag]
+    }
+    @objc private func chooseModeScene(_ sender: NSButton) {
+        guard let modes, let slot = modeSlot(for: sender) else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose scene"
+        panel.prompt = "Use Scene"
+        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
+            UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
+        panel.treatsFilePackagesAsDirectories = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            modes.setScene(url, for: slot)
+            self?.reloadModes()
+        }
+    }
+    @objc private func clearModeScene(_ sender: NSButton) {
+        guard let modes, let slot = modeSlot(for: sender) else { return }
+        modes.setScene(nil, for: slot)
+        reloadModes()
     }
     @objc private func changeWidgets() { comfort.toggleDesktopWidgets(); updateIcons() }
     @objc private func changeIcons() { comfort.toggleDesktopIcons(); updateIcons() }

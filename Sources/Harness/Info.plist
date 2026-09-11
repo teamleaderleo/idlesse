@@ -34,6 +34,8 @@
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Idlesse uses Photos only when you choose to connect a photo library or album for display.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Idlesse uses your location only to time sunrise/sunset scenes and local weather scenes.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>UTExportedTypeDeclarations</key>
