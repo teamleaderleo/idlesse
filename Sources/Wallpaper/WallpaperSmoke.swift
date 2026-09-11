@@ -298,6 +298,19 @@ enum WallpaperSmoke {
         particles.releaseResources()
         wait { particles.intermediateTextureBytes == 0 }
         precondition(particles.intermediateTextureBytes == 0)
+        let shaderClock = SceneClock(now: { 0 })
+        let waves = try MetalSceneRenderer(playable: SceneDescriptor(title: "Waves", nodes: [SceneNode(content: .shader(.init()))]),
+            bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: shaderClock) { errors.append($0) }
+        defer { waves.releaseResources() }
+        let wavePixels = try waves.renderProbe()
+        let lit = stride(from: 0, to: wavePixels.count, by: 4).filter { wavePixels[$0] > 8 || wavePixels[$0 + 1] > 8 || wavePixels[$0 + 2] > 8 }.count
+        precondition(lit > 100, "A shader layer must paint procedural pixels")
+        do {
+            _ = try MetalSceneRenderer(playable: SceneDescriptor(title: "Broken", nodes: [SceneNode(content: .shader(.init(source: "this is not metal", speed: 1)))]),
+                bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: shaderClock) { errors.append($0) }
+            preconditionFailure("Invalid shader source must fail surface preparation")
+        } catch { }
+        print("Shader checks passed: procedural layer renders, invalid source rejected")
         let sixteenImages = SceneDescriptor(title: "Sixteen", nodes: (0..<16).map { _ in SceneNode(content: .image(imageURL), opacity: 0.2) })
         let audioNode = SceneNode(content: .gradient)
         let audioScene = SceneDescriptor(title: "Audio", nodes: [audioNode], bindings: [

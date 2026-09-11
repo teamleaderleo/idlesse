@@ -310,6 +310,8 @@ final class StudioLayerInspector: NSScrollView {
             views = shapeViews(node: node, value: primitive, editable: editable)
         case .particles(let emitter):
             views = emitterViews(node: node, emitter: emitter, editable: editable)
+        case .shader(let shader):
+            views = [info("Shader", value: "\(shader.source.utf8.count) chars · ×\(shader.speed)", tooltip: "Metal fragment snippet; edit the source in the scene JSON.")]
         }
         contentSection.setViews(views)
     }

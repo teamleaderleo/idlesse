@@ -16,6 +16,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var resolvedText: String?
         var node: SceneNode
         var texture: MTLTexture?
+        var shaderPipeline: MTLRenderPipelineState?
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
         var maskTexture: MTLTexture?
@@ -76,6 +77,51 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var emitter: SIMD4<Float> = .zero // lifetime, speed, size, seed
         var world: SIMD4<Float> = SIMD4(1, 1, 0, 0) // scene-to-display scale and offset
         var motion: SIMD4<Float> = .zero // wind, gravity, count, wrapped emitter time
+    }
+    /// Compact uniforms for user shader nodes. Field order matches the
+    /// ShaderU struct in the shader prelude (8-byte alignment throughout).
+    private struct ShaderUniforms {
+        var time: Float
+        var resolution: SIMD2<Float>
+        var pointer: SIMD2<Float>
+        var audio: Float
+        var opacity: Float
+    }
+    private static let shaderPrelude = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct V { float4 position [[position]]; float2 uv; float fade; float2 canvasUV; };
+    struct ShaderU { float time; float2 resolution; float2 pointer; float audio; float opacity; };
+    """
+    private static func compileShader(_ shader: SceneNode.Shader, device: MTLDevice, library: MTLLibrary) throws -> MTLRenderPipelineState {
+        let combined = shaderPrelude + "\n" + shader.source
+        let userLibrary: MTLLibrary
+        do {
+            userLibrary = try device.makeLibrary(source: combined, options: nil)
+        } catch {
+            throw SceneError.invalid("Shader failed to compile: \(error.localizedDescription)")
+        }
+        guard let fragment = userLibrary.makeFunction(name: "shaderMain") else {
+            throw SceneError.invalid("Shaders must define fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]).")
+        }
+        guard let vertex = library.makeFunction(name: "sceneQuad") else {
+            throw SceneError.invalid("Metal is unavailable on this Mac.")
+        }
+        let spec = MTLRenderPipelineDescriptor()
+        spec.vertexFunction = vertex
+        spec.fragmentFunction = fragment
+        let color = spec.colorAttachments[0]!
+        color.pixelFormat = .bgra8Unorm
+        color.isBlendingEnabled = true
+        color.sourceRGBBlendFactor = .one
+        color.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        color.sourceAlphaBlendFactor = .one
+        color.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        do {
+            return try device.makeRenderPipelineState(descriptor: spec)
+        } catch {
+            throw SceneError.invalid("Shader pipeline failed: \(error.localizedDescription)")
+        }
     }
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
@@ -207,6 +253,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                     }
                 }
             case .gradient, .group, .particles: break
+            case .shader(let shader):
+                input.shaderPipeline = try Self.compileShader(shader, device: device, library: library)
             }
             for (url, isMask) in [(node.maskAsset, true), (node.sprite, false)] {
                 guard let url else { continue }
@@ -401,11 +449,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 outputs[node.id] = current
             }
             guard let encoder = command.makeRenderCommandEncoder(descriptor: target) else { return false }
-            encoder.setRenderPipelineState(pipeline)
+            let targetWidth = Float(target.colorAttachments[0].texture?.width ?? 1)
+            let targetHeight = Float(target.colorAttachments[0].texture?.height ?? 1)
             for node in nodes where node.visible {
                 let gradient = node.kind == .gradient && outputs[node.id] == nil
+                let shaderPipeline = node.kind == .shader ? byID[node.id]?.shaderPipeline : nil
                 let texture = outputs[node.id] ?? (node.kind == .group ? groupTextures[node.id] : byID[node.id]?.texture)
-                guard gradient || node.kind == .particles || texture != nil else { continue }
+                guard gradient || node.kind == .particles || shaderPipeline != nil || texture != nil else { continue }
                 let aspect = sceneAspect
                 let mediaAspect = (node.kind == .group || outputs[node.id] != nil) ? aspect : texture.map { Float($0.width) / Float($0.height) } ?? aspect
                 let fit = node.kind == .text || node.kind == .shape
@@ -423,7 +473,20 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: outputs[node.id] == nil ? node.emitter?.count ?? 1 : 1)
+                if let shaderPipeline, let speed = node.shader?.speed {
+                    var su = ShaderUniforms(
+                        time: Float(clock.time * speed),
+                        resolution: SIMD2(targetWidth, targetHeight),
+                        pointer: SIMD2(Float(lastSignals.pointerX), Float(lastSignals.pointerY)),
+                        audio: Float(lastSignals.audio.level),
+                        opacity: Float(node.opacity))
+                    encoder.setRenderPipelineState(shaderPipeline)
+                    encoder.setFragmentBytes(&su, length: MemoryLayout<ShaderUniforms>.stride, index: 1)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+                } else {
+                    encoder.setRenderPipelineState(pipeline)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: outputs[node.id] == nil ? node.emitter?.count ?? 1 : 1)
+                }
             }
             encoder.endEncoding()
             return true
@@ -522,10 +585,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
-        if diagnostics.state == .running { updateSignals(currentSignals()) }
+        if diagnostics.state == .running { updateSignals(sampledSignals()) }
         let changed = updateVideos()
         needsFrame = needsFrame || changed
-        guard needsFrame || roots.flatMap({ $0.descendants }).contains(where: { visibleIDs.contains($0.id) && $0.hasAnimatedEffects }) || inputs.contains(where: { visibleIDs.contains($0.node.id) && ($0.node.kind == .gradient || $0.node.kind == .particles) }) else {
+        guard needsFrame || roots.flatMap({ $0.descendants }).contains(where: { visibleIDs.contains($0.id) && $0.hasAnimatedEffects }) || inputs.contains(where: { visibleIDs.contains($0.node.id) && ($0.node.kind == .gradient || $0.node.kind == .particles || $0.node.kind == .shader) }) else {
             gate.signal(); return
         }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
@@ -563,7 +626,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     func refreshSceneTime() {
         guard diagnostics.state != .disposed else { return }
-        updateSignals(currentSignals())
+        updateSignals(sampledSignals())
         needsFrame = true
         updateDrawScheduling()
         metal.draw()
@@ -601,6 +664,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
         let finished = clock.isAtEnd && !independentVideo && !reactive
         metal.isPaused = diagnostics.state != .running || !diagnostics.animated || finished
+    }
+    private var lastSignals = SceneSignals(time: 0)
+    private func sampledSignals() -> SceneSignals {
+        let signals = currentSignals()
+        lastSignals = signals
+        return signals
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
@@ -766,7 +835,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         let targetRate = rate ?? 60
         let requiresHighRefresh = (sourceScene?.usesPointer == true && clock.pointerEnabled) ||
                                   (sourceScene?.usesAudio == true && clock.audioEnabled) ||
-                                  (roots.flatMap { $0.descendants }.contains { $0.kind == .particles })
+                                  (roots.flatMap { $0.descendants }.contains { $0.kind == .particles || $0.kind == .shader })
         metal.preferredFramesPerSecond = requiresHighRefresh ? targetRate : min(targetRate, 60)
     }
     func setPaused(_ paused: Bool) {

@@ -31,7 +31,7 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape }
+    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape, shader }
     enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
     var canvas: Canvas? = nil
     var metadata: SceneMetadata? = nil
@@ -52,12 +52,12 @@ struct SceneDescriptor: Codable, Sendable {
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .shader].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool {
         if usesSignals || nodes.contains(where: { $0.animated }) { return true }
         let referenced = Set(allNodes.compactMap { $0.maskNodeID })
         return allNodes.filter { referenced.contains($0.id) }.flatMap { $0.descendants }.contains {
-            $0.hasAnimatedEffects || [.video, .gradient, .particles].contains($0.kind)
+            $0.hasAnimatedEffects || [.video, .gradient, .particles, .shader].contains($0.kind)
         }
     }
     init(title: String, assetURL: URL, kind: Kind) {
@@ -541,7 +541,31 @@ struct SceneNode: Codable, Sendable {
                   SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid shape dimensions, fill or radius.") }
         }
     }
-    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]), text(Typography), shape(Shape) }
+    /// A user Metal fragment snippet. The entry must be
+    /// `float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]])`
+    /// where `ShaderU` offers time, resolution, pointer, audio, and opacity.
+    /// `V` (position, uv, fade, canvasUV) matches the scene vertex output.
+    struct Shader: Codable, Sendable, Equatable {
+        var source: String = Shader.plasma
+        var speed: Double = 1
+        func validate() throws {
+            guard !source.isEmpty, source.utf8.count <= 32768,
+                  speed.isFinite, (0.01...10).contains(speed) else {
+                throw SceneError.invalid("Shaders need 1–32768 characters of Metal code and speed 0.01–10.")
+            }
+        }
+        static let plasma = """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 p = (in.uv - 0.5) * u.resolution / min(u.resolution.x, u.resolution.y);
+            float t = u.time;
+            float v = sin(p.x * 6.0 + t) + sin(p.y * 8.0 - t * 1.3) + sin((p.x + p.y) * 5.0 + t * 0.7);
+            v /= 3.0;
+            float3 col = 0.5 + 0.5 * cos(t * 0.4 + v * 3.14159 + float3(0.0, 2.1, 4.2));
+            return float4(col * u.opacity, u.opacity);
+        }
+        """
+    }
+    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]), text(Typography), shape(Shape), shader(Shader) }
     struct Transform: Codable, Sendable {
         let x: Double?
         let y: Double?
@@ -619,15 +643,16 @@ struct SceneNode: Codable, Sendable {
     var opacity: Double = 1
     var transform: Transform = .identity
     var kind: SceneDescriptor.Kind {
-        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles; case .text: return .text; case .shape: return .shape }
+        switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles; case .text: return .text; case .shape: return .shape; case .shader: return .shader }
     }
     var typography: Typography? { if case .text(let value) = content { return value }; return nil }
     var shape: Shape? { if case .shape(let value) = content { return value }; return nil }
     var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
+    var shader: Shader? { if case .shader(let shader) = content { return shader }; return nil }
     var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
     var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
     var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
-    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles].contains(kind))) }
+    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles, .shader].contains(kind))) }
     func duplicated() -> SceneNode {
         let identities = Dictionary(uniqueKeysWithValues: descendants.map { ($0.id, UUID()) })
         func copy(_ node: SceneNode) -> SceneNode {
@@ -641,7 +666,7 @@ struct SceneNode: Codable, Sendable {
         return copy(self)
     }
     var assetURL: URL? {
-        switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles, .text, .shape: return nil }
+        switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles, .text, .shape, .shader: return nil }
     }
 }
 
@@ -1151,6 +1176,7 @@ enum SceneBudget {
     static let maxNodes = 16
     static let maxVideos = 2
     static let maxGradients = 4
+    static let maxShaders = 4
     static let decodedImagePixels = 32_000_000
     static func validate(_ roots: [SceneNode]) throws {
         func walk(_ nodes: [SceneNode], depth: Int) throws -> [SceneNode] {
@@ -1160,6 +1186,7 @@ enum SceneBudget {
                 try node.emitter?.validate()
                 try node.typography?.validate()
                 try node.shape?.validate()
+                try node.shader?.validate()
                 guard node.style.effects.count <= 8, node.style.effects.allSatisfy({ $0.amount.isFinite && $0.range.contains($0.amount) }) else {
                     throw SceneError.invalid("Use at most eight effects per layer, with amounts inside each effect's range.")
                 }
@@ -1203,6 +1230,7 @@ enum SceneBudget {
         guard (1...maxNodes).contains(nodes.count) else { throw SceneError.invalid("A scene supports 1–16 layers.") }
         guard nodes.filter({ $0.kind == .video }).count <= maxVideos else { throw SceneError.invalid("A scene supports at most two video layers, including hidden layers.") }
         guard nodes.filter({ $0.kind == .gradient }).count <= maxGradients else { throw SceneError.invalid("A scene supports at most four gradient layers, including hidden layers.") }
+        guard nodes.filter({ $0.kind == .shader }).count <= maxShaders else { throw SceneError.invalid("A scene supports at most four shader layers, including hidden layers.") }
     }
     /// Two in-flight frames share a fixed byte allowance. Larger group surfaces
     /// are reduced uniformly; images/video assets themselves are never rewritten.

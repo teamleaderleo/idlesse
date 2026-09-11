@@ -1117,7 +1117,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func createMenu() {
         let menu = NSMenu()
         for (title, action) in [("Gradient", #selector(addGradient)), ("Text", #selector(addText)),
-            ("Shape", #selector(addShape)),
+            ("Shape", #selector(addShape)), ("Shader", #selector(addShader)),
             ("New Control…", #selector(addControl)), ("Local Presets…", #selector(presetBrowser)), ("My Presets…", #selector(globalPresets)), ("Scene Details…", #selector(editMetadata))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self; menu.addItem(item)
@@ -1381,6 +1381,13 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func addGradient() {
         guard scene.allNodes.count < SceneBudget.maxNodes else { return }
         _ = editor.add(SceneNode(name: "Gradient \(scene.allNodes.count + 1)", content: .gradient, transform: .init(x: 0, y: 0, scale: 0.6, rotation: 0)))
+    }
+    @objc private func addShader() {
+        guard scene.allNodes.count < SceneBudget.maxNodes,
+              scene.allNodes.filter({ $0.kind == .shader }).count < SceneBudget.maxShaders else { return }
+        if editor.add(SceneNode(name: "Waves", content: .shader(.init()), transform: .init(x: 0, y: 0, scale: 1, rotation: 0))) {
+            layerInspector.revealContent()
+        }
     }
     @objc private func removeNode() { editor.remove() }
     @objc private func reorderNode() { editor.reorderAdjacent() }
