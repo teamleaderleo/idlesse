@@ -142,15 +142,24 @@ compile_app_full() {
     -o "$APP/Contents/MacOS/Idlesse"
 }
 
-# NOTE: per-file object caching was tried here (output-file-map + -incremental)
-# and reverted: this toolchain's driver never persists the build record for an
-# emit-executable link, so every build re-ran the full frontend anyway while the
-# cache only added disk weight and failure modes. Full debug builds run ~20s on
-# Apple Silicon. The structural fix is a SwiftPM/Xcode project with real
-# incremental state (plus scene content already hot-reloads via SceneWatcher,
-# so content iteration never needs a rebuild). Until then: NO_CACHE is gone,
-# builds are always full and honest about it.
-compile_app_incremental() { return 1; }
+# NOTE: per-file object caching via raw swiftc was tried here (output-file-map
+# + -incremental) and reverted: this toolchain's driver never persists the
+# build record for an emit-executable link, so every build re-ran the full
+# frontend anyway. Debug builds now go through SwiftPM (Package.swift), which
+# owns real incremental state: no-change rebuilds take ~0.3s, one-file touches
+# ~4s. Release keeps the battle-tested whole-module swiftc invocation.
+# Scene content already hot-reloads via SceneWatcher, so content iteration
+# never needs a rebuild at all.
+compile_app_incremental() {
+  local out
+  out="$(swift build --product IdlesseApp 2>&1)" || { printf '%s\n' "$out" | tail -n 5; return 1; }
+  grep -q "Build of product 'IdlesseApp' complete" <<< "$out" || { printf '%s\n' "$out" | tail -n 5; return 1; }
+  local built
+  built="$(swift build --product IdlesseApp --show-bin-path 2>/dev/null)/IdlesseApp"
+  [[ -x "$built" ]] || return 1
+  cp "$built" "$APP/Contents/MacOS/Idlesse"
+  return 0
+}
 
 build_app() {
   local arch="$(uname -m)"
@@ -173,11 +182,21 @@ build_app() {
   chmod +x "$APP/Contents/MacOS/Idlesse"
   local extension="$APP/Contents/PlugIns/IdlesseDesktopMenu.appex"
   mkdir -p "$extension/Contents/MacOS"
-  xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
-    -swift-version 5 "${SWIFT_OPT[@]}" -module-name IdlesseDesktopMenu \
-    -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
-    "$ROOT/Sources/DesktopMenu/FinderSync.swift" -framework AppKit -framework FinderSync \
-    -o "$extension/Contents/MacOS/IdlesseDesktopMenu"
+  # The single-file appex compiles in ~2s; cache it by content hash so warm
+  # builds skip it. Evicted by ./build.sh clean (lives outside $BUILD on purpose).
+  local appex_cache="$ROOT/.build/appex-cache"
+  mkdir -p "$appex_cache"
+  local appex_hash
+  appex_hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS"; cat "$ROOT/Sources/DesktopMenu/FinderSync.swift") | shasum -a 256 | cut -d' ' -f1)"
+  if [[ ! -f "$appex_cache/$appex_hash" ]]; then
+    xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+      -swift-version 5 "${SWIFT_OPT[@]}" -module-name IdlesseDesktopMenu \
+      -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
+      "$ROOT/Sources/DesktopMenu/FinderSync.swift" -framework AppKit -framework FinderSync \
+      -o "$appex_cache/$appex_hash"
+    ls -t "$appex_cache"/* 2>/dev/null | tail -n +6 | xargs rm -f
+  fi
+  cp "$appex_cache/$appex_hash" "$extension/Contents/MacOS/IdlesseDesktopMenu"
   cp "$ROOT/Sources/DesktopMenu/Info.plist" "$extension/Contents/Info.plist"
   codesign --force --sign - --entitlements "$ROOT/Sources/DesktopMenu/Entitlements.plist" "$extension" >/dev/null
   codesign --force --sign - "$APP" >/dev/null
@@ -263,7 +282,7 @@ case "${1:-all}" in
     log "Cleared Tahoe diagnostic log."
     ;;
   clean)
-    rm -rf "$BUILD"
+    rm -rf "$BUILD" .build
     log "Cleaned."
     ;;
   all|*)
