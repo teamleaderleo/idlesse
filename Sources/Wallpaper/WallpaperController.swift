@@ -461,9 +461,27 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     var onManualSelection: (() -> Void)?
-    /// Fires after any successful (non-reload) selection with the adopted URL.
+    /// Fires after any successful (non-reload, non-transient) selection with the adopted URL.
     var onSelectionCommitted: ((URL) -> Void)?
-    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil) {
+
+    // MARK: - Hover peek
+
+    private var prePeekURL: URL?
+    /// A peek is a transient preview: no resume-bookmark save, no day-scene
+    /// adoption, no rotation interference. The previous scene is restored on exit.
+    var isPeeking: Bool { prePeekURL != nil }
+    func peek(_ url: URL) {
+        if prePeekURL == nil { prePeekURL = selectedURL }
+        guard url != selectedURL else { return }
+        select(url, automatic: true, restoringPause: pausedByUser, transient: true)
+    }
+    func endPeek(reverting: Bool = true) {
+        guard let back = prePeekURL else { return }
+        prePeekURL = nil
+        guard reverting, back != selectedURL else { return }
+        select(back, automatic: true, restoringPause: pausedByUser, transient: true)
+    }
+    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil, transient: Bool = false) {
         if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
         generation += 1
@@ -551,9 +569,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.ensureStatusItem()
                 self.updateMenu()
                 self.syncSystemBackdrop(scene: playable, sourceURL: url, request: request)
-                self.saveSelection()
+                if !transient { self.saveSelection() }
                 self.logState("select-done")
-                if !reloading { self.onSelectionCommitted?(url) }
+                if !reloading && !transient { self.onSelectionCommitted?(url) }
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }

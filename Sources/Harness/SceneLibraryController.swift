@@ -137,6 +137,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
+    /// Hover-peek: transient desktop preview while hovering, revert on exit.
+    var onPeek: ((URL) -> Void)?
+    var onEndPeek: ((Bool) -> Void)?
+    private var hoverMonitor: Any?
+    private var lastPeekID: String?
 
     init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
         self.onUse = onUse
@@ -295,7 +300,44 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        startHoverMonitor()
         if selected != nil { preview() }
+    }
+    private func startHoverMonitor() {
+        guard hoverMonitor == nil else { return }
+        hoverMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            self?.handleHover(event)
+            return event
+        }
+    }
+    private func stopHoverMonitor() {
+        if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
+        hoverMonitor = nil
+        lastPeekID = nil
+    }
+    private func handleHover(_ event: NSEvent) {
+        guard let window, window.isKeyWindow, onPeek != nil else {
+            if lastPeekID != nil { lastPeekID = nil; onEndPeek?(true) }
+            return
+        }
+        var hovered: Item?
+        if !gridScroll.isHidden {
+            let point = gridView.convert(event.locationInWindow, from: nil)
+            if gridView.bounds.contains(point) {
+                hovered = gridView.item(at: point).flatMap { card in items.first { $0.id == card.id } }
+            }
+        } else if !scroll.isHidden {
+            let row = table.row(at: table.convert(event.locationInWindow, from: nil))
+            if row >= 0, items.indices.contains(row) { hovered = items[row] }
+        }
+        guard hovered?.id != lastPeekID else { return }
+        lastPeekID = hovered?.id
+        if let hovered {
+            guard let opened = try? open(hovered) else { return }
+            onPeek?(opened.url)
+        } else {
+            onEndPeek?(true)
+        }
     }
     /// Presentation only: preserve catalog titles and filenames for round trips.
     static func displayTitle(_ title: String) -> String {
@@ -321,6 +363,39 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
     }
     @objc private func filterChanged() { reload() }
+    /// Forgiving subsequence match: every query character must appear in order,
+    /// with bonuses for prefixes, word starts, and contiguity. Lower is better;
+    /// nil means no match. Empty queries match everything at zero cost.
+    static func fuzzyScore(query: String, in title: String) -> Double? {
+        let q = Array(query.lowercased())
+        guard !q.isEmpty else { return 0 }
+        let t = Array(title.lowercased())
+        if title.localizedCaseInsensitiveContains(query) {
+            let contiguous = title.lowercased().contains(query.lowercased())
+            let prefix = t.starts(with: q) ? 0.0 : 0.5
+            return prefix + (contiguous ? 1.0 : 2.0) + Double(t.count) / 1000
+        }
+        var ti = 0
+        var score = 4.0
+        var lastMatch = -2
+        for qc in q {
+            var found = false
+            while ti < t.count {
+                let c = t[ti]
+                ti += 1
+                if c == qc {
+                    if ti - 1 == 0 || t[ti - 2] == " " || t[ti - 2] == "-" { score -= 0.3 }
+                    if ti - 1 == lastMatch + 1 { score -= 0.2 }
+                    lastMatch = ti - 1
+                    found = true
+                    break
+                }
+                score += 0.05
+            }
+            if !found { return nil }
+        }
+        return score + Double(t.count) / 1000
+    }
     @objc private func clearSearch() {
         search.stringValue = ""
         reload()
@@ -370,7 +445,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         } else { filter.selectItem(at: max(0, previousFilter)) }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
         items = allItems().filter { item in
-            let matches = search.stringValue.isEmpty || item.title.localizedCaseInsensitiveContains(search.stringValue)
+            let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
             if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
             switch filter.indexOfSelectedItem {
             case 1: return matches && item.builtin != nil
@@ -390,6 +465,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }.sorted {
             if let activeCollection {
                 return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
+            }
+            if !search.stringValue.isEmpty {
+                let a = Self.fuzzyScore(query: search.stringValue, in: $0.title) ?? .infinity
+                let b = Self.fuzzyScore(query: search.stringValue, in: $1.title) ?? .infinity
+                if a != b { return a < b }
             }
             if sort.indexOfSelectedItem == 1 {
                 let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
@@ -1075,6 +1155,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }
+        // A real choice replaces any hover-peek instead of reverting through it.
+        lastPeekID = nil
+        onEndPeek?(false)
         do {
             let opened = try open(selected)
             try store.used(selected.id)
@@ -1093,8 +1176,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         conversionTask?.cancel()
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
+        stopHoverMonitor()
+        onEndPeek?(true)
     }
-    deinit { conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate() }
+    deinit {
+        if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
+        conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate()
+    }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
@@ -1193,6 +1281,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.clearSearch()
         precondition(controller.search.stringValue.isEmpty && controller.items.count == 8 && controller.clearSearchButton.isHidden,
             "Clearing the search must restore browsing")
+        precondition(Self.fuzzyScore(query: "", in: "Anything") == 0)
+        precondition(Self.fuzzyScore(query: "undertow", in: "Undertow") != nil)
+        precondition(Self.fuzzyScore(query: "xqz", in: "Undertow") == nil)
+        precondition(Self.fuzzyScore(query: "aur", in: "Aurora")! < Self.fuzzyScore(query: "aur", in: "Breathing Aurora")!,
+            "Prefix matches must outrank scattered ones")
         try OnboardingController.smokeTest(builtins: controller.items.compactMap {
             guard let url = $0.builtin else { return nil }
             return (title: $0.title, url: url)

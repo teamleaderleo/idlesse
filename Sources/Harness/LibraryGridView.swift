@@ -27,6 +27,14 @@ final class LibraryGridView: NSView {
         }
     }
 
+    /// Hit-tests a point in grid coordinates for hover-peek.
+    func item(at point: NSPoint) -> LibraryItem? {
+        for card in cardViews where card.frame.contains(point) {
+            return card.item
+        }
+        return nil
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = abs(newSize.width - frame.width) > 1
         super.setFrameSize(newSize)

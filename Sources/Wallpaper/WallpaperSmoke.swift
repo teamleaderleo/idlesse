@@ -657,6 +657,13 @@ enum WallpaperSmoke {
         controller.togglePause()
         precondition(surface.diagnostics.state == .paused)
         controller.togglePause()
+        controller.endPeek()
+        precondition(!controller.isPeeking, "Ending no peek must be a no-op")
+        controller.peek(videoURL)
+        precondition(controller.isPeeking && controller.selectedURL == videoURL,
+            "Peeking the current scene must hold without reloading")
+        controller.endPeek()
+        precondition(!controller.isPeeking && controller.selectedURL == videoURL)
         controller.stop()
         precondition(controller.surfaces.isEmpty && !controller.isRunning)
         precondition(surface.diagnostics.activeResources == 0, "Stop must release the player, including externally retained surfaces")

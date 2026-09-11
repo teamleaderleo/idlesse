@@ -16,15 +16,20 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var library: SceneLibraryController?
     private func prepareLibrary() throws {
         if library == nil {
-            library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
-                onEdit: { [weak self] url, asCopy in
-                    guard let self else { return }
-                    self.scenePreview.onClose = { [weak self] in
-                        self?.library?.releaseActiveEditAccess()
-                        self?.showLibrary()
-                    }
-                    self.scenePreview.openLibraryScene(url, asCopy: asCopy)
-                })
+        library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
+            onEdit: { [weak self] url, asCopy in
+                guard let self else { return }
+                self.scenePreview.onClose = { [weak self] in
+                    self?.library?.releaseActiveEditAccess()
+                    self?.showLibrary()
+                }
+                self.scenePreview.openLibraryScene(url, asCopy: asCopy)
+            })
+        library?.onPeek = { [weak self] url in self?.wallpaper.peek(url) }
+        library?.onEndPeek = { [weak self] reverting in
+            self?.wallpaper.endPeek(reverting: reverting)
+            self?.modes.refresh()
+        }
         }
         wallpaper.onManualSelection = { [weak self] in
             self?.library?.stopRotation()
