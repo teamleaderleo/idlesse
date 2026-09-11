@@ -103,6 +103,7 @@ build_app() {
     "${SWIFT_OPT[@]}" \
     -module-name IdlesseApp \
     -framework AVFoundation \
+    -framework ApplicationServices \
     -framework MetalKit \
     -framework Metal \
     -framework IOKit \

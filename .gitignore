@@ -2,3 +2,10 @@ build/
 .DS_Store
 DerivedData/
 *.xcuserstate
+# Local-only operator notes; never commit per-scene ingest records.
+AGENTS.md
+docs/media-ingest-flow.md
+scripts/media-batch/batch.json
+scripts/media-batch/plans/
+scripts/azur-lane/wallpapers.json
+scripts/azur-lane/candidates.json
