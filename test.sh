@@ -87,13 +87,26 @@ if needs_build "build/tests/comfort" "${COMFORT_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# 6. Library
+# 6. Library storage / Source semantics
 LIBRARY_SRCS=(
   Sources/Harness/SceneLibraryStore.swift
   Tests/LibraryTests.swift
 )
 if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
   xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -o build/tests/library &
+  pids+=($!)
+fi
+
+# 7. Library grid virtualization. Compile the production grid against a tiny
+# controller model shim so this stays focused on AppKit cell/request behavior.
+LIBRARY_GRID_SRCS=(
+  Sources/Harness/SceneLibraryStore.swift
+  Sources/Harness/LibraryGridView.swift
+  Tests/LibraryGridControllerStub.swift
+  Tests/LibraryGridTests.swift
+)
+if needs_build "build/tests/library-grid" "${LIBRARY_GRID_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_GRID_SRCS[@]}" -framework AppKit -o build/tests/library-grid &
   pids+=($!)
 fi
 
@@ -109,3 +122,4 @@ build/tests/recovery
 build/tests/audio
 build/tests/comfort
 build/tests/library
+build/tests/library-grid
