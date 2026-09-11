@@ -145,6 +145,103 @@ private final class VideoWallpaperView: NSView {
     override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
 }
 
+/// Native animated stills (GIF/APNG/animated WebP): frames stay on disk and are
+/// decoded one at a time on frame ticks, so a loop costs one frame of RAM.
+/// Anything single-frame (or undecodable) throws and the caller falls back to
+/// StaticImageRenderer. Metal scenes show the first frame; animation lives in
+/// the Standard compositor.
+final class AnimatedImageRenderer: SceneRenderer {
+    let view: NSView
+    private let canvas = ImageCanvasView()
+    private let source: CGImageSource
+    private let count: Int
+    private let delays: [Double]
+    private var index = 0
+    private var loops = 0
+    private var frames = 0
+    private var timer: Timer?
+    private var state: RendererDiagnostics.State = .ready
+
+    var diagnostics: RendererDiagnostics {
+        RendererDiagnostics(state: state, animated: true, activeResources: 1,
+            loopCount: loops, frameCount: frames)
+    }
+
+    init(url: URL, bounds: NSRect) throws {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) > 1 else {
+            throw SceneError.invalid("Not an animated image.")
+        }
+        let count = CGImageSourceGetCount(source)
+        guard count <= 600 else { throw SceneError.invalid("That animation has too many frames.") }
+        var delays: [Double] = []
+        for i in 0..<count {
+            delays.append(Self.delay(source: source, index: i))
+        }
+        self.source = source
+        self.count = count
+        self.delays = delays
+        view = canvas
+        canvas.frame = bounds
+        canvas.scalingMode = .fill
+        canvas.backdropColor = .clear
+        showFrame(0)
+    }
+
+    private static func delay(source: CGImageSource, index: Int) -> Double {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else { return 0.1 }
+        if let gif = props[kCGImagePropertyGIFDictionary] as? [CFString: Any] {
+            let delay = (gif[kCGImagePropertyGIFUnclampedDelayTime] as? Double)
+                ?? (gif[kCGImagePropertyGIFDelayTime] as? Double) ?? 0.1
+            return min(10, max(0.02, delay))
+        }
+        if let png = props[kCGImagePropertyPNGDictionary] as? [CFString: Any],
+           let delay = png["DelayTime" as CFString] as? Double {
+            return min(10, max(0.02, delay))
+        }
+        if let webp = props[kCGImagePropertyWebPDictionary] as? [CFString: Any],
+           let duration = (webp["Duration" as CFString] as? Double).map({ $0 / 1000 }) {
+            return min(10, max(0.02, duration))
+        }
+        return 0.1
+    }
+
+    private func showFrame(_ i: Int) {
+        guard let cg = CGImageSourceCreateImageAtIndex(source, i, nil) else { return }
+        canvas.currentImage = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        frames += 1
+    }
+
+    private func arm() {
+        timer?.invalidate()
+        guard state == .running else { return }
+        let timer = Timer(timeInterval: delays[index], repeats: false) { [weak self] _ in
+            guard let self, self.state == .running else { return }
+            self.index += 1
+            if self.index >= self.count { self.index = 0; self.loops += 1 }
+            self.showFrame(self.index)
+            self.arm()
+        }
+        timer.tolerance = 0.02
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func setPaused(_ paused: Bool) {
+        guard state != .disposed else { return }
+        state = paused ? .paused : .running
+        if paused { timer?.invalidate(); timer = nil } else { arm() }
+    }
+    func setPreferredFrameRate(_ rate: Int?) {}
+    func releaseResources() {
+        state = .disposed
+        timer?.invalidate(); timer = nil
+        canvas.currentImage = nil
+    }
+    deinit { releaseResources() }
+}
+
+/// Static single-frame fallback; see AnimatedImageRenderer above for loops.
 final class StaticImageRenderer: SceneRenderer {
     let view: NSView
     private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 1)
@@ -470,7 +567,11 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
+                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds) {
+                        child = animated
+                    } else {
+                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
+                    }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, onError: onError)
                 case .particles, .text, .shape: throw SceneError.invalid("This creative layer requires Metal.")

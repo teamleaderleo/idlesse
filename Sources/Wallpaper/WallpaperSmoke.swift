@@ -98,6 +98,7 @@ enum WallpaperSmoke {
         try image.representation(using: .png, properties: [:])!.write(to: imageURL)
         try compositionChecks(imageURL: imageURL)
         try WallpaperController.smokeTransitions(imageURL: imageURL)
+        try animatedImageChecks(folder: folder)
         let controller = WallpaperController()
         controller.presentsWindows = false
         var errors: [String] = []
@@ -685,6 +686,49 @@ enum WallpaperSmoke {
         controller.stop()
         print("Wallpaper checks passed: async saver cancellation, image, two-layer scene package, hot reload, GPU gradient, isolated/nested groups, masks/color, automatic Metal selection and bounded target allocation, mixed compositor, grouped video live edits, Metal video decode/loop, unsupported version, video loop, click-through, sleep/session overlap, pause, stop, cancellation")
     }
+    private static func animatedImageChecks(folder: URL) throws {
+        // Two-frame GIF: red then blue, 0.05 s per frame.
+        let gifURL = folder.appendingPathComponent("anim.gif")
+        guard let dest = CGImageDestinationCreateWithURL(gifURL as CFURL, "com.compuserve.gif" as CFString, 2, nil) else {
+            throw SceneError.invalid("Could not stage the animated fixture.")
+        }
+        for rgb in [(255, 0, 0), (0, 0, 255)] {
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 16, pixelsHigh: 16,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            for y in 0..<16 {
+                for x in 0..<16 {
+                    let offset = y * rep.bytesPerRow + x * 4
+                    rep.bitmapData![offset] = UInt8(rgb.2)
+                    rep.bitmapData![offset + 1] = UInt8(rgb.1)
+                    rep.bitmapData![offset + 2] = UInt8(rgb.0)
+                    rep.bitmapData![offset + 3] = 255
+                }
+            }
+            let frameProps = [kCGImagePropertyGIFDictionary as String: [kCGImagePropertyGIFDelayTime as String: 0.05]] as CFDictionary
+            CGImageDestinationAddImage(dest, rep.cgImage!, frameProps)
+        }
+        CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary as String: [kCGImagePropertyGIFLoopCount as String: 0]] as CFDictionary)
+        precondition(CGImageDestinationFinalize(dest))
+        let still = try AnimatedImageRenderer(url: gifURL, bounds: NSRect(x: 0, y: 0, width: 64, height: 64))
+        defer { still.releaseResources() }
+        precondition(still.diagnostics.animated)
+        still.setPaused(false)
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while still.diagnostics.loopCount < 1 && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+        }
+        precondition(still.diagnostics.loopCount >= 1, "Animated stills must advance frames on their delays")
+        still.setPaused(true)
+        precondition(still.diagnostics.state == .paused)
+        // Single-frame files stay on the static path.
+        do {
+            _ = try AnimatedImageRenderer(url: folder.appendingPathComponent("test.png"), bounds: .zero)
+            preconditionFailure("Still images must fall back to the static renderer")
+        } catch { }
+        print("Animated image checks passed: GIF loops natively without conversion")
+    }
+
     private static func compositionChecks(imageURL: URL) throws {
         let clock = SceneClock()
         func pixels(_ nodes: [SceneNode]) throws -> [UInt8] {
