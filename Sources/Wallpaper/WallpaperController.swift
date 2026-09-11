@@ -34,6 +34,7 @@ final class WallpaperSurface {
     var presentedFrameCount: Int? { renderer.presentedFrameCount }
     var gpuTotals: (seconds: Double, frames: Int)? { renderer.gpuTotals }
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
+    var menuStripWindowNumber: Int? { menuStrip?.window.windowNumber }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, sharedHub: SharedVideoHub? = nil, onError: @escaping (String) -> Void) throws {
@@ -102,7 +103,16 @@ final class WallpaperSurface {
     }
 
     private(set) var pausedState = false
-    func setPaused(_ paused: Bool) { pausedState = paused; renderer.setPaused(paused) }
+    func setPaused(_ paused: Bool) { pausedState = paused; renderer.setPaused(paused || covered) }
+    /// Set by the coverage monitor: a fully covered display rests its own
+    /// renderer without affecting other displays or the pause state.
+    private var covered = false
+    var isCovered: Bool { covered }
+    func setCovered(_ value: Bool) {
+        guard covered != value else { return }
+        covered = value
+        renderer.setPaused(pausedState || covered)
+    }
     func setMuted(_ muted: Bool) { renderer.setMuted(muted) }
 
     /// Native Finder menu on right-click: our window only covers Finder's desktop,
@@ -294,6 +304,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     /// One-line state trace for diagnosing pause/suspend transitions. Grep logs for "Idlesse-state".
+    private static func appendLine(_ line: String) {
+        NSLog("%@", line)
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        let path = "/tmp/idlesse-state.log"
+        if FileManager.default.fileExists(atPath: path),
+           let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+            try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
     private func logState(_ site: String) {
         let b = { (v: Bool) in v ? 1 : 0 }
         let line = String(format: "Idlesse-state %@: running=%d loading=%d suspended=%d shouldPause=%d (byUser=%d bedtime=%d lowPower=%d) surfaces=%d scene=%@",
@@ -312,7 +333,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    var diagnosticSummary: String {        let nodes = playable?.allNodes ?? []
+    var diagnosticSummary: String {
+        let nodes = playable?.allNodes ?? []
         return """
         Wallpaper active: \(isRunning)
         Loading: \(isLoading)
@@ -373,6 +395,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let title = playable?.title ?? selectedURL?.deletingPathExtension().lastPathComponent ?? "No wallpaper selected"
         if isLoading { return "Loading… · " + title }
         guard isRunning else { return title }
+        if !suspended, !shouldPause, !surfaces.isEmpty, surfaces.allSatisfy(\.isCovered) {
+            return "Covered — resting · " + title
+        }
         let state = suspended ? "Suspended" : (shouldPause ? "Paused" : "Playing")
         return state + " · " + title
     }
@@ -413,6 +438,46 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             controller.screenRefresh = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
         }
+        let coverage = Timer(timeInterval: 3, repeats: true) { [weak self] _ in self?.pollCoverage() }
+        coverage.tolerance = 1
+        RunLoop.main.add(coverage, forMode: .common)
+        coverageTimer = coverage
+    }
+
+    private var coverageTimer: Timer?
+    private let coverageMonitor = CoverageMonitor()
+    /// Rest fully covered displays to save GPU. Off by default until the
+    /// estimate proves itself; every transition is state-logged.
+    var coveragePauseEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "coveragePauseEnabled") == nil ? false : UserDefaults.standard.bool(forKey: "coveragePauseEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "coveragePauseEnabled")
+            if !newValue { surfaces.forEach { $0.setCovered(false) } }
+            pollCoverage()
+            updateMenu()
+        }
+    }
+    private func pollCoverage() {
+        guard presentsWindows, coveragePauseEnabled, !surfaces.isEmpty, !suspended else { return }
+        var own = Set<CGWindowID>()
+        for surface in surfaces {
+            own.insert(CGWindowID(surface.window.windowNumber))
+            if let strip = surface.menuStripWindowNumber { own.insert(CGWindowID(strip)) }
+        }
+        var changed = false
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        for surface in surfaces {
+            let fraction = coverageMonitor.coverage(of: surface.window.frame,
+                above: surface.window.level.rawValue, excluding: own, ownPID: pid)
+            let covered = fraction >= coverageMonitor.threshold
+            if covered != surface.isCovered {
+                surface.setCovered(covered)
+                Self.appendLine(String(format: "Idlesse-coverage frame=%@ fraction=%.2f covered=%d",
+                    NSStringFromRect(surface.window.frame), fraction, covered ? 1 : 0))
+                changed = true
+            }
+        }
+        if changed { logState("coverage"); updateMenu() }
     }
 
     private func observe(_ center: NotificationCenter, _ name: Notification.Name,
@@ -1224,6 +1289,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     deinit {
+        coverageTimer?.invalidate()
         backdropTask?.cancel()
         loadTask?.cancel()
         screenRefresh?.cancel()

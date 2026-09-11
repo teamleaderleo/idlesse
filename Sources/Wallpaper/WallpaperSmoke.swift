@@ -99,6 +99,7 @@ enum WallpaperSmoke {
         try compositionChecks(imageURL: imageURL)
         try WallpaperController.smokeTransitions(imageURL: imageURL)
         try animatedImageChecks(folder: folder)
+        coverageChecks()
         let controller = WallpaperController()
         controller.presentsWindows = false
         var errors: [String] = []
@@ -748,6 +749,15 @@ enum WallpaperSmoke {
             preconditionFailure("Still images must fall back to the static renderer")
         } catch { }
         print("Animated image checks passed: GIF loops natively without conversion")
+    }
+
+    private static func coverageChecks() {
+        let rect = NSRect(x: 0, y: 0, width: 120, height: 120)
+        precondition(CoverageMonitor.coveredFraction(of: rect, by: []) == 0)
+        precondition(CoverageMonitor.coveredFraction(of: rect, by: [rect]) == 1)
+        let half = CoverageMonitor.coveredFraction(of: rect, by: [NSRect(x: 0, y: 0, width: 60, height: 120)])
+        precondition(abs(half - 0.5) < 0.1, "Coverage sampling must approximate half cover")
+        print("Coverage checks passed: window-list sampling without occlusion state")
     }
 
     private static func compositionChecks(imageURL: URL) throws {
