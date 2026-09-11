@@ -30,6 +30,30 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
         library?.startSchedules()
     }
+    private var onboarding: OnboardingController?
+    private func showOnboarding() {
+        let scenes = SceneLibraryController.builtinScenes()
+        guard !scenes.isEmpty else { showLibrary(); return }
+        let controller = OnboardingController(
+            builtins: scenes.map { (title: $0.title, url: $0.url) },
+            onPick: { [weak self] url in self?.wallpaper.select(url) },
+            onMirror: { [weak self] in self?.mirrorActiveWallpaper() ?? "No wallpaper is playing yet." },
+            onOpenSaver: { [weak self] in self?.showSaverSettings(asSheet: false) },
+            onDone: { [weak self] in self?.onboarding = nil; self?.showLibrary() })
+        onboarding = controller
+        controller.show()
+    }
+    private func mirrorActiveWallpaper() -> String {
+        guard let url = wallpaper.selectedURL else { return "Pick a wallpaper first, then mirror it." }
+        do {
+            let targetURL = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+            try IdlessePreferences.shared.saveFolder(targetURL)
+            NotificationCenter.default.post(name: IdlessePreferences.settingsChangedNotification, object: nil)
+            return "Screensaver now mirrors “\(url.lastPathComponent)”."
+        } catch {
+            return "Could not update the screensaver: \(error.localizedDescription)"
+        }
+    }
     @objc private func showLibrary() {
         do {
             try prepareLibrary()
@@ -153,7 +177,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.minSize = NSSize(width: 900, height: 360)
 
         wallpaper.restoreSelection()
-        showLibrary()
+        if OnboardingController.needed && pendingSceneURL == nil {
+            showOnboarding()
+        } else {
+            showLibrary()
+        }
         NSApp.activate(ignoringOtherApps: true)
 
         do {

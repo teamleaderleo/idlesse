@@ -35,6 +35,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
     private let apply = NSButton(title: "Set Wallpaper", target: nil, action: nil)
     private let edit = NSButton(title: "Edit in Studio", target: nil, action: nil)
+    private let clearSearchButton = NSButton(title: "Clear search", target: nil, action: nil)
     private let more = NSPopUpButton(frame: .zero, pullsDown: true)
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
     private enum PosterRevision: Equatable, Sendable {
@@ -219,6 +220,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.target = self; favorite.action = #selector(toggleFavorite)
         apply.target = self; apply.action = #selector(useScene)
         edit.target = self; edit.action = #selector(editScene)
+        clearSearchButton.target = self; clearSearchButton.action = #selector(clearSearch)
+        clearSearchButton.bezelStyle = .rounded
+        clearSearchButton.isHidden = true
         remove.target = self; remove.action = #selector(removeScene)
         more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library"])
         more.menu?.autoenablesItems = false
@@ -226,7 +230,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
         let heading = NSStackView(views: [titleLabel, NSView(), favorite])
         heading.orientation = .horizontal
-        let primary = NSStackView(views: [apply, edit, more])
+        let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
         primary.spacing = 10
         for button in [add, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
@@ -299,16 +303,52 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return variants[name] ?? name.replacingOccurrences(of: "-", with: " ")
     }
     private func allItems() -> [Item] {
-        let names = [("DeskClock", "Desk Clock"), ("AfterHours", "After Hours"), ("Undertow", "Undertow"), ("Fireflies", "Fireflies"), ("Ripple", "Ripple"),
-                     ("AudioAurora", "Audio Aurora"), ("Gradient", "Aurora"), ("BreathingAurora", "Breathing Aurora")]
-        let builtins = names.compactMap { name, title -> Item? in
+        Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil) }
+            + store.catalog.entries.map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
+    }
+    /// Shared with first-run onboarding so both list the same starters.
+    static func builtinScenes() -> [(name: String, title: String, url: URL)] {
+        let names = ["DeskClock", "AfterHours", "Undertow", "Fireflies", "Ripple", "AudioAurora", "Gradient", "BreathingAurora"]
+        let titles = ["Desk Clock", "After Hours", "Undertow", "Fireflies", "Ripple", "Audio Aurora", "Aurora", "Breathing Aurora"]
+        return zip(names, titles).compactMap { name, title in
             guard let url = Bundle.main.resourceURL?.appendingPathComponent("Scenes/\(name).idlesse"),
                   FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return Item(id: "builtin.\(name)", title: title, builtin: url, entry: nil)
+            return (name, title, url)
         }
-        return builtins + store.catalog.entries.map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
     }
     @objc private func filterChanged() { reload() }
+    @objc private func clearSearch() {
+        search.stringValue = ""
+        reload()
+    }
+    /// Designed empty states instead of a blank panel. Builtins mean the full
+    /// list is never empty; these cover search misses and empty collections.
+    private func updateEmptyState(activeCollection: SceneLibraryStore.Collection?) {
+        guard items.isEmpty else {
+            clearSearchButton.isHidden = true
+            if selected == nil {
+                titleLabel.stringValue = "Choose a wallpaper"
+                detail.stringValue = "Select a scene to preview it here."
+            }
+            return
+        }
+        poster.image = nil
+        apply.isEnabled = false
+        edit.isEnabled = false
+        if !search.stringValue.isEmpty {
+            titleLabel.stringValue = "No matches"
+            detail.stringValue = "Nothing matches “\(search.stringValue)”. Clear the search to browse everything, or Import… to add more."
+            clearSearchButton.isHidden = false
+        } else if let collection = activeCollection {
+            titleLabel.stringValue = collection.name
+            detail.stringValue = "This collection is empty. Use Collections… to add scenes, or play order and shuffle once it has some."
+            clearSearchButton.isHidden = true
+        } else {
+            titleLabel.stringValue = "No scenes"
+            detail.stringValue = "Import… to add your first wallpaper."
+            clearSearchButton.isHidden = true
+        }
+    }
     func controlTextDidChange(_ obj: Notification) { reload() }
     private func reload(selecting id: String? = nil) {
         reloadSourceActions()
@@ -355,6 +395,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         table.reloadData()
         gridView.update(items: items, selectedID: selected?.id)
+        updateEmptyState(activeCollection: activeCollection)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             // Reloading can keep the same row number while changing its identity.
@@ -540,7 +581,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 collectionActions.lastItem?.representedObject = collection.id
             }
         }
-        guard let selected else { titleLabel.stringValue = "No scenes"; detail.stringValue = "Add a scene or change the search/filter."; return }
+        guard let selected else {
+            let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
+            updateEmptyState(activeCollection: activeCollection)
+            return
+        }
         titleLabel.stringValue = selected.title
         favorite.title = store.catalog.favorites.contains(selected.id) ? "★" : "☆"
         detail.stringValue = "Preparing still preview…"
@@ -1126,6 +1171,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.search.stringValue = "No matching scene"
         controller.reload()
         precondition(controller.items.isEmpty && !controller.apply.isEnabled)
+        precondition(controller.titleLabel.stringValue == "No matches" && !controller.clearSearchButton.isHidden,
+            "Search misses need an explicit empty state with a way out")
+        controller.filter.selectItem(at: 0)
+        controller.clearSearch()
+        precondition(controller.search.stringValue.isEmpty && controller.items.count == 8 && controller.clearSearchButton.isHidden,
+            "Clearing the search must restore browsing")
+        try OnboardingController.smokeTest(builtins: controller.items.compactMap {
+            guard let url = $0.builtin else { return nil }
+            return (title: $0.title, url: url)
+        })
         if let videoURL {
             let invalidMedia = folder.appendingPathComponent("invalid.webm")
             try Data("not a video".utf8).write(to: invalidMedia)
