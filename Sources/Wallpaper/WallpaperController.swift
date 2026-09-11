@@ -1,5 +1,6 @@
 import MetalKit
 import AppKit
+import ApplicationServices
 import AVFoundation
 import UniformTypeIdentifiers
 
@@ -8,10 +9,12 @@ private final class DesktopWindow: NSPanel {
     override var canBecomeMain: Bool { false }
     var desktopClick: (() -> Void)?
     var desktopMenu: (() -> NSMenu)?
+    var desktopForwardRightClick: ((NSEvent) -> Bool)?
     override func sendEvent(_ event: NSEvent) {
-        if let desktopMenu, event.type == .rightMouseDown ||
+        if event.type == .rightMouseDown ||
             (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
-            if let view = contentView { NSMenu.popUpContextMenu(desktopMenu(), with: event, for: view) }
+            if desktopForwardRightClick?(event) == true { return }
+            if let desktopMenu, let view = contentView { NSMenu.popUpContextMenu(desktopMenu(), with: event, for: view) }
             return
         }
         if event.type == .leftMouseDown, let desktopClick { desktopClick(); return }
@@ -77,6 +80,7 @@ final class WallpaperSurface {
         guard let desktop = window as? DesktopWindow else { return }
         desktop.desktopClick = enabled ? click : nil
         desktop.desktopMenu = enabled ? menu : nil
+        desktop.desktopForwardRightClick = enabled ? { [weak self] event in self?.forwardRightClickToFinder(event) ?? false } : nil
         desktop.ignoresMouseEvents = !enabled
         // Widgets occupy desktopIconWindow + 2 on Tahoe, above Finder icons.
         // Cover them with the same surface when the whole desktop is kept clear.
@@ -97,7 +101,36 @@ final class WallpaperSurface {
         setPaused(paused)
     }
 
-    func setPaused(_ paused: Bool) { renderer.setPaused(paused) }
+    private(set) var pausedState = false
+    func setPaused(_ paused: Bool) { pausedState = paused; renderer.setPaused(paused) }
+
+    /// Native Finder menu on right-click: our window only covers Finder's desktop,
+    /// so briefly go click-through and replay the click to Finder underneath.
+    /// Icons stay covered (no flash) and the Finder menu renders above us.
+    /// Falls back to our own menu when Accessibility trust (needed to repost
+    /// the click) is missing.
+    static var nativeDesktopMenuEnabled: Bool {
+        UserDefaults.standard.object(forKey: "comfort.nativeDesktopMenu") == nil ||
+            UserDefaults.standard.bool(forKey: "comfort.nativeDesktopMenu")
+    }
+
+    func forwardRightClickToFinder(_ event: NSEvent) -> Bool {
+        guard Self.nativeDesktopMenuEnabled, AXIsProcessTrusted() else { return false }
+        let cocoa = window.convertPoint(toScreen: event.locationInWindow)
+        guard let main = NSScreen.main else { return false }
+        let point = CGPoint(x: cocoa.x, y: main.frame.height - cocoa.y)
+        // Click-through instead of hiding: icons stay covered, Finder still gets the click.
+        let wasIgnoring = window.ignoresMouseEvents
+        window.ignoresMouseEvents = true
+        CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown,
+            mouseCursorPosition: point, mouseButton: .right)?.post(tap: .cghidEventTap)
+        CGEvent(mouseEventSource: nil, mouseType: .rightMouseUp,
+            mouseCursorPosition: point, mouseButton: .right)?.post(tap: .cghidEventTap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.window.ignoresMouseEvents = wasIgnoring
+        }
+        return true
+    }
 
     func close() {
         (renderer as? MetalSceneRenderer)?.mirrorFrame = nil
@@ -136,6 +169,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private static let resumeKey = "wallpaperResumeBookmark"
     private static let pauseKey = "wallpaperResumePaused"
     private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
+    private static let origBackdropPrefix = "wallpaperOrigBackdrop."
+    private static let stillsDirName = "Idlesse/Desktop Backdrops"
+
+    private static func isOurStill(_ url: URL?) -> Bool {
+        url?.path.contains(stillsDirName) ?? false
+    }
 
     var sameWallpaperOnAllDisplays: Bool {
         get {
@@ -149,8 +188,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    func displayURL(for displayID: UInt32) -> URL? {
-        guard let data = resumeDefaults.data(forKey: "\(Self.resumeKey).\(displayID)") else { return selectedURL }
+    func displayURL(for displayID: UInt32) -> URL? {        guard let data = resumeDefaults.data(forKey: "\(Self.resumeKey).\(displayID)") else { return selectedURL }
         var stale = false
         if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale) {
             return url
@@ -175,6 +213,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     func restoreSelection() {
         guard persistsSelection, !isRunning, !isLoading,
               let data = resumeDefaults.data(forKey: Self.resumeKey) else { return }
+        logState("restore-begin")
         do {
             var stale = false
             let url: URL
@@ -183,7 +222,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             } else {
                 url = try URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
             }
-            select(url, automatic: true, restoringPause: resumeDefaults.bool(forKey: Self.pauseKey))
+            select(url, automatic: true)
         } catch {
             lastReloadError = "The previous wallpaper is unavailable. Choose it again in Wallpapers."
             updateMenu()
@@ -219,7 +258,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let second = host()
         second.restoreSelection()
         settle(second)
-        precondition(second.selectedURL == url && second.pausedByUser)
+        precondition(second.selectedURL == url && !second.pausedByUser, "Startup must autoplay, never restore paused")
         second.select(url.appendingPathComponent("missing.mp4"))
         settle(second)
         precondition(second.selectedURL == url, "Failed replacement must retain scene")
@@ -227,7 +266,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let third = host()
         third.restoreSelection()
         precondition(!third.isRunning && !third.isLoading, "Stop must suppress restart")
-        print("Resume checks passed: selection, pause, quit, failed replacement, explicit stop")
+        print("Resume checks passed: selection, autoplay-resume, quit, failed replacement, explicit stop")
     }
 
     private func saveSelection() {
@@ -253,8 +292,26 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         stop()
     }
 
-    var diagnosticSummary: String {
-        let nodes = playable?.allNodes ?? []
+    /// One-line state trace for diagnosing pause/suspend transitions. Grep logs for "Idlesse-state".
+    private func logState(_ site: String) {
+        let b = { (v: Bool) in v ? 1 : 0 }
+        let line = String(format: "Idlesse-state %@: running=%d loading=%d suspended=%d shouldPause=%d (byUser=%d bedtime=%d lowPower=%d) surfaces=%d scene=%@",
+            site, b(isRunning), b(isLoading), b(suspended), b(shouldPause), b(pausedByUser),
+            b(dimmedForBedtime), b(ProcessInfo.processInfo.isLowPowerModeEnabled),
+            surfaces.count, playable?.title ?? selectedURL?.lastPathComponent ?? "none")
+        NSLog("%@", line)
+        if let data = (line + "\n").data(using: .utf8) {
+            let path = "/tmp/idlesse-state.log"
+            if FileManager.default.fileExists(atPath: path),
+               let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+                try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
+            } else {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        }
+    }
+
+    var diagnosticSummary: String {        let nodes = playable?.allNodes ?? []
         return """
         Wallpaper active: \(isRunning)
         Loading: \(isLoading)
@@ -341,6 +398,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             controller.activeSharedVideoHub?.setPaused(controller.shouldPause)
             controller.surfaces.forEach { $0.setPaused(controller.shouldPause) }
             controller.surfaces.forEach { $0.updateFrameRate() }
+            controller.logState("power-change")
             controller.updateMenu()
         }
         observe(.default, NSApplication.didChangeScreenParametersNotification) { controller in
@@ -487,6 +545,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.updateMenu()
                 self.syncSystemBackdrop(scene: playable, sourceURL: url, request: request)
                 self.saveSelection()
+                self.logState("select-done")
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
@@ -562,6 +621,34 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
+    /// Remember the user's plain wallpaper once per display, before our stills
+    /// replace it. Never records one of our own stills as the original.
+    private func rememberOriginalBackdrop(for screen: NSScreen) {
+        let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+        let key = Self.origBackdropPrefix + String(displayID)
+        guard resumeDefaults.string(forKey: key) == nil else { return }
+        guard persistsSelection else { return }
+        if let current = try? NSWorkspace.shared.desktopImageURL(for: screen),
+           !Self.isOurStill(current) {
+            resumeDefaults.set(current.path, forKey: key)
+        }
+    }
+
+    /// After Idlesse stops, put the plain wallpaper back where our still was.
+    /// If the user already changed it themselves, their choice wins.
+    private func restoreOriginalBackdrops() {
+        for screen in NSScreen.screens {
+            let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+            let key = Self.origBackdropPrefix + String(displayID)
+            defer { resumeDefaults.removeObject(forKey: key) }
+            guard let path = resumeDefaults.string(forKey: key) else { continue }
+            guard let current = try? NSWorkspace.shared.desktopImageURL(for: screen),
+                  Self.isOurStill(current) else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen,
+                options: [.imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue, .allowClipping: true])
+        }
+    }
+
     /// A small SDR still gives macOS matching material for menu-bar/Show Desktop
     /// regions it composites from the system wallpaper rather than our window.
     private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int) {
@@ -578,6 +665,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 let screens = NSScreen.screens
                 for screen in screens {
                     try Task.checkCancellation()
+                    rememberOriginalBackdrop(for: screen)
                     let factor = min(1, 1280 / max(screen.frame.width, screen.frame.height))
                     let width = max(1, Int(screen.frame.width * factor))
                     let height = max(1, Int(screen.frame.height * factor))
@@ -651,8 +739,20 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             item.target = self
         }
         menu.addItem(.separator())
+        let native = menu.addItem(withTitle: "Native Desktop Right-Click", action: #selector(toggleNativeDesktopMenu), keyEquivalent: "")
+        native.target = self
+        native.state = WallpaperSurface.nativeDesktopMenuEnabled ? .on : .off
+        native.toolTip = "Right-click shows the Finder menu (needs Accessibility permission once). Off shows this Idlesse menu."
+        menu.addItem(.separator())
         comfort?.addDesktopIconsItem(to: menu)
         return menu
+    }
+
+    @objc private func toggleNativeDesktopMenu() {
+        UserDefaults.standard.set(!WallpaperSurface.nativeDesktopMenuEnabled, forKey: "comfort.nativeDesktopMenu")
+        if !WallpaperSurface.nativeDesktopMenuEnabled {
+            _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+        }
     }
 
     private func rebuild() {
@@ -678,6 +778,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         systemAsleep = value
         clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
+        logState("system-sleep")
         updateMenu()
     }
 
@@ -686,6 +787,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         asleep = value
         clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
+        logState("screens-sleep")
         updateMenu()
     }
 
@@ -694,6 +796,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         sessionInactive = value
         clock.setPaused(suspended || shouldPause)
         if suspended { releaseSurfaces() } else { rebuild() }
+        logState("session")
         updateMenu()
     }
 
@@ -703,6 +806,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         clock.setPaused(suspended || shouldPause)
         activeSharedVideoHub?.setPaused(shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
+        logState("bedtime")
         updateMenu()
     }
 
@@ -713,6 +817,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         clock.setPaused(suspended || shouldPause)
         activeSharedVideoHub?.setPaused(shouldPause)
         surfaces.forEach { $0.setPaused(shouldPause) }
+        logState("togglePause")
         updateMenu()
     }
 
@@ -736,12 +841,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         screenRefresh?.cancel()
         screenRefresh = nil
         releaseSurfaces()
+        restoreOriginalBackdrops()
         if scopeStarted { selectedURL?.stopAccessingSecurityScopedResource() }
         scopeStarted = false
         selectedURL = nil
         playable = nil
         isLoading = false
         pausedByUser = false
+        logState("stop")
         updateMenu()
         if wasActive { onStop?() }
     }
