@@ -361,6 +361,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onStop: (() -> Void)?
     var onShowSettings: (() -> Void)?
     var onShowPreview: (() -> Void)?
+    /// Menu items contributed by the host (next/previous, recents). Rebuilt on every menu open.
+    var extraMenuItemsProvider: (() -> [NSMenuItem])?
     var presentingWindow: (() -> NSWindow?)?
     var onStateChange: (() -> Void)?
     weak var comfort: DesktopComfortController?
@@ -1013,6 +1015,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         pause.isEnabled = isRunning && selectedIsAnimated
         let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
         stop.isEnabled = isRunning || isLoading
+        if let extras = extraMenuItemsProvider?(), !extras.isEmpty {
+            menu.addItem(.separator())
+            extras.forEach(menu.addItem)
+        }
         menu.addItem(.separator())
         addItem(menu, "Show Preview", #selector(showPreview))
         if let comfort {

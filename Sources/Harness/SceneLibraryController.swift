@@ -52,7 +52,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var cache: [String: (image: NSImage, note: String, revision: PosterRevision)] = [:]
     private var cacheOrder: [String] = []
     private var items: [Item] = []
-    private var selected: Item?
+    private var selected: Item? {
+        didSet { UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID") }
+    }
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
     private var importFailureHandler: (([String]) -> Void)?
@@ -148,8 +150,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.isReleasedWhenClosed = false
         window?.delegate = self
         window?.center()
+        window?.setFrameAutosaveName("IdlesseLibrary")
+        window?.setFrameUsingName("IdlesseLibrary")
         setup()
-        reload()
+        reload(selecting: UserDefaults.standard.string(forKey: "Idlesse.library.selectedID"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
@@ -899,6 +903,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { detail.stringValue = error.localizedDescription }
     }
     @objc private func useScene() { act(editing: false) }
+    /// Steps through the visible list for hotkeys and the menu extra.
+    /// Anchors on the current selection, wrapping around.
+    func cycle(delta: Int) {
+        guard !items.isEmpty else { return }
+        let current = selected.flatMap { item in items.firstIndex(where: { $0.id == item.id }) } ?? (delta >= 0 ? -1 : 0)
+        let next = (current + delta + items.count * 2) % items.count
+        table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
+        selected = items[next]
+        gridView.select(id: selected?.id)
+        preview()
+        act(editing: false)
+    }
     @objc private func collectionAction() {
         guard let item = collectionActions.selectedItem else { return }
         if ["Move Collection Up", "Move Collection Down"].contains(item.title),

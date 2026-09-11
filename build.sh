@@ -124,7 +124,7 @@ APP_SOURCES=(
   "$ROOT/Sources/Harness/main.swift"
 )
 
-APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver UniformTypeIdentifiers )
+APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver UniformTypeIdentifiers Carbon )
 
 app_framework_args() {
   local f

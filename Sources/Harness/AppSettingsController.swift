@@ -80,6 +80,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         window.center()
+        window.setFrameAutosaveName("IdlesseSettings")
+        window.setFrameUsingName("IdlesseSettings")
         guard let root = window.contentView else { return }
         let sidebar = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 180, height: 720))
         sidebar.material = .sidebar; sidebar.blendingMode = .behindWindow

@@ -36,7 +36,6 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
         self.wallpaper = wallpaper
         self.comfort = comfort
         super.init()
-        wallpaper.onSelectionCommitted = { [weak self] url in self?.adoptManualSelection(url) }
     }
 
     // MARK: - Settings
@@ -238,9 +237,10 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Evaluation
 
-    private func adoptManualSelection(_ url: URL) {
-        // Whatever the user picks becomes the day scene. Hold it until the
-        // mode key changes so scheduled switches never fight a manual choice.
+    /// Called for every committed selection (manual or mode-driven).
+    /// Whatever the user picks becomes the day scene. Hold it until the
+    /// mode key changes so scheduled switches never fight a manual choice.
+    func adoptManualSelection(_ url: URL) {
         // Mode-driven selects set expectingCommit and bypass adoption.
         if let expected = expectingCommit, expected == url {
             expectingCommit = nil

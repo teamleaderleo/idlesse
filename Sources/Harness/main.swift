@@ -9,6 +9,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
     private lazy var modes = AmbientModesController(wallpaper: wallpaper, comfort: comfort)
+    private let hotKeys = HotKeysController()
+    private var recentSceneURLs: [URL] = []
     private lazy var appSettings = AppSettingsController(comfort: comfort, wallpaper: wallpaper,
         showSaver: { [weak self] in self?.showSaverSettings(asSheet: true) })
     private var library: SceneLibraryController?
@@ -111,6 +113,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
         wallpaper.presentingWindow = { [weak self] in self?.appSettings.window }
+        wallpaper.extraMenuItemsProvider = { [weak self] in self?.menuExtras() ?? [] }
+        wallpaper.onSelectionCommitted = { [weak self] url in
+            self?.modes.adoptManualSelection(url)
+            self?.noteRecentScene(url)
+        }
+        hotKeys.onNext = { [weak self] in self?.stepWallpaper(delta: 1) }
+        hotKeys.onPrevious = { [weak self] in self?.stepWallpaper(delta: -1) }
+        hotKeys.onTogglePause = { [weak self] in self?.wallpaper.togglePause() }
+        hotKeys.start()
         wallpaper.comfort = comfort
         comfort.onDimmingChanged = { [weak self] value in
             self?.wallpaper.setDimmedForBedtime(value)
@@ -220,6 +231,47 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
+    // MARK: - Hotkeys, menu extra, recents
+
+    private func stepWallpaper(delta: Int) {
+        do {
+            try prepareLibrary()
+            library?.cycle(delta: delta)
+        } catch {
+            NSSound.beep()
+        }
+    }
+    private func noteRecentScene(_ url: URL) {
+        recentSceneURLs.removeAll { $0 == url }
+        recentSceneURLs.insert(url, at: 0)
+        recentSceneURLs = Array(recentSceneURLs.prefix(5))
+    }
+    private func menuExtras() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        let next = NSMenuItem(title: "Next Wallpaper  (⌃⌥⌘→)", action: #selector(nextWallpaper), keyEquivalent: "")
+        next.target = self
+        next.isEnabled = wallpaper.isRunning
+        let previous = NSMenuItem(title: "Previous Wallpaper  (⌃⌥⌘←)", action: #selector(previousWallpaper), keyEquivalent: "")
+        previous.target = self
+        previous.isEnabled = wallpaper.isRunning
+        items += [next, previous]
+        let recents = recentSceneURLs.filter { $0 != wallpaper.selectedURL }.prefix(4)
+        for url in recents {
+            let item = NSMenuItem(title: SceneLibraryController.displayTitle(url.deletingPathExtension().lastPathComponent),
+                action: #selector(applyRecent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url as NSURL
+            items.append(item)
+        }
+        return items
+    }
+    @objc private func nextWallpaper() { stepWallpaper(delta: 1) }
+    @objc private func previousWallpaper() { stepWallpaper(delta: -1) }
+    @objc private func applyRecent(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        wallpaper.select(url)
+    }
+
     @objc private func copyDiagnostics() {
         let bundle = Bundle.main
         var lines = ["Idlesse \(bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "unknown") (\(bundle.object(forInfoDictionaryKey: "CFBundleVersion") ?? "unknown"))",
@@ -241,6 +293,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        hotKeys.stop()
         library?.windowWillClose(notification)
         library?.releaseActiveUseAccess()
         library?.releaseActiveEditAccess()

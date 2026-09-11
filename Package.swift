@@ -32,6 +32,7 @@ let package = Package(
                 .linkedFramework("Photos"),
                 .linkedFramework("ScreenSaver"),
                 .linkedFramework("UniformTypeIdentifiers"),
+                .linkedFramework("Carbon"),
             ]
         ),
     ]
