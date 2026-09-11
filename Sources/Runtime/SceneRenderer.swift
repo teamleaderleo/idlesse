@@ -42,7 +42,7 @@ enum SceneFrameRate: Int, CaseIterable {
         }
     }
     static var throttleOnBattery: Bool {
-        get { UserDefaults.standard.object(forKey: "sceneFrameRateThrottleOnBattery") == nil ? true : UserDefaults.standard.bool(forKey: "sceneFrameRateThrottleOnBattery") }
+        get { UserDefaults.standard.object(forKey: "sceneFrameRateThrottleOnBattery") == nil ? false : UserDefaults.standard.bool(forKey: "sceneFrameRateThrottleOnBattery") }
         set {
             UserDefaults.standard.set(newValue, forKey: "sceneFrameRateThrottleOnBattery")
             NotificationCenter.default.post(name: changed, object: nil)
