@@ -103,6 +103,7 @@ final class WallpaperSurface {
 
     private(set) var pausedState = false
     func setPaused(_ paused: Bool) { pausedState = paused; renderer.setPaused(paused) }
+    func setMuted(_ muted: Bool) { renderer.setMuted(muted) }
 
     /// Native Finder menu on right-click: our window only covers Finder's desktop,
     /// so briefly go click-through and replay the click to Finder underneath.
@@ -460,6 +461,21 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
+    /// Opt-in audible video (off by default; every player starts muted).
+    /// Applies to new surfaces and live ones, including the shared video hub.
+    var soundEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "wallpaperSoundEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "wallpaperSoundEnabled")
+            applyMute()
+            updateMenu()
+        }
+    }
+    private func applyMute() {
+        activeSharedVideoHub?.setMuted(!soundEnabled)
+        surfaces.forEach { $0.setMuted(!soundEnabled) }
+    }
+
     var onManualSelection: (() -> Void)?
     /// Fires after any successful (non-reload, non-transient) selection with the adopted URL.
     var onSelectionCommitted: ((URL) -> Void)?
@@ -561,6 +577,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.activeSharedVideoHub = newHub
                 self.activeSharedVideoHub?.setPaused(self.shouldPause)
                 replacement.forEach { $0.setPaused(self.shouldPause) }
+                self.activeSharedVideoHub?.setMuted(!self.soundEnabled)
+                replacement.forEach { $0.setMuted(!self.soundEnabled) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
                     replacement.forEach { $0.window.alphaValue = fade ? 0 : 1; $0.show(paused: self.shouldPause) }
@@ -796,6 +814,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             activeSharedVideoHub = newHub
             activeSharedVideoHub?.setPaused(shouldPause)
             surfaces.forEach { $0.setPaused(shouldPause) }
+            activeSharedVideoHub?.setMuted(!soundEnabled)
+            surfaces.forEach { $0.setMuted(!soundEnabled) }
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
             stop()
@@ -1119,6 +1139,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         pause.isEnabled = isRunning && selectedIsAnimated
         let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
         stop.isEnabled = isRunning || isLoading
+        let sound = addItem(menu, "Play Wallpaper Audio", #selector(toggleSound))
+        sound.state = soundEnabled ? .on : .off
+        sound.isEnabled = isRunning
         if let extras = extraMenuItemsProvider?(), !extras.isEmpty {
             menu.addItem(.separator())
             extras.forEach(menu.addItem)
@@ -1138,6 +1161,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc private func showAppSettings() { onShowSettings?() }
+    @objc private func toggleSound() { soundEnabled.toggle() }
     @objc private func toggleSameDisplays() { sameWallpaperOnAllDisplays.toggle() }
 
     @discardableResult private func addItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {

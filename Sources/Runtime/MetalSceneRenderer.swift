@@ -782,6 +782,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         updateDrawScheduling()
         if !diagnostics.animated || inputs.contains(where: { $0.followsClock }) { metal.draw() }
     }
+    func setMuted(_ muted: Bool) {
+        guard diagnostics.state != .disposed else { return }
+        inputs.forEach {
+            $0.player?.isMuted = muted
+            if !muted { $0.player?.volume = 1 }
+        }
+    }
     func releaseResources() {
         textTimer?.invalidate(); textTimer = nil
         metal.isPaused = true

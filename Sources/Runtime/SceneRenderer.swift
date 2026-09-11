@@ -127,6 +127,9 @@ protocol SceneRenderer: AnyObject {
     var gpuTotals: (seconds: Double, frames: Int)? { get }
     func setPaused(_ paused: Bool)
     func setPreferredFrameRate(_ rate: Int?)
+    /// Opt-in audible video. Default implementation ignores it (stills, Metal
+    /// composites without a player); players override. Muted by default.
+    func setMuted(_ muted: Bool)
     func releaseResources()
     func updateScene(_ scene: SceneDescriptor) -> Bool
     func refreshSceneTime()
@@ -134,6 +137,7 @@ protocol SceneRenderer: AnyObject {
 
 extension SceneRenderer {
     func refreshSceneTime() { view.needsDisplay = true }
+    func setMuted(_ muted: Bool) {}
     func updateScene(_ scene: SceneDescriptor) -> Bool { false }
     var presentedFrameCount: Int? { nil }
     var gpuTotals: (seconds: Double, frames: Int)? { nil }
@@ -399,6 +403,13 @@ final class SharedVideoHub {
             }
         }
     }
+    func setMuted(_ muted: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        for video in videos.values {
+            video.player.isMuted = muted
+            if !muted { video.player.volume = 1 }
+        }
+    }
 
     func sample(nodeID: UUID, clock: SceneClock, isRunning: Bool) -> SampledFrame? {
         lock.lock(); defer { lock.unlock() }
@@ -516,6 +527,10 @@ final class VideoRenderer: SceneRenderer {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
         if paused { player?.pause() } else { player?.play() }
+    }
+    func setMuted(_ muted: Bool) {
+        player?.isMuted = muted
+        if !muted { player?.volume = 1 }
     }
     func releaseResources() {
         state = .disposed
@@ -637,6 +652,9 @@ final class LayeredSceneRenderer: SceneRenderer {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
         for (child, node) in zip(children, nodes) { child.setPaused(paused || !node.visible) }
+    }
+    func setMuted(_ muted: Bool) {
+        children.forEach { $0.setMuted(muted) }
     }
     func releaseResources() {
         state = .disposed
