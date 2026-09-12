@@ -47,15 +47,19 @@ final class AmbientSetStore {
     func replaceAll(_ sets: [AmbientSet]) throws {
         var hold = catalog.manualHold
         if case .set(let heldID) = hold?.intent, !sets.contains(where: { $0.id == heldID }) { hold = nil }
-        let next = AmbientSetCatalog(sets: sets, manualHold: hold)
+        try replaceCatalog(AmbientSetCatalog(sets: sets, manualHold: hold))
+    }
+
+    /// One atomic persistence seam for authority cutover and rollback. Callers
+    /// can replace the ordered sets and manual hold together, avoiding an
+    /// intermediate catalog that belongs to neither authority path.
+    func replaceCatalog(_ next: AmbientSetCatalog) throws {
         try Self.validate(next.sets, manualHold: next.manualHold)
         try persist(next)
     }
 
     func setManualHold(_ hold: AmbientManualHold?) throws {
-        let next = AmbientSetCatalog(sets: catalog.sets, manualHold: hold)
-        try Self.validate(next.sets, manualHold: next.manualHold)
-        try persist(next)
+        try replaceCatalog(AmbientSetCatalog(sets: catalog.sets, manualHold: hold))
     }
 
     func append(_ set: AmbientSet) throws {
@@ -68,8 +72,7 @@ final class AmbientSetStore {
         var hold = catalog.manualHold
         if case .set(let heldID) = hold?.intent, heldID == id { hold = nil }
         let next = AmbientSetCatalog(sets: catalog.sets.filter { $0.id != id }, manualHold: hold)
-        try Self.validate(next.sets, manualHold: next.manualHold)
-        try persist(next)
+        try replaceCatalog(next)
     }
 
     func move(id: String, to index: Int) throws {
