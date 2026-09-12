@@ -34,13 +34,19 @@ enum DesktopQualification {
                 "seconds": ProcessInfo.processInfo.systemUptime - began,
                 "processCPUSeconds": Double(Darwin.clock()) / Double(CLOCKS_PER_SEC),
                 "footprintBytes": memory["footprint"]!, "residentBytes": memory["resident"]!,
-                "surfaceCount": controller.surfaces.count]
+                "surfaceCount": controller.surfaces.count,
+                "coverageObservationCount": controller.coverageObservationCount,
+                "coverageObservationSeconds": controller.coverageObservationSeconds,
+                "desktopAttentionUpdateCount": controller.desktopAttentionUpdateCount,
+                "desktopAttentionUpdateSeconds": controller.desktopAttentionUpdateSeconds]
             row["displays"] = controller.surfaces.map { surface -> [String: Any] in
                 var display: [String: Any] = [
                     "displayID": WallpaperController.persistentDisplayIdentifier(surface.displayID),
                     "screenNumber": surface.displayID,
                     "frame": NSStringFromRect(surface.window.frame),
                     "coverageResting": surface.isCovered,
+                    "usesDesktopAttention": surface.usesDesktopAttention,
+                    "desktopAttention": surface.desktopAttention,
                     "submittedFrames": surface.diagnostics.frameCount,
                     "loops": surface.diagnostics.loopCount,
                     "menuStripFrames": surface.menuStripFrames,
