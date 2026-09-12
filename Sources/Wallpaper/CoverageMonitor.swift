@@ -113,7 +113,8 @@ final class CoverageMonitor {
     func coverage(of rect: NSRect, above level: Int, excluding ownNumbers: Set<CGWindowID>, ownPID: Int) -> Double {
         let measurement = measureCoverage(of: rect, above: level, excluding: ownNumbers, ownPID: ownPID)
         let sampledAt = now()
-        let key = NSStringFromRect(rect) + "@\(level)"
+        let surfaceGeneration = ownNumbers.sorted().map { String($0) }.joined(separator: ",")
+        let key = NSStringFromRect(rect) + "@\(level)#\(surfaceGeneration)"
         var state = states[key] ?? SurfaceState(sampledAt: sampledAt)
         if sampledAt - state.sampledAt > staleAfter {
             state.policy = RestPolicy()
@@ -191,7 +192,7 @@ final class CoverageMonitor {
         let url = URL(fileURLWithPath: "/tmp/idlesse-state.log")
         if FileManager.default.fileExists(atPath: url.path),
            let handle = try? FileHandle(forWritingTo: url) {
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
             try? handle.close()
         } else {
