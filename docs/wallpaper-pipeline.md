@@ -51,7 +51,9 @@ treatment. **Matte** is the renderer's background showing through because the
 recipe does not cover the frame — always wrong, and what `--solve` removes.
 **Bleed** is low-detail margin painted past the intended composition so a crop
 has somewhere to go; it is dark or plain, so the edge check cannot tell it from
-matte, and only your eyes can.
+matte. Your eyes find it; `measure-bleed.py` then tells you how wide it is,
+which matters because a margin declared nearly-but-not-quite wide enough still
+leaves part of the band on screen.
 
 Keep the bleed. Exports are 16:9 and displays are not: a 16:9 frame filling a
 1.545 panel is trimmed 13% on the sides, which spends the bleed and arrives at
@@ -105,9 +107,12 @@ a superseded copy deliberately.
   which is why both can run at once.
 - **A fix on one display can be a regression on another.** Exports are 16:9 and
   displays are not, so a narrower panel sees a crop rather than the frame. That
-  crop can be doing useful work: Hina's bleed is removed for free on a 1.545
-  panel, and cropping it at export to tidy the 16:9 frame took that margin
-  away. Check what every display in use actually shows before re-cutting.
+  crop can be doing useful work: Hina's bleed is very nearly removed for free
+  on a 1.545 panel, and cropping it at export to tidy the 16:9 frame took that
+  margin away. Measure before relying on that, though — "for free" held to
+  within about three pixels here, which is a coincidence of this panel's aspect
+  and not a cushion. Check what every display in use actually shows before
+  re-cutting.
 - **An automated check measures what it measures.** The edge guard catches a
   uniform matte, which is not the same as an ugly edge. Hina's dead band was
   dark but not uniform, so it passed while still looking wrong on a display.

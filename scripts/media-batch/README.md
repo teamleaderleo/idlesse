@@ -80,6 +80,44 @@ Do not crop bleed out at export to tidy a frame. Exports are 16:9 and displays a
 
 So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the widest display in use and let narrower ones spend the margin. Where a wide panel then shows bleed it cannot crop, that is a display-side crop to fix (#96), not a recipe to re-cut — one baked frame cannot be right for two aspects at once, because the narrow display's good view is a crop of the wide display's.
 
+### Measuring the bleed
+
+Do not eyeball the margin. `measure-bleed.py` profiles each edge across the
+loop and reports where the composition actually ends:
+
+```sh
+python3 scripts/media-batch/measure-bleed.py \
+  "$HOME/Pictures/Wallpapers/<collection>/<Name>.mp4" --edges left,right
+```
+
+It prints a brightness profile inward from each edge and lists candidate
+boundaries -- every strong step, with its size and the margin it would imply.
+It deliberately does not pick one. Interior art detail produces steps as large
+as a band edge does, so an automatic choice is wrong about as often as it is
+right; an early version of this script confidently reported Haruka's margin as
+849px, which was a highlight in the middle of her dress.
+
+Read the profile: **a flat plateau is margin, a smooth ramp is painted art.**
+Bleed shows up as a staircase of constant-brightness bands, because the margin
+is the composition's edge extended rather than drawn. A hard dead edge is
+unmistakable -- Haruka's black left edge steps by +105 where interior detail
+never exceeds 52. Then pass your choice back:
+
+```sh
+python3 scripts/media-batch/measure-bleed.py "<...>.mp4" \
+  --edges left,right --margin right=256 --margin left=9 --write
+```
+
+That writes `<name>.framing.json` beside the media. It needs only ffmpeg and
+the standard library, so it runs outside the study venv, and it never touches
+the video.
+
+The reason to measure rather than guess is that a value which is merely *close*
+does nothing useful. A margin declared slightly too small still leaves part of
+the band on screen; declared far too large it starts eating composition on
+every display. Confirm the geometry against the displays actually in use before
+settling on a number.
+
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 
 Dependencies retain their upstream licenses, especially the Spine runtimes. This operator harness does not establish redistribution rights for those runtimes or game assets.
