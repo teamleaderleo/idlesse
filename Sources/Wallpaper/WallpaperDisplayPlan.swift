@@ -1,11 +1,21 @@
 import Foundation
 
 extension WallpaperController {
-    /// Resolve display mode, mirror groups and effective Library sources in one
-    /// value. Visual Displays and runtime assignment consumers can inspect the
-    /// same result without rebuilding display-policy rules independently.
+    /// Resolve the currently adopted selection.
     func resolvedDisplayAssignmentPlan(topology: DisplayTopology = .current()) -> ResolvedWallpaperAssignmentPlan {
-        let mode: DisplayAssignmentMode = desktopSpanActive
+        resolvedDisplayAssignmentPlan(
+            topology: topology,
+            baseURL: selectedURL,
+            desktopSpan: desktopSpanActive)
+    }
+
+    /// Resolve a candidate selection before `selectedURL`/`playable` are adopted.
+    /// The same value can therefore drive live surfaces and matching system
+    /// backdrop stills for one transaction.
+    func resolvedDisplayAssignmentPlan(topology: DisplayTopology,
+                                       baseURL: URL?,
+                                       desktopSpan: Bool) -> ResolvedWallpaperAssignmentPlan {
+        let mode: DisplayAssignmentMode = desktopSpan
             ? .desktopSpan
             : (sameWallpaperOnAllDisplays ? .sameOnAll : .perDisplay)
         let assignments = topology.displays.map { display -> ResolvedDisplayAssignment in
@@ -14,11 +24,12 @@ extension WallpaperController {
             let explicit: Bool
             switch mode {
             case .desktopSpan, .sameOnAll:
-                source = selectedURL
+                source = baseURL
                 explicit = false
             case .perDisplay:
-                source = displayURL(for: master.liveID)
-                explicit = explicitDisplayURL(for: master.liveID) != nil
+                let override = explicitDisplayURL(for: master.liveID)
+                source = override ?? baseURL
+                explicit = override != nil
             }
             return ResolvedDisplayAssignment(
                 persistentKey: topology.persistentKey(for: master),
