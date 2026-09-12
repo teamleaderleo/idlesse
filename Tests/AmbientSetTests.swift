@@ -39,7 +39,7 @@ private struct AmbientSetTests {
             expect(resolution.explanation.alsoMatched.map(\.id) == ["second"], "overlap explanation missing")
             expect(resolution.state.wallpaper == .scene("one"), "winner override not applied")
         }
-    
+
         // Sparse overrides inherit the arrangement default.
         do {
             let set = AmbientSet(id: "reading", name: "Reading", activation: AmbientActivation(),
@@ -49,7 +49,7 @@ private struct AmbientSetTests {
             expect(resolution.state.filesVisible == false && resolution.state.widgetsVisible == true, "visibility inheritance failed")
             expect(resolution.state.dimming == AmbientDimmingState(enabled: true, level: 0.7), "dimming override failed")
         }
-    
+
         // Overnight weekdays use the day the interval starts, preserving collection schedule semantics.
         do {
             let friday = AmbientSet(id: "fri", name: "Friday Night",
@@ -62,7 +62,7 @@ private struct AmbientSetTests {
             expect(saturdayEarly.explanation.activeSetID == "fri", "overnight spill lost start weekday")
             expect(saturdayLate.explanation.source == .arrangementDefault, "Saturday incorrectly reused Friday rule")
         }
-    
+
         // Solar night activates at sunset and releases at sunrise; the next boundary is deterministic.
         do {
             let night = AmbientSet(id: "night", name: "Night", activation: AmbientActivation(solar: .night),
@@ -76,7 +76,7 @@ private struct AmbientSetTests {
             expect(evening.explanation.activeSetID == "night", "solar night did not activate")
             expect(evening.explanation.nextChange?.date == date(2026, 9, 12, 6, 30), "solar next boundary is wrong")
         }
-    
+
         // Manual hold captures the next winner change once. Re-resolving before it never moves the expiry.
         do {
             let work = AmbientSet(id: "work", name: "Work", activation: AmbientActivation(timeRange: .init(startMinute: 9 * 60, endMinute: 17 * 60)),
@@ -95,7 +95,7 @@ private struct AmbientSetTests {
                                          now: date(2026, 9, 11, 17), calendar: calendar)
             expect(after.explanation.source == .arrangementDefault, "manual hold survived its explicit boundary")
         }
-    
+
         // Next-boundary search skips a lower-priority rule's edges when the winner stays unchanged.
         do {
             let allDay = AmbientSet(id: "top", name: "Top", activation: AmbientActivation(), overrides: .init(wallpaper: .scene("top")))
@@ -104,24 +104,24 @@ private struct AmbientSetTests {
             let next = resolver.nextAutomaticChange(sets: [allDay, lower], now: date(2026, 9, 11, 12), calendar: calendar)
             expect(next == nil, "lower-priority edge incorrectly counted as a winner change")
         }
-    
+
         // Legacy adapters create explicit, sparse sets without silently mutating legacy settings.
         do {
             let collection = AmbientLegacyAdapter.collectionSet(from: .init(collectionID: "c1", collectionName: "Psychedelic",
                                                                               startMinute: 19 * 60, endMinute: 23 * 60, weekdays: [2,3,4,5,6]))
             expect(collection?.overrides.wallpaper == .collection("c1"), "collection migration target wrong")
             expect(collection?.activation?.weekdays == [2,3,4,5,6], "collection weekdays lost")
-    
+
             let bedtime = AmbientLegacyAdapter.bedtimeSet(from: .init(enabled: true, startMinute: 22 * 60, endMinute: 7 * 60,
                                                                        dimLevel: 0.98, nightSceneID: "night-scene"))
             expect(bedtime?.overrides.wallpaper == .scene("night-scene"), "bedtime scene lost")
             expect(bedtime?.overrides.dimming == .init(enabled: true, level: 0.98), "bedtime dimming lost")
-    
+
             let night = AmbientLegacyAdapter.dayNightSet(from: .init(nightSceneID: "night-scene", followsSun: true))
             expect(night?.activation?.solar == .night, "day/night migration lost solar activation")
         }
-    
-        // Catalog persistence keeps ordering and rejects duplicate IDs / unbounded growth.
+
+        // Catalog persistence keeps ordering, rejects stale holds and bounds growth.
         do {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-ambient-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: folder) }
@@ -141,6 +141,11 @@ private struct AmbientSetTests {
             try withHold.remove(id: "a")
             expect(withHold.catalog.manualHold == nil, "deleting a held set left a stale hold")
             do {
+                try withHold.setManualHold(.init(intent: .set(id: "missing"), startedAt: date(2026, 9, 11, 10), expiry: .untilResumed))
+                fail("manual hold accepted a missing Set")
+            } catch AmbientSetStoreError.invalidManualHold { }
+            expect(withHold.catalog.manualHold == nil, "rejected manual hold changed catalog state")
+            do {
                 try withHold.replaceAll([b, b])
                 fail("duplicate IDs accepted")
             } catch AmbientSetStoreError.duplicateID { }
@@ -149,8 +154,17 @@ private struct AmbientSetTests {
                 try withHold.replaceAll(tooMany)
                 fail("unbounded set count accepted")
             } catch AmbientSetStoreError.tooManySets { }
+
+            let blocker = folder.appendingPathComponent("blocked-parent")
+            try Data([1]).write(to: blocker)
+            let unwritable = try AmbientSetStore(fileURL: blocker.appendingPathComponent("ambient-sets.json"))
+            do {
+                try unwritable.replaceAll([a])
+                fail("write through a non-directory parent unexpectedly succeeded")
+            } catch { }
+            expect(unwritable.catalog.sets.isEmpty, "failed persistence mutated the in-memory catalog")
         }
-    
+
         print("AmbientSetTests passed")
     }
 }
