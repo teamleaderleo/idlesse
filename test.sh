@@ -132,6 +132,18 @@ if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 10. Studio variant authoring state. Foundation-only coverage keeps sparse-delta
+# semantics independent from the AppKit sheet.
+STUDIO_VARIANT_SRCS=(
+  Sources/Runtime/Scene.swift
+  Sources/Harness/SceneVariantAuthoring.swift
+  Tests/StudioVariantTests.swift
+)
+if needs_build "build/tests/studio-variants" "${STUDIO_VARIANT_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${STUDIO_VARIANT_SRCS[@]}" -o build/tests/studio-variants &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -147,3 +159,4 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/studio-variants
