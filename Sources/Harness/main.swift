@@ -25,11 +25,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                 }
                 self.scenePreview.openLibraryScene(url, asCopy: asCopy)
             })
-        library?.onPeek = { [weak self] url in self?.wallpaper.peek(url) }
-        library?.onEndPeek = { [weak self] reverting in
-            self?.wallpaper.endPeek(reverting: reverting)
-            self?.modes.refresh()
-        }
         }
         wallpaper.onManualSelection = { [weak self] in
             self?.library?.stopRotation()

@@ -139,10 +139,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
-    var onPeek: ((URL) -> Void)?
-    var onEndPeek: ((Bool) -> Void)?
-    private var hoverMonitor: Any?
-    private var lastPeekID: String?
 
     init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
         self.onUse = onUse
@@ -299,42 +295,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.makeKeyAndOrderFront(nil)
         window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         NSApp.activate(ignoringOtherApps: true)
-        startHoverMonitor()
         if selected != nil { preview() }
-    }
-    private func startHoverMonitor() {
-        guard hoverMonitor == nil else { return }
-        hoverMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
-            self?.handleHover(event)
-            return event
-        }
-    }
-    private func stopHoverMonitor() {
-        if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
-        hoverMonitor = nil
-        lastPeekID = nil
-    }
-    private func handleHover(_ event: NSEvent) {
-        guard let window, window.isKeyWindow, onPeek != nil else {
-            if lastPeekID != nil { lastPeekID = nil; onEndPeek?(true) }
-            return
-        }
-        var hovered: Item?
-        if !gridScroll.isHidden {
-            let point = gridView.convert(event.locationInWindow, from: nil)
-            if gridView.bounds.contains(point) {
-                hovered = gridView.item(at: point).flatMap { card in items.first { $0.id == card.id } }
-            }
-        } else if !scroll.isHidden {
-            let row = table.row(at: table.convert(event.locationInWindow, from: nil))
-            if row >= 0, items.indices.contains(row) { hovered = items[row] }
-        }
-        guard hovered?.id != lastPeekID else { return }
-        lastPeekID = hovered?.id
-        if let hovered {
-            guard let opened = try? open(hovered) else { return }
-            onPeek?(opened.url)
-        } else { onEndPeek?(true) }
     }
     static func displayTitle(_ title: String) -> String {
         let suffixes = ["-Restored-4K60", "-Restored-4K-HEVC", "-4K-HEVC", "-4K60"]
@@ -1213,8 +1174,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }
-        lastPeekID = nil
-        onEndPeek?(false)
         do {
             let opened = try open(selected)
             try store.used(selected.id)
@@ -1233,13 +1192,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         conversionTask?.cancel()
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
-        stopHoverMonitor()
-        onEndPeek?(true)
     }
     func windowDidMove(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     func windowDidResize(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     deinit {
-        if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
         conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate()
     }
 

@@ -785,13 +785,6 @@ enum WallpaperSmoke {
         controller.togglePause()
         precondition(surface.diagnostics.state == .paused)
         controller.togglePause()
-        controller.endPeek()
-        precondition(!controller.isPeeking, "Ending no peek must be a no-op")
-        controller.peek(videoURL)
-        precondition(controller.isPeeking && controller.selectedURL == videoURL,
-            "Peeking the current scene must hold without reloading")
-        controller.endPeek()
-        precondition(!controller.isPeeking && controller.selectedURL == videoURL)
         let audible = VideoRenderer(url: videoURL, bounds: NSRect(x: 0, y: 0, width: 64, height: 64), onError: { errors.append($0) })
         defer { audible.releaseResources() }
         precondition(audible.diagnostics.audioMuted, "Video starts muted")
