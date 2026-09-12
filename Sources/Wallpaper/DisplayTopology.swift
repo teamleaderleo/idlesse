@@ -13,8 +13,7 @@ struct DisplayIdentity: Codable, Hashable {
     var name: String
 
     /// Canonical persistence key. Hardware identity survives a live/session UUID
-    /// change; ColorSync UUID remains an exact-match signal and the #52 session
-    /// alias. Indistinguishable hardware is disambiguated by topology position.
+    /// change; ColorSync UUID remains an exact-match/session alias and #52 key.
     var durableKey: String {
         let serial = serialNumber == 0 ? "none" : String(serialNumber)
         let foldedName = name.lowercased().replacingOccurrences(of: " ", with: "-")
@@ -48,24 +47,111 @@ struct DisplayIdentity: Codable, Hashable {
         )
     }
 
+    /// Higher values mean a safer reconnect match. A known serial mismatch is a
+    /// hard rejection. Exact UUID is strongest, followed by serial-backed
+    /// hardware identity, then vendor/model + physical characteristics.
     func matchScore(to other: DisplayIdentity) -> Int {
-        if let lhs = colorSyncUUID, let rhs = other.colorSyncUUID,
-           lhs.caseInsensitiveCompare(rhs) == .orderedSame { return 10_000 }
+        if serialNumber != 0, other.serialNumber != 0, serialNumber != other.serialNumber { return 0 }
+
         var score = 0
-        if vendorID != 0 && vendorID == other.vendorID { score += 120 }
-        if modelID != 0 && modelID == other.modelID { score += 120 }
-        if serialNumber != 0 && serialNumber == other.serialNumber { score += 500 }
-        if builtIn == other.builtIn { score += 80 }
-        if abs(physicalWidthMM - other.physicalWidthMM) <= 3 { score += 60 }
-        if abs(physicalHeightMM - other.physicalHeightMM) <= 3 { score += 60 }
-        if name.caseInsensitiveCompare(other.name) == .orderedSame { score += 40 }
+        if let lhs = colorSyncUUID, let rhs = other.colorSyncUUID,
+           lhs.caseInsensitiveCompare(rhs) == .orderedSame {
+            score += 2_000
+        }
+        if vendorID != 0, other.vendorID != 0 {
+            guard vendorID == other.vendorID else { return 0 }
+            score += 180
+        }
+        if modelID != 0, other.modelID != 0 {
+            guard modelID == other.modelID else { return 0 }
+            score += 180
+        }
+        if serialNumber != 0, serialNumber == other.serialNumber { score += 1_000 }
+        if builtIn == other.builtIn { score += 100 }
+        if physicalWidthMM > 0, other.physicalWidthMM > 0,
+           abs(physicalWidthMM - other.physicalWidthMM) <= 4 { score += 90 }
+        if physicalHeightMM > 0, other.physicalHeightMM > 0,
+           abs(physicalHeightMM - other.physicalHeightMM) <= 4 { score += 90 }
+        if name.caseInsensitiveCompare(other.name) == .orderedSame { score += 50 }
         return score
     }
 
+    /// Return only a unique high-confidence match. Equal best candidates are
+    /// intentionally rejected so two identical serial-less monitors never steal
+    /// each other's saved assignment after a reconnect.
     static func bestMatch(for saved: DisplayIdentity, among current: [DisplayIdentity]) -> DisplayIdentity? {
-        current.map { ($0, saved.matchScore(to: $0)) }
-            .filter { $0.1 >= 300 }
-            .max { $0.1 < $1.1 }?.0
+        var best: DisplayIdentity?
+        var bestScore = 0
+        var ambiguous = false
+        for candidate in current.prefix(32) {
+            let score = saved.matchScore(to: candidate)
+            guard score >= 500 else { continue }
+            if score > bestScore {
+                best = candidate
+                bestScore = score
+                ambiguous = false
+            } else if score == bestScore {
+                ambiguous = true
+            }
+        }
+        return ambiguous ? nil : best
+    }
+}
+
+struct PersistedDisplayIdentity: Codable, Equatable {
+    var assignmentKey: String
+    var identity: DisplayIdentity
+    var lastSeen: Date
+}
+
+/// Small bounded registry used only to bridge reconnects where session UUID or
+/// EDID details shift. Assignment bytes stay in DisplayAssignmentStore.
+struct DisplayIdentityStore {
+    private static let maxRecords = 32
+    var defaults: UserDefaults
+    var prefix: String
+
+    private var storageKey: String { "\(prefix).identities.v1" }
+
+    func records() -> [PersistedDisplayIdentity] {
+        guard let data = defaults.data(forKey: storageKey),
+              let decoded = try? JSONDecoder().decode([PersistedDisplayIdentity].self, from: data) else { return [] }
+        return Array(decoded.sorted { $0.lastSeen > $1.lastSeen }.prefix(Self.maxRecords))
+    }
+
+    /// Prefer an exact current key. Otherwise apply the unique-match hierarchy
+    /// above; ambiguous siblings yield nil and remain unassigned.
+    func previousAssignmentKey(for current: DisplayIdentity, proposedKey: String) -> String? {
+        let saved = records()
+        if saved.contains(where: { $0.assignmentKey == proposedKey }) { return proposedKey }
+
+        var bestKey: String?
+        var bestScore = 0
+        var ambiguous = false
+        for record in saved {
+            let score = record.identity.matchScore(to: current)
+            guard score >= 500 else { continue }
+            if score > bestScore {
+                bestScore = score
+                bestKey = record.assignmentKey
+                ambiguous = false
+            } else if score == bestScore {
+                ambiguous = true
+            }
+        }
+        return ambiguous ? nil : bestKey
+    }
+
+    func remember(_ identity: DisplayIdentity, assignmentKey: String, now: Date = Date()) {
+        var saved = records().filter { $0.assignmentKey != assignmentKey }
+        saved.append(PersistedDisplayIdentity(assignmentKey: assignmentKey, identity: identity, lastSeen: now))
+        save(saved)
+    }
+
+    private func save(_ records: [PersistedDisplayIdentity]) {
+        let bounded = Array(records.sorted { $0.lastSeen > $1.lastSeen }.prefix(Self.maxRecords))
+        guard let data = try? JSONEncoder().encode(bounded) else { return }
+        defaults.set(data, forKey: storageKey)
     }
 }
 
@@ -115,6 +201,8 @@ struct DisplayTopology {
         return master
     }
 
+    /// Indistinguishable hardware receives a deterministic relative-position
+    /// suffix. A direct CG display number never enters persisted identity.
     func persistentKey(for display: DisplaySnapshot) -> String {
         let base = display.identity.durableKey
         let siblings = displays.filter { $0.identity.durableKey == base }
@@ -204,14 +292,23 @@ struct KnownDisplayArrangementsStore {
         return Array(result.sorted { $0.lastSeen > $1.lastSeen }.prefix(Self.maxProfiles))
     }
 
+    /// Seen topology may refresh a known profile's LRU timestamp, but an unknown
+    /// cable/dock intermediate state never becomes a profile by observation.
     @discardableResult
-    func record(_ topology: DisplayTopology, now: Date = Date()) -> DisplayArrangementProfile {
+    func touchKnown(_ topology: DisplayTopology, now: Date = Date()) -> DisplayArrangementProfile? {
         var items = profiles()
-        if let index = items.firstIndex(where: { $0.signature == topology.signature }) {
-            items[index].lastSeen = now
-            save(items)
-            return items[index]
-        }
+        guard let index = items.firstIndex(where: { $0.signature == topology.signature }) else { return nil }
+        items[index].lastSeen = now
+        let profile = items[index]
+        save(items)
+        return profile
+    }
+
+    /// Explicit user save signal for the settled current topology.
+    @discardableResult
+    func saveCurrent(_ topology: DisplayTopology, now: Date = Date()) -> DisplayArrangementProfile {
+        if let known = touchKnown(topology, now: now) { return known }
+        var items = profiles()
         let independent = topology.independentDisplays
         let suggested: String
         if independent.count == 1, independent.first?.identity.builtIn == true {
@@ -302,16 +399,36 @@ enum DisplayTopologySmoke {
                                              builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
         let reconnectCurrent = DisplayIdentity(colorSyncUUID: "NEW-SESSION-UUID", vendorID: 9, modelID: 99, serialNumber: 777,
                                                builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
-        precondition(reconnectSaved.durableKey == reconnectCurrent.durableKey,
-                     "Hardware canonical identity must survive a ColorSync UUID change")
+        precondition(reconnectSaved.durableKey == reconnectCurrent.durableKey)
         precondition(DisplayIdentity.bestMatch(for: reconnectSaved, among: [builtin, reconnectCurrent]) == reconnectCurrent)
+
+        let twinSaved = DisplayIdentity(colorSyncUUID: nil, vendorID: 7, modelID: 70, serialNumber: 0,
+                                        builtIn: false, physicalWidthMM: 520, physicalHeightMM: 290, name: "Twin")
+        let twinA = DisplayIdentity(colorSyncUUID: "TWIN-A", vendorID: 7, modelID: 70, serialNumber: 0,
+                                    builtIn: false, physicalWidthMM: 520, physicalHeightMM: 290, name: "Twin")
+        let twinB = DisplayIdentity(colorSyncUUID: "TWIN-B", vendorID: 7, modelID: 70, serialNumber: 0,
+                                    builtIn: false, physicalWidthMM: 520, physicalHeightMM: 290, name: "Twin")
+        precondition(DisplayIdentity.bestMatch(for: twinSaved, among: [twinA, twinB]) == nil,
+                     "Identical serial-less siblings must remain ambiguous")
 
         let suite = "DisplayTopologySmoke.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let arrangements = KnownDisplayArrangementsStore(defaults: defaults)
-        precondition(arrangements.record(one).name == "MacBook Only")
-        precondition(arrangements.record(offset).name == "Desk Setup")
+        precondition(arrangements.touchKnown(one) == nil, "Observation must not save a new arrangement")
+        let laptop = arrangements.saveCurrent(one)
+        precondition(laptop.name == "MacBook Only")
+        precondition(arrangements.touchKnown(one)?.id == laptop.id)
+        precondition(arrangements.touchKnown(offset) == nil)
+        precondition(arrangements.saveCurrent(offset).name == "Desk Setup")
         precondition(arrangements.bestMatch(for: offset)?.signature == offset.signature)
+
+        let identities = DisplayIdentityStore(defaults: defaults, prefix: "displaySmoke")
+        identities.remember(reconnectSaved, assignmentKey: reconnectSaved.durableKey)
+        precondition(identities.previousAssignmentKey(for: reconnectCurrent,
+                                                       proposedKey: reconnectCurrent.durableKey) == reconnectSaved.durableKey)
+        identities.remember(twinA, assignmentKey: "twin-a")
+        identities.remember(twinB, assignmentKey: "twin-b")
+        precondition(identities.previousAssignmentKey(for: twinSaved, proposedKey: "new-twin") == nil)
     }
 }
