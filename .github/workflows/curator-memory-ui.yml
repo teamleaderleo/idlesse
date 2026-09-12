@@ -16,7 +16,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Apply memory UI patch
-        run: python3 .github/curator_memory_ui_patch.py
+        run: |
+          python3 .github/curator_memory_ui_fix.py
+          python3 .github/curator_memory_ui_patch.py
       - name: Run existing and focused tests
         run: bash test.sh
       - name: Compile app
