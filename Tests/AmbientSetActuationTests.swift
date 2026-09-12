@@ -2,6 +2,8 @@ import Foundation
 
 @main
 private struct AmbientSetActuationTests {
+    private enum InjectedFailure: Error { case write }
+
     private static func fail(_ message: String) -> Never {
         fputs("AmbientSetActuationTests: \(message)\n", stderr)
         exit(1)
@@ -77,6 +79,74 @@ private struct AmbientSetActuationTests {
             let safe = try AmbientLegacyMigrationPlan.make(collections: [], followsSun: false,
                                                             nightSceneID: nil, bedtime: bedtime)
             expect(safe.count == 1 && safe[0].id == "legacy.bedtime", "dim-only Bedtime migration should work without collection schedules")
+        }
+
+        // Arrangement Default keeps the complete display assignment intent and
+        // rejects oversized/unbounded persisted values before they reach actuation.
+        do {
+            let plan = PersistedWallpaperAssignmentPlan(
+                mode: .perDisplay,
+                topologySignature: "desk+dock",
+                baseBookmark: Data([1, 2, 3]),
+                assignments: [
+                    .init(persistentKey: "display-a", bookmark: Data([4]), explicit: true),
+                    .init(persistentKey: "display-b", bookmark: Data([5]), explicit: true),
+                ])
+            expect(plan.isValid, "valid per-display Arrangement Default rejected")
+            let snapshot = AmbientArrangementSnapshot(wallpaperPlan: plan,
+                                                      filesVisible: false,
+                                                      widgetsVisible: true,
+                                                      dimming: .init(enabled: true, level: 0.72))
+            expect(snapshot.resolvedState.filesVisible == false, "Files baseline changed")
+            expect(snapshot.resolvedState.widgetsVisible == true, "Widgets baseline changed")
+            expect(snapshot.resolvedState.dimming == .init(enabled: true, level: 0.72), "real dimming baseline changed")
+            expect(snapshot.resolvedState.wallpaper == AmbientSetActuationPolicy.arrangementDefaultTarget,
+                   "Arrangement Default sentinel changed")
+
+            let tooMany = PersistedWallpaperAssignmentPlan(
+                mode: .sameOnAll,
+                topologySignature: "bad",
+                baseBookmark: nil,
+                assignments: (0...PersistedWallpaperAssignmentPlan.maxAssignments).map {
+                    .init(persistentKey: "d\($0)", bookmark: Data([1]), explicit: true)
+                })
+            expect(!tooMany.isValid, "unbounded display assignment snapshot accepted")
+        }
+
+        // Legacy schedule handoff transforms every scheduled collection in one
+        // catalog value. A writer failure occurs before any replacement is visible.
+        do {
+            var catalog = SceneLibraryStore.Catalog()
+            catalog.collections = [
+                .init(name: "Morning", playback: .init(minutes: 10, shuffle: false,
+                                                       startMinute: 480, endMinute: 600, weekdays: [2, 3])),
+                .init(name: "Evening", playback: .init(minutes: 20, shuffle: true,
+                                                       startMinute: 1080, endMinute: 1320, weekdays: nil)),
+                .init(name: "Manual", playback: .init(minutes: 30, shuffle: false,
+                                                      startMinute: nil, endMinute: nil, weekdays: nil)),
+            ]
+            let backup = AmbientLegacyScheduleTransaction.backup(from: catalog)
+            expect(backup.count == 2, "legacy schedule backup lost scheduled collections")
+            let suspended = AmbientLegacyScheduleTransaction.suspending(catalog)
+            expect(suspended.collections[0].playback?.startMinute == nil &&
+                   suspended.collections[1].playback?.endMinute == nil,
+                   "legacy schedules were only partially suspended")
+            let restored = AmbientLegacyScheduleTransaction.restoring(suspended, backup: backup)
+            expect(restored.collections[0].playback == catalog.collections[0].playback &&
+                   restored.collections[1].playback == catalog.collections[1].playback,
+                   "legacy schedule rollback did not restore the original playback values")
+
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-ambient-atomic-\(UUID()).json")
+            let original = Data("sentinel".utf8)
+            try original.write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+            do {
+                try AmbientLegacyScheduleTransaction.write(suspended, to: file) { _, _ in
+                    throw InjectedFailure.write
+                }
+                fail("injected schedule write failure was swallowed")
+            } catch InjectedFailure.write { }
+            expect(try Data(contentsOf: file) == original, "failed cutover modified the Library index")
         }
 
         print("AmbientSetActuationTests passed")
