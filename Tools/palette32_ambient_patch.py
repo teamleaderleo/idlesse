@@ -35,7 +35,8 @@ replace(path, '''struct AmbientWallpaperTarget: Codable, Equatable, Hashable {
         !id.isEmpty && id.count <= Self.maxIdentifierLength && (kind == .scene || variantID == nil)
     }
 
-    static func scene(_ id: String, variantID: UUID? = nil) -> Self {
+    static func scene(_ id: String) -> Self { .init(kind: .scene, id: id) }
+    static func scene(_ id: String, variantID: UUID?) -> Self {
         .init(kind: .scene, id: id, variantID: variantID)
     }
     static func collection(_ id: String) -> Self { .init(kind: .collection, id: id) }
