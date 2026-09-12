@@ -139,13 +139,10 @@ final class LibraryCardView: NSView {
         badgeLabel.frame = NSRect(x: 8, y: badgeY, width: frameRect.width - 16, height: 14)
         badgeLabel.font = .systemFont(ofSize: 10, weight: .regular)
         badgeLabel.textColor = .secondaryLabelColor
-        let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
-        if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
-            badgeLabel.stringValue = "VIDEO"
-        } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
-            badgeLabel.stringValue = "INTERACTIVE SCENE"
-        } else {
-            badgeLabel.stringValue = "IMAGE"
+        switch item.mediaKind {
+        case .video: badgeLabel.stringValue = "VIDEO"
+        case .scene: badgeLabel.stringValue = "INTERACTIVE SCENE"
+        case .image, .other: badgeLabel.stringValue = "IMAGE"
         }
         addSubview(badgeLabel)
 

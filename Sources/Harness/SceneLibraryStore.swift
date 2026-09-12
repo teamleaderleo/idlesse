@@ -623,6 +623,34 @@ final class SceneLibraryStore {
         NSError(domain: "IdlesseLibrary", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
     private func failure(_ text: String) -> NSError { Self.libraryFailure(text) }
+
+    /// Video/scene/image as the Library presents it. Individually imported
+    /// entries carry only a bookmark (no mediaType/relative path), so the
+    /// kind falls back to the resolved file extension; unresolvable items
+    /// stay .other and match no type filter.
+    enum MediaKind {
+        case video, scene, image, other
+    }
+
+    /// Pure apart from bookmark resolution: same extension sets the type
+    /// filters and grid badges have always used, now with a resolved-file
+    /// fallback for bookmark-only entries.
+    static func mediaKind(of entry: Entry, in store: SceneLibraryStore) -> MediaKind {
+        let type = (entry.mediaType ?? "").lowercased()
+        let path = (entry.relativeMediaPath ?? "").lowercased()
+        let ext: String
+        if !path.isEmpty {
+            ext = (path as NSString).pathExtension
+        } else if let resolved = try? store.resolve(entry) {
+            ext = resolved.pathExtension.lowercased()
+        } else {
+            ext = ""
+        }
+        if ["mp4", "mov"].contains(ext) || type == "video" { return .video }
+        if ext == "idlesse" || type == "scene" { return .scene }
+        if ["jpg", "jpeg", "png", "heic"].contains(ext) || type == "image" { return .image }
+        return .other
+    }
 }
 
 /// Session-only rotation. A shuffle bag exhausts every member before repeating.

@@ -10,6 +10,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let title: String
         let builtin: URL?
         let entry: SceneLibraryStore.Entry?
+        let mediaKind: SceneLibraryStore.MediaKind
     }
     private struct OpenedItem {
         let url: URL
@@ -349,8 +350,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return variants[name] ?? name.replacingOccurrences(of: "-", with: " ")
     }
     private func allItems() -> [Item] {
-        Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil) }
-            + store.catalog.entries.map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
+        Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil, mediaKind: .scene) }
+            + store.catalog.entries.map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0, mediaKind: SceneLibraryStore.mediaKind(of: $0, in: store)) }
     }
     /// Shared with first-run onboarding so both list the same starters.
     static func builtinScenes() -> [(name: String, title: String, url: URL)] {
@@ -451,15 +452,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
             case 3: return matches && store.catalog.favorites.contains(item.id)
-            case 4:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video")
-            case 5:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene")
-            case 6:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") || path.hasSuffix(".png") || path.hasSuffix(".heic") || item.entry?.mediaType == "image")
+            case 4: return matches && item.mediaKind == .video
+            case 5: return matches && item.mediaKind == .scene
+            case 6: return matches && item.mediaKind == .image
             default: return matches
             }
         }.sorted {
