@@ -402,6 +402,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         return state + " · " + title
     }
     var isRunning: Bool { selectedURL != nil }
+    var activeScene: SceneDescriptor? { playable }
+    var canPauseActiveScene: Bool { isRunning && selectedIsAnimated }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
     /// Set by AmbientModesController while a scheduled scene is showing so the
     /// bedtime shade doesn't pause the night scene it just switched to.
@@ -1258,23 +1260,32 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         surfaces.forEach { _ = $0.updateScene(playable) }
         updateMenu()
     }
+    func applySceneParameters(_ parameters: [String: SceneParameter]) throws {
+        guard let original = playable, !isLoading,
+              Set(parameters.keys) == Set(original.parameters.keys),
+              parameters.values.allSatisfy(\.isValid) else {
+            throw SceneError.invalid("The active scene controls changed. Select the wallpaper again and retry.")
+        }
+        var next = original
+        next.parameters = parameters
+        _ = try next.evaluated()
+        for surface in surfaces {
+            guard surface.updateScene(next) else {
+                surfaces.forEach { _ = $0.updateScene(original) }
+                throw SceneError.invalid("The scene controls could not be applied. The previous values were restored.")
+            }
+        }
+        playable = next
+        updateMenu()
+    }
+
     @objc private func editControls() {
         guard let original = playable, !isLoading else { return }
         SceneParameterControls.present(scene: original, window: nil) { [weak self] parameters in
             guard let self, self.playable?.parameters == original.parameters, !self.isLoading,
                   self.playable?.allNodes.map(\.id) == original.allNodes.map(\.id) else { return }
-            var next = original
-            next.parameters = parameters
-            do { _ = try next.evaluated() } catch { self.showError(error.localizedDescription); return }
-            for surface in self.surfaces {
-                guard surface.updateScene(next) else {
-                    self.surfaces.forEach { _ = $0.updateScene(original) }
-                    self.showError("The scene controls could not be applied. The previous values were restored.")
-                    return
-                }
-            }
-            self.playable = next
-            self.updateMenu()
+            do { try self.applySceneParameters(parameters) }
+            catch { self.showError(error.localizedDescription) }
         }
     }
     /// Menu-bar quit must behave like Cmd+Q: preserve the resume bookmark so

@@ -30,6 +30,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let gridScroll = NSScrollView()
     private let gridView = LibraryGridView()
     private let poster = NSImageView()
+    private let sceneControlsScroll = NSScrollView()
+    private let desktopActions = NSStackView()
+    private let activeDesktopLabel = NSTextField(labelWithString: "● On Desktop")
+    private let previousDesktop = NSButton(title: "Previous", target: nil, action: nil)
+    private let pauseDesktop = NSButton(title: "Pause", target: nil, action: nil)
+    private let nextDesktop = NSButton(title: "Next", target: nil, action: nil)
+    private var inlineControls: SceneParameterControls?
+    private var inlineParameterItemID: String?
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
@@ -55,6 +63,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selected: Item? {
         didSet { UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID") }
     }
+    struct DesktopState {
+        let url: URL?
+        let paused: Bool
+        let canPause: Bool
+        let scene: SceneDescriptor?
+    }
+    var desktopStateProvider: (() -> DesktopState)?
+    var onToggleDesktopPause: (() -> Void)?
+    var onCycleDesktop: ((Int) -> Void)?
+    var onApplyDesktopParameters: (([String: SceneParameter]) throws -> Void)?
+    private var activeURL: URL?
+    private var activeID: String?
+    private var desktopPaused = false
+    private var desktopCanPause = false
+    private var desktopScene: SceneDescriptor?
     /// Launch-restore for the filter popup, matched by title and consumed by
     /// the first reload (a deleted collection falls back to All Wallpapers).
     private var pendingFilterTitle: String?
@@ -245,11 +268,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         heading.orientation = .horizontal
         let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
         primary.spacing = 10
-        for button in [add, apply, edit] { button.bezelStyle = .rounded }
+        activeDesktopLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        activeDesktopLabel.textColor = .controlAccentColor
+        previousDesktop.target = self; previousDesktop.action = #selector(previousDesktopAction)
+        pauseDesktop.target = self; pauseDesktop.action = #selector(toggleDesktopPauseAction)
+        nextDesktop.target = self; nextDesktop.action = #selector(nextDesktopAction)
+        desktopActions.setViews([activeDesktopLabel, previousDesktop, pauseDesktop, nextDesktop], in: .leading)
+        desktopActions.orientation = .horizontal
+        desktopActions.spacing = 8
+        desktopActions.isHidden = true
+        sceneControlsScroll.hasVerticalScroller = true
+        sceneControlsScroll.autohidesScrollers = true
+        sceneControlsScroll.drawsBackground = false
+        sceneControlsScroll.isHidden = true
+        let previewRow = NSStackView(views: [poster, sceneControlsScroll])
+        previewRow.orientation = .horizontal
+        previewRow.alignment = .top
+        previewRow.spacing = 14
+        previewRow.distribution = .fill
+        for button in [add, apply, edit, previousDesktop, pauseDesktop, nextDesktop] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
         apply.contentTintColor = .white
         detail.font = .systemFont(ofSize: 12)
-        right.setViews([poster, heading, detail, primary], in: .leading)
+        right.setViews([previewRow, heading, detail, desktopActions, primary], in: .leading)
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
@@ -271,8 +312,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
             right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
             right.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
-            poster.widthAnchor.constraint(equalTo: right.widthAnchor),
+            previewRow.widthAnchor.constraint(equalTo: right.widthAnchor),
             poster.heightAnchor.constraint(equalTo: poster.widthAnchor, multiplier: 9.0 / 16.0),
+            sceneControlsScroll.widthAnchor.constraint(equalToConstant: 340),
+            sceneControlsScroll.heightAnchor.constraint(equalToConstant: 220),
             heading.widthAnchor.constraint(equalTo: right.widthAnchor),
             detail.widthAnchor.constraint(equalTo: right.widthAnchor),
             gridScroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
@@ -290,7 +333,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         right.isHidden = isGrid
         gridScroll.isHidden = !isGrid
         if isGrid {
-            gridView.update(items: items, selectedID: selected?.id)
+            gridView.update(items: items, selectedID: selected?.id, activeID: activeID)
         }
     }
 
@@ -298,6 +341,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var presentationWindow: NSWindow? { hostWindow ?? window }
     var embedded = false
     func refreshEmbedded() {
+        refreshDesktopState()
         if selected != nil { preview() }
     }
     func show() {
@@ -306,8 +350,90 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         NSApp.activate(ignoringOtherApps: true)
         startHoverMonitor()
+        refreshDesktopState()
         if selected != nil { preview() }
     }
+
+    func refreshDesktopState() {
+        let previousID = activeID
+        let previousParameters = desktopScene?.parameters
+        pullDesktopState()
+        gridView.setActive(id: activeID)
+        var changed = IndexSet()
+        for (index, item) in items.enumerated() where item.id == previousID || item.id == activeID {
+            changed.insert(index)
+        }
+        if !changed.isEmpty {
+            table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
+        }
+        updateDesktopControls(force: previousID != activeID || previousParameters != desktopScene?.parameters)
+    }
+
+    private func pullDesktopState() {
+        guard let state = desktopStateProvider?() else { return }
+        activeURL = state.url
+        desktopPaused = state.paused
+        desktopCanPause = state.canPause
+        desktopScene = state.scene
+        activeID = state.url.flatMap { itemID(for: $0) }
+    }
+
+    private func itemID(for url: URL) -> String? {
+        let target = url.standardizedFileURL
+        for item in items {
+            if let builtin = item.builtin, builtin.standardizedFileURL == target { return item.id }
+            if let entry = item.entry, let access = try? store.access(entry),
+               access.url.standardizedFileURL == target { return item.id }
+        }
+        return nil
+    }
+
+    private func updateDesktopControls(force: Bool = false) {
+        let activeSelected = activeURL != nil && selected?.id == activeID
+        desktopActions.isHidden = !activeSelected
+        pauseDesktop.title = desktopPaused ? "Resume" : "Pause"
+        pauseDesktop.isEnabled = activeSelected && desktopCanPause
+        previousDesktop.isEnabled = activeSelected && items.count > 1
+        nextDesktop.isEnabled = activeSelected && items.count > 1
+
+        guard activeSelected, let scene = desktopScene, !scene.parameters.isEmpty else {
+            sceneControlsScroll.isHidden = true
+            sceneControlsScroll.documentView = nil
+            inlineControls = nil
+            inlineParameterItemID = nil
+            return
+        }
+        if !force, inlineParameterItemID == selected?.id,
+           inlineControls?.currentValues() == scene.parameters {
+            sceneControlsScroll.isHidden = false
+            return
+        }
+        let controls = SceneParameterControls(parameters: scene.parameters)
+        controls.onChange = { [weak self] values in
+            guard let self, self.selected?.id == self.activeID else { return }
+            do {
+                try self.onApplyDesktopParameters?(values)
+                if var current = self.desktopScene {
+                    current.parameters = values
+                    self.desktopScene = current
+                }
+            } catch {
+                self.detail.stringValue = "Scene controls: " + error.localizedDescription
+            }
+        }
+        inlineControls = controls
+        inlineParameterItemID = selected?.id
+        sceneControlsScroll.documentView = controls
+        sceneControlsScroll.isHidden = false
+    }
+
+    @objc private func toggleDesktopPauseAction() {
+        onToggleDesktopPause?()
+        refreshDesktopState()
+    }
+    @objc private func previousDesktopAction() { onCycleDesktop?(-1) }
+    @objc private func nextDesktopAction() { onCycleDesktop?(1) }
+
     private func startHoverMonitor() {
         guard hoverMonitor == nil else { return }
         hoverMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
@@ -492,8 +618,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
+        pullDesktopState()
         table.reloadData()
-        gridView.update(items: items, selectedID: selected?.id)
+        gridView.update(items: items, selectedID: selected?.id, activeID: activeID)
         updateEmptyState(activeCollection: activeCollection)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -513,7 +640,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item = items[row]
-        let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
+        let activeMark = item.id == activeID ? "◉  " : ""
+        let text = NSTextField(labelWithString: activeMark + (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
         text.lineBreakMode = .byTruncatingTail
         let cell = NSTableCellView()
         cell.textField = text
@@ -687,6 +815,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
         more.item(at: 3)?.isEnabled = selected?.entry != nil
+        updateDesktopControls()
         collectionActions.removeAllItems()
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
@@ -1251,6 +1380,24 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]
+        let activeURL = controller.items[index].builtin!
+        var activeScene = try LocalSceneSource.read(activeURL)
+        activeScene.parameters["smoke"] = SceneParameter(name: "Smoke", value: 0.5, min: 0, max: 1)
+        var desktopPaused = false
+        var pauseCalls = 0
+        controller.desktopStateProvider = {
+            .init(url: activeURL, paused: desktopPaused, canPause: true, scene: activeScene)
+        }
+        controller.onToggleDesktopPause = { desktopPaused.toggle(); pauseCalls += 1 }
+        controller.onApplyDesktopParameters = { values in activeScene.parameters = values }
+        controller.refreshDesktopState()
+        precondition(controller.activeID == controller.selected?.id, "Active wallpaper must be distinct from cursor selection")
+        precondition(!controller.desktopActions.isHidden && controller.pauseDesktop.title == "Pause")
+        precondition(controller.sceneControlsScroll.documentView is SceneParameterControls,
+                     "Active declared scene controls must appear inline")
+        controller.toggleDesktopPauseAction()
+        precondition(pauseCalls == 1 && controller.pauseDesktop.title == "Resume",
+                     "Inline Pause/Resume must reflect desktop state")
         controller.preview()
         let deadline = Date().addingTimeInterval(10)
         while controller.task != nil && Date() < deadline {
@@ -1399,6 +1546,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         controller.window?.close()
-        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, draft routing, procedural thumbnails\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
+        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, active desktop controls, draft routing, procedural thumbnails\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
     }
 }

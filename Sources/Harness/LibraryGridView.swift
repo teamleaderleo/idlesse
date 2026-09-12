@@ -89,6 +89,7 @@ final class LibraryGridView: NSView {
 
     private var items: [LibraryItem] = []
     private var selectedID: String?
+    private var activeID: String?
     private var activeCards: [Int: LibraryCardView] = [:]
     private var reusableCards: [LibraryCardView] = []
     private var layoutPlan: LibraryGridLayoutPlan?
@@ -103,9 +104,10 @@ final class LibraryGridView: NSView {
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
     }
 
-    func update(items: [LibraryItem], selectedID: String?) {
+    func update(items: [LibraryItem], selectedID: String?, activeID: String? = nil) {
         self.items = items
         self.selectedID = selectedID
+        self.activeID = activeID
         relayout()
     }
 
@@ -113,6 +115,15 @@ final class LibraryGridView: NSView {
         selectedID = id
         for card in activeCards.values {
             card.isSelected = card.item?.id == id
+        }
+    }
+
+    /// Marks the wallpaper currently committed to the desktop, independent of
+    /// cursor selection. Reused cards receive this state during configuration.
+    func setActive(id: String?) {
+        activeID = id
+        for card in activeCards.values {
+            card.isActive = card.item?.id == id
         }
     }
 
@@ -221,6 +232,7 @@ final class LibraryGridView: NSView {
             }
             if let frame = plan.frame(for: index) { card.frame = frame }
             card.isSelected = item.id == selectedID
+            card.isActive = item.id == activeID
             if changed, let onRequestThumbnail {
                 card.requestThumbnail(using: onRequestThumbnail)
             }
@@ -271,12 +283,16 @@ final class LibraryCardView: NSView {
     var isSelected = false {
         didSet { updateBorder() }
     }
+    var isActive = false {
+        didSet { activeBadge.isHidden = !isActive }
+    }
     var onClick: ((LibraryItem) -> Void)?
     var onDoubleClick: ((LibraryItem) -> Void)?
 
     let thumbnailView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let badgeLabel = NSTextField(labelWithString: "")
+    private let activeBadge = NSTextField(labelWithString: "On Desktop")
     private var thumbnailWork: DispatchWorkItem?
     private var thumbnailGeneration: UInt = 0
 
@@ -301,6 +317,19 @@ final class LibraryCardView: NSView {
         badgeLabel.font = .systemFont(ofSize: 10, weight: .regular)
         badgeLabel.textColor = .secondaryLabelColor
         addSubview(badgeLabel)
+
+        activeBadge.font = .systemFont(ofSize: 10, weight: .semibold)
+        activeBadge.textColor = .white
+        activeBadge.alignment = .center
+        activeBadge.wantsLayer = true
+        activeBadge.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        activeBadge.layer?.cornerRadius = 7
+        activeBadge.isBordered = false
+        activeBadge.isEditable = false
+        activeBadge.isSelectable = false
+        activeBadge.isHidden = true
+        activeBadge.setAccessibilityLabel("Currently on desktop")
+        addSubview(activeBadge)
         updateBorder()
     }
 
@@ -310,6 +339,7 @@ final class LibraryCardView: NSView {
         super.layout()
         let thumbHeight = bounds.width * 9.0 / 16.0
         thumbnailView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: thumbHeight)
+        activeBadge.frame = NSRect(x: 7, y: 7, width: 76, height: 18)
         let labelY = thumbHeight + 5
         titleLabel.frame = NSRect(x: 8, y: labelY, width: max(0, bounds.width - 16), height: 18)
         badgeLabel.frame = NSRect(x: 8, y: labelY + 18, width: max(0, bounds.width - 16), height: 14)
@@ -343,6 +373,7 @@ final class LibraryCardView: NSView {
         cancelThumbnailRequest()
         item = nil
         isSelected = false
+        isActive = false
         thumbnailView.image = Self.placeholderImage
         titleLabel.stringValue = ""
         badgeLabel.stringValue = ""

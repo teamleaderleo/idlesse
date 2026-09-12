@@ -112,6 +112,20 @@ does not change revision 21 scene format.
   Move Scene Earlier/Later arranges playback. Collection views show playback order,
   regardless of the global sort setting.
 
+## Daily active-wallpaper controls
+
+The Library distinguishes the wallpaper committed to the desktop from the current
+cursor selection. List mode uses a `◉` marker and grid mode uses an **On Desktop** pill;
+virtualized grid cards reapply that state whenever a card is reused after scrolling.
+
+Select the active wallpaper to get the daily controls inline: Previous, Pause/Resume,
+and Next. Pause is enabled for animated scenes. When the active `.idlesse` scene
+declares scene controls, the same `SceneParameterControls` used by Studio and the
+wallpaper menu appears beside the poster and applies validated values live to the
+running surfaces. These desktop tweaks remain session values for the active scene;
+editing package defaults still belongs in Studio. Collections, Sources, transitions,
+removal, scheduling, and other long-tail commands remain in their existing menus.
+
 ## Posters and resource bounds
 
 Select a scene for a still poster. Double-click or Set Wallpaper applies it. Open in

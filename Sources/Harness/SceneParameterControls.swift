@@ -1,11 +1,15 @@
 import AppKit
 
 /// Generated controls shared by Studio and the desktop host. No media is copied.
-final class SceneParameterControls: NSView {
+final class SceneParameterControls: NSView, NSTextFieldDelegate {
     private var sliders: [String: NSSlider] = [:]
     private var labels: [Int: NSTextField] = [:]
     private var typedControls: [String: NSControl] = [:]
+    private let sourceParameters: [String: SceneParameter]
+    var onChange: (([String: SceneParameter]) -> Void)?
+
     init(parameters: [String: SceneParameter]) {
+        sourceParameters = parameters
         let keys = parameters.keys.sorted()
         // Keep the pre-super layout calculation explicit: Swift's optimized
         // ownership pass crashes on the map/reduce expression in this initializer.
@@ -48,11 +52,14 @@ final class SceneParameterControls: NSView {
                     let field = NSTextField(string: parameter.text)
                     field.usesSingleLineMode = false
                     field.cell?.wraps = true; field.cell?.isScrollable = false
+                    field.delegate = self
                     control = field
                 case .number: preconditionFailure()
                 }
                 control.frame = NSRect(x: 0, y: y + 4, width: 330, height: parameter.type == .string ? 72 : 26)
                 control.setAccessibilityLabel(parameter.name)
+                control.target = self
+                control.action = #selector(typedChanged)
                 addSubview(control); typedControls[key] = control
                 continue
             }
@@ -68,7 +75,36 @@ final class SceneParameterControls: NSView {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc private func changed(_ sender: NSSlider) { labels[sender.tag]?.stringValue = String(format: "%.3f", sender.doubleValue) }
+
+    @objc private func changed(_ sender: NSSlider) {
+        labels[sender.tag]?.stringValue = String(format: "%.3f", sender.doubleValue)
+        emitChange()
+    }
+    @objc private func typedChanged(_ sender: NSControl) { emitChange() }
+    func controlTextDidChange(_ obj: Notification) { emitChange() }
+
+    /// Returns a validated snapshot of the values currently visible in the
+    /// generated controls. Studio dialogs and Library inline controls share it.
+    func currentValues() -> [String: SceneParameter]? {
+        var values = sourceParameters
+        for (id, slider) in sliders { values[id]?.value = slider.doubleValue }
+        for (id, control) in typedControls {
+            if let toggle = control as? NSButton { values[id]?.boolean = toggle.state == .on }
+            if let menu = control as? NSPopUpButton { values[id]?.text = menu.titleOfSelectedItem ?? "" }
+            if let field = control as? NSTextField { values[id]?.text = field.stringValue }
+            if let well = control as? NSColorWell, let color = well.color.usingColorSpace(.sRGB) {
+                values[id]?.text = String(format: "#%02X%02X%02X%02X", Int((color.redComponent * 255).rounded()),
+                    Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()), Int((color.alphaComponent * 255).rounded()))
+            }
+        }
+        return values.values.allSatisfy(\.isValid) ? values : nil
+    }
+
+    private func emitChange() {
+        guard let values = currentValues() else { return }
+        onChange?(values)
+    }
+
     static func create(window: NSWindow, node: SceneNode?, completion: @escaping (SceneParameter) -> Void) {
         let dialog = NSAlert(); dialog.messageText = "New Scene Control"
         dialog.informativeText = "Numbers connect through Bind…. Other types can control the selected layer’s visibility, blend mode, text or fill."
@@ -128,18 +164,7 @@ final class SceneParameterControls: NSView {
         alert.accessoryView = scroll
         let finish: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .alertFirstButtonReturn else { return }
-            var values = scene.parameters
-            for (id, slider) in controls.sliders { values[id]?.value = slider.doubleValue }
-            for (id, control) in controls.typedControls {
-                if let toggle = control as? NSButton { values[id]?.boolean = toggle.state == .on }
-                if let menu = control as? NSPopUpButton { values[id]?.text = menu.titleOfSelectedItem ?? "" }
-                if let field = control as? NSTextField { values[id]?.text = field.stringValue }
-                if let well = control as? NSColorWell, let color = well.color.usingColorSpace(.sRGB) {
-                    values[id]?.text = String(format: "#%02X%02X%02X%02X", Int((color.redComponent * 255).rounded()),
-                        Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()), Int((color.alphaComponent * 255).rounded()))
-                }
-            }
-            guard values.values.allSatisfy(\.isValid) else {
+            guard let values = controls.currentValues() else {
                 let error = NSAlert(); error.messageText = "Invalid control value"
                 error.informativeText = "Text controls allow up to 4,096 UTF-8 bytes. Your scene has not changed."
                 error.runModal(); return
