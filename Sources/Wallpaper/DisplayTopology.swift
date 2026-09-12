@@ -230,13 +230,20 @@ struct KnownDisplayArrangementsStore {
     }
 
     func bestMatch(for topology: DisplayTopology) -> DisplayArrangementProfile? {
-        if let exact = profiles().first(where: { $0.signature == topology.signature }) { return exact }
+        let saved = profiles()
+        if let exact = saved.first(where: { $0.signature == topology.signature }) { return exact }
         let current = Set(topology.displays.map { topology.persistentKey(for: $0) })
-        return profiles().map { profile in
-            (profile, Set(profile.memberKeys).intersection(current).count)
-        }.filter { $0.1 > 0 }.max { lhs, rhs in
-            lhs.1 == rhs.1 ? lhs.0.lastSeen < rhs.0.lastSeen : lhs.1 < rhs.1
-        }?.0
+        var best: DisplayArrangementProfile?
+        var bestCount = 0
+        for profile in saved {
+            let count = Set(profile.memberKeys).intersection(current).count
+            guard count > 0 else { continue }
+            if count > bestCount || (count == bestCount && (best == nil || profile.lastSeen > best!.lastSeen)) {
+                best = profile
+                bestCount = count
+            }
+        }
+        return best
     }
 
     private func save(_ profiles: [DisplayArrangementProfile]) {
