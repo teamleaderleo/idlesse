@@ -206,6 +206,7 @@ struct SceneDescriptor: Codable, Sendable {
         return result
     }
     func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
+        if let focus, !focus.x.isFinite || !focus.y.isFinite { throw SceneError.invalid("Focus coordinates must be finite.") }
         if validating {
             try metadata?.validate()
             guard (components?.count ?? 0) <= 8 else { throw SceneError.invalid("Use at most eight package-local presets.") }
@@ -382,9 +383,10 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
 enum SceneFormat {
     static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants"]
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants", "focus"]
     static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
+        if scene.focus != nil { result.insert("focus") }
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
         if scene.allNodes.contains(where: { $0.kind == .particles }) { result.insert("particles") }
         if scene.allNodes.contains(where: { $0.style != .plain }) { result.insert("effects") }
@@ -1180,6 +1182,7 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version == SceneFormat.revision || scene.variants == nil else {
             throw SceneError.invalid("Scene variants require revision 21.")
         }
+        guard scene.focus == nil || manifest.version == SceneFormat.revision else { throw SceneError.invalid("Focus requires revision 21.") }
         let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [], focus: scene.focus, bleed: scene.bleed)
         if manifest.version == SceneFormat.revision {
             guard SceneFormat.features(result).isSubset(of: Set(manifest.features ?? [])) else { throw SceneError.invalid("The manifest is missing required scene features.") }
@@ -1389,6 +1392,7 @@ enum ScenePackageWriter {
         }
         let nodes = try scene.nodes.map(encode)
         var contents: [String: Any] = ["nodes": nodes]
+        if let focus = scene.focus { contents["focus"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(focus)) }
         if let components = scene.components {
             contents["components"] = try components.mapValues { component -> [String: Any] in
                 ["name": component.name, "node": try encode(component.node),
