@@ -134,11 +134,21 @@ extension StudioWindowController {
         controlled.bindings = [.init(target: .init(nodeID: childID, property: .opacity), parameter: "amount")]
         precondition(editor.applyEdit(controlled.nodes, selected: 1, name: "Bind", controls: controlled))
         precondition(editor.renderer === styledRenderer && editor.scene.bindings.count == 1)
-        precondition(StudioInspectorState.numeric(.init(nodeID: childID, property: .opacity), in: editor.scene) == .driven)
+        let opacityTarget = ScenePropertyAddress(nodeID: childID, property: .opacity)
+        precondition(StudioInspectorState.numeric(opacityTarget, in: editor.scene) == .controlled)
+        var signalControlled = editor.scene
+        signalControlled.bindings = [.init(target: opacityTarget, signal: .sine)]
+        precondition(editor.applyEdit(signalControlled.nodes, selected: 1, name: "Drive", controls: signalControlled))
+        precondition(StudioInspectorState.numeric(opacityTarget, in: editor.scene) == .driven)
+        precondition(editor.renderer === styledRenderer)
+        editor.document.undoManager.undo()
+        precondition(StudioInspectorState.numeric(opacityTarget, in: editor.scene) == .controlled)
         editor.document.undoManager.undo()
         precondition(editor.scene.bindings.isEmpty)
+        precondition(StudioInspectorState.numeric(opacityTarget, in: editor.scene) == .staticValue)
         editor.document.undoManager.redo()
         precondition(editor.scene.parameters["amount"]?.value == 0.5 && editor.scene.bindings.count == 1)
+        precondition(StudioInspectorState.numeric(opacityTarget, in: editor.scene) == .controlled)
         editor.editor.rename("Bound child")
         precondition(editor.scene.bindings.count == 1 && editor.scene.parameters["amount"]?.value == 0.5)
         var keyed = editor.scene
