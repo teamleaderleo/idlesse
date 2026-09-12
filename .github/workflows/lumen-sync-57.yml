@@ -1,0 +1,37 @@
+name: Lumen sync 57 with main
+
+on:
+  push:
+    branches:
+      - lumen/issue-57-inline-library-controls
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lumen/issue-57-inline-library-controls
+          fetch-depth: 0
+      - name: Merge current main
+        run: |
+          git config user.name "Lumen"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          if ! git merge --no-edit origin/main; then
+            echo "Conflicts:"
+            git diff --name-only --diff-filter=U
+            git status --short
+            exit 1
+          fi
+      - name: Remove branch-only sync helper and push
+        run: |
+          rm .github/workflows/lumen-sync-57.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Remove branch sync helper"
+          git push origin HEAD:lumen/issue-57-inline-library-controls
