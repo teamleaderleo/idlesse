@@ -12,11 +12,19 @@ struct DisplayIdentity: Codable, Hashable {
     var physicalHeightMM: Int
     var name: String
 
+    /// Canonical persistence key. Hardware identity survives a live/session UUID
+    /// change; ColorSync UUID remains an exact-match signal and the #52 session
+    /// alias. Indistinguishable hardware is disambiguated by topology position.
     var durableKey: String {
-        if let colorSyncUUID, !colorSyncUUID.isEmpty { return "uuid:\(colorSyncUUID.lowercased())" }
         let serial = serialNumber == 0 ? "none" : String(serialNumber)
         let foldedName = name.lowercased().replacingOccurrences(of: " ", with: "-")
-        return "hw:\(vendorID):\(modelID):\(serial):\(builtIn ? 1 : 0):\(physicalWidthMM)x\(physicalHeightMM):\(foldedName)"
+        let hasHardwareIdentity = vendorID != 0 || modelID != 0 || serialNumber != 0 ||
+            physicalWidthMM > 0 || physicalHeightMM > 0
+        if hasHardwareIdentity {
+            return "hw:\(vendorID):\(modelID):\(serial):\(builtIn ? 1 : 0):\(physicalWidthMM)x\(physicalHeightMM):\(foldedName)"
+        }
+        if let colorSyncUUID, !colorSyncUUID.isEmpty { return "uuid:\(colorSyncUUID.lowercased())" }
+        return "name:\(foldedName)"
     }
 
     static func capture(screen: NSScreen, displayID: UInt32) -> DisplayIdentity {
@@ -107,9 +115,6 @@ struct DisplayTopology {
         return master
     }
 
-    /// Exact hardware identity leads. Only indistinguishable siblings receive a
-    /// deterministic relative-position suffix so CGDirectDisplayID never leaks
-    /// into durable persistence.
     func persistentKey(for display: DisplaySnapshot) -> String {
         let base = display.identity.durableKey
         let siblings = displays.filter { $0.identity.durableKey == base }
@@ -189,12 +194,14 @@ struct DisplayArrangementProfile: Codable, Equatable {
 
 struct KnownDisplayArrangementsStore {
     private static let key = "wallpaper.displayArrangements.v1"
+    private static let maxProfiles = 16
+    private static let maxMembersPerProfile = 16
     var defaults: UserDefaults
 
     func profiles() -> [DisplayArrangementProfile] {
         guard let data = defaults.data(forKey: Self.key),
               let result = try? JSONDecoder().decode([DisplayArrangementProfile].self, from: data) else { return [] }
-        return result
+        return Array(result.sorted { $0.lastSeen > $1.lastSeen }.prefix(Self.maxProfiles))
     }
 
     @discardableResult
@@ -223,7 +230,8 @@ struct KnownDisplayArrangementsStore {
         }
         let profile = DisplayArrangementProfile(
             id: UUID(), name: name, signature: topology.signature,
-            memberKeys: topology.displays.map { topology.persistentKey(for: $0) }.sorted(), lastSeen: now)
+            memberKeys: Array(topology.displays.map { topology.persistentKey(for: $0) }.sorted().prefix(Self.maxMembersPerProfile)),
+            lastSeen: now)
         items.append(profile)
         save(items)
         return profile
@@ -247,7 +255,8 @@ struct KnownDisplayArrangementsStore {
     }
 
     private func save(_ profiles: [DisplayArrangementProfile]) {
-        guard let data = try? JSONEncoder().encode(profiles) else { return }
+        let bounded = Array(profiles.sorted { $0.lastSeen > $1.lastSeen }.prefix(Self.maxProfiles))
+        guard let data = try? JSONEncoder().encode(bounded) else { return }
         defaults.set(data, forKey: Self.key)
     }
 }
@@ -289,10 +298,12 @@ enum DisplayTopologySmoke {
         let mixedFrames = mixed.normalizedFrames(in: CGSize(width: 700, height: 360))
         precondition(mixedFrames[21]!.height > mixedFrames[20]!.height)
 
-        let reconnectSaved = DisplayIdentity(colorSyncUUID: nil, vendorID: 9, modelID: 99, serialNumber: 777,
+        let reconnectSaved = DisplayIdentity(colorSyncUUID: "OLD-SESSION-UUID", vendorID: 9, modelID: 99, serialNumber: 777,
                                              builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
         let reconnectCurrent = DisplayIdentity(colorSyncUUID: "NEW-SESSION-UUID", vendorID: 9, modelID: 99, serialNumber: 777,
                                                builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
+        precondition(reconnectSaved.durableKey == reconnectCurrent.durableKey,
+                     "Hardware canonical identity must survive a ColorSync UUID change")
         precondition(DisplayIdentity.bestMatch(for: reconnectSaved, among: [builtin, reconnectCurrent]) == reconnectCurrent)
 
         let suite = "DisplayTopologySmoke.\(UUID())"
