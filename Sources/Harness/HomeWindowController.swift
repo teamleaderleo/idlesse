@@ -438,6 +438,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     // MARK: - Now Playing
 
+    private static let transportItem = NSToolbarItem.Identifier("Idlesse.Home.Transport")
+    private static let settingsItem = NSToolbarItem.Identifier("Idlesse.Home.Settings")
     private static let nowPlayingItem = NSToolbarItem.Identifier("Idlesse.Home.NowPlaying")
 
     private func installToolbar() {
@@ -452,25 +454,44 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.nowPlayingItem]
+        [Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.nowPlayingItem, .flexibleSpace]
+        [Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.settingsItem {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+            item.label = "Settings"
+            item.toolTip = "Idlesse Settings (⌘,)"
+            item.target = self
+            item.action = #selector(openPreferences)
+            return item
+        }
+        if itemIdentifier == Self.transportItem {
+            configureTransport(previousButton, symbol: "backward.end.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
+            configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
+            configureTransport(nextButton, symbol: "forward.end.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
+            let transport = NSStackView(views: [previousButton, pauseButton, nextButton])
+            transport.spacing = 4
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.view = transport
+            item.label = "Playback"
+            return item
+        }
         guard itemIdentifier == Self.nowPlayingItem else { return nil }
-        configureTransport(previousButton, symbol: "backward.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
-        configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
-        configureTransport(nextButton, symbol: "forward.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
         nowPlayingButton.isBordered = false
         nowPlayingButton.target = self
         nowPlayingButton.action = #selector(showNowPlaying)
         nowPlayingButton.imagePosition = .imageLeading
         nowPlayingButton.alignment = .left
-        nowPlayingButton.toolTip = "Now Playing"
+        nowPlayingButton.toolTip = "Current wallpaper and playback options"
+        nowPlayingButton.font = .systemFont(ofSize: 13, weight: .medium)
+        (nowPlayingButton.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
         destinationLabel.font = .systemFont(ofSize: 11)
         destinationLabel.textColor = .secondaryLabelColor
         destinationLabel.lineBreakMode = .byTruncatingTail
@@ -479,9 +500,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 0
-        labels.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-        labels.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
-        let controls = NSStackView(views: [previousButton, pauseButton, nextButton, labels])
+        labels.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let controls = NSStackView(views: [labels])
         controls.spacing = 7
         controls.alignment = .centerY
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -494,13 +514,18 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private func configureTransport(_ button: NSButton, symbol: String, label: String, action: Selector) {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         button.isBordered = false
+        button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.setAccessibilityLabel(label)
         button.target = self
         button.action = action
         button.toolTip = label
     }
 
-    @objc private func previousWallpaper() { library.cycle(delta: -1); refreshState() }
-    @objc private func nextWallpaper() { library.cycle(delta: 1); refreshState() }
+    @objc private func previousWallpaper() { library.cycle(delta: -1, from: wallpaper.selectedURL); refreshState() }
+    @objc private func nextWallpaper() { library.cycle(delta: 1, from: wallpaper.selectedURL); refreshState() }
+    @objc private func openPreferences() { wallpaper.onShowSettings?() }
+
     @objc private func togglePause() { wallpaper.togglePause(); refreshState() }
 
     @objc private func showNowPlaying() {
@@ -550,9 +575,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         nowPlayingButton.image = cachedThumbnail ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
         pauseButton.image = NSImage(systemSymbolName: wallpaper.pausedByUser ? "play.fill" : "pause.fill",
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
+        pauseButton.toolTip = wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper"
+        pauseButton.setAccessibilityLabel(pauseButton.toolTip)
         pauseButton.isEnabled = url != nil
-        previousButton.isEnabled = url != nil
-        nextButton.isEnabled = true
+        previousButton.isEnabled = library.hasCycleCandidates
+        nextButton.isEnabled = library.hasCycleCandidates
         let count = NSScreen.screens.count
         var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
         if let rotation = rotationSummary() { parts.append(rotation) }
@@ -601,6 +628,12 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         precondition(home.rows.contains(.library) && home.rows.contains(.displays))
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
+        precondition(home.window.toolbar!.items.map(\.itemIdentifier).contains(Self.settingsItem))
+        var openedSettings = false
+        wallpaper.onShowSettings = { openedSettings = true }
+        home.openPreferences()
+        precondition(openedSettings)
+
         precondition(displayDestination.view.superview === home.displaysView)
         home.showLibraryScope(.favorites)
         precondition(home.currentRow == .favorites && !home.libraryView.isHidden)

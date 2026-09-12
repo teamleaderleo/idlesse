@@ -1048,10 +1048,22 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { detail.stringValue = error.localizedDescription }
     }
     @objc private func useScene() { act(editing: false) }
-    func cycle(delta: Int) {
-        guard !items.isEmpty else { return }
-        let current = selected.flatMap { item in items.firstIndex(where: { $0.id == item.id }) } ?? (delta >= 0 ? -1 : 0)
-        let next = (current + delta + items.count * 2) % items.count
+    var hasCycleCandidates: Bool { !items.isEmpty }
+
+    private func cycleIndex(delta: Int, from playingURL: URL?) -> Int? {
+        guard !items.isEmpty else { return nil }
+        // Browsing a poster must not silently move the transport's starting point.
+        let playingIndex = playingURL.flatMap { url in
+            items.firstIndex { item in
+                (try? open(item).url.standardizedFileURL) == url.standardizedFileURL
+            }
+        }
+        let current = playingIndex ?? (delta >= 0 ? -1 : 0)
+        return (current + delta + items.count * 2) % items.count
+    }
+
+    func cycle(delta: Int, from playingURL: URL? = nil) {
+        guard let next = cycleIndex(delta: delta, from: playingURL) else { return }
         table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         selected = items[next]
         gridView.select(id: selected?.id)
@@ -1263,6 +1275,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.droppedURLs(pasteboard) == [raw])
         precondition(controller.items.count == 8 && controller.items.contains { $0.title == "Desk Clock" })
         precondition(controller.sourceActions.itemArray.contains { $0.title == "Add Source…" })
+        let playing = try controller.open(controller.items[0]).url
+        controller.selected = controller.items[3]
+        precondition(controller.cycleIndex(delta: 1, from: playing) == 1,
+            "Transport must follow playback, not the selected poster")
+        precondition(controller.cycleIndex(delta: -1, from: playing) == controller.items.count - 1)
+        precondition(controller.cycleIndex(delta: 1, from: nil) == 0)
+        precondition(controller.cycleIndex(delta: -1, from: nil) == controller.items.count - 1)
+
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]
