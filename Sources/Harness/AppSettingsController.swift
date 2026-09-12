@@ -1,13 +1,8 @@
 import AppKit
 
-/// Session frame restore that refuses garbage: a saved frame from a different
-/// screen layout (or a runaway resize) that dwarfs the default size is
-/// discarded in favor of a centered default. Self-heals poisoned defaults.
-///
-/// Deliberately manual (no setFrameAutosaveName): AppKit's lazy autosave
-/// restore races validation and re-applies rejected frames after showing.
 extension NSWindow {
     private static func managedFrameKey(_ name: String) -> String { "NSWindow Frame \(name)" }
+
     func restoreManagedFrame(name: String, defaultSize: NSSize) {
         var applied = false
         if let saved = NSWindow.managedFrame(name: name),
@@ -24,12 +19,14 @@ extension NSWindow {
         NSAccessibility.post(element: self, notification: .windowMoved)
         NSAccessibility.post(element: self, notification: .windowResized)
     }
+
     private static func managedFrame(name: String) -> NSRect? {
         guard let raw = UserDefaults.standard.string(forKey: managedFrameKey(name)) else { return nil }
         let parts = raw.split(separator: " ").compactMap { Double($0) }
         guard parts.count >= 4 else { return nil }
         return NSRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
     }
+
     func saveManagedFrame(name: String) {
         let f = frame
         guard f.width <= 1500, f.height <= 950, f.width >= 400, f.height >= 300 else { return }
@@ -39,8 +36,9 @@ extension NSWindow {
     }
 }
 
-/// Conventional preferences window. Home owns Library, Displays, Ambient Sets,
-/// desktop state and automation; Settings keeps playback and screen-saver prefs.
+/// Conventional preferences. Home owns Library, Displays, Ambient Sets, desktop
+/// state and automation. This controller stays as the existing bootstrap point
+/// used by main.swift while keeping only playback and screen-saver preferences.
 final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let comfort: DesktopComfortController
     private let wallpaper: WallpaperController
@@ -51,8 +49,6 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private var displaysDestination: DisplayAssignmentViewController?
     private weak var libraryWindow: NSWindow?
 
-    /// Runtime dependency injected by the app delegate before Home is installed.
-    /// It is deliberately absent from visible Settings UI.
     var modes: AmbientModesController?
     var onLibraryVisible: (() -> Void)?
     var onClose: (() -> Void)?
@@ -68,8 +64,11 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         self.comfort = comfort
         self.wallpaper = wallpaper
         self.showSaver = showSaver
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 500),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 500),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false)
         window.title = "Idlesse Settings"
         window.minSize = NSSize(width: 660, height: 450)
         window.isReleasedWhenClosed = false
@@ -77,7 +76,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         window.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 720, height: 500))
         installContent(in: window)
-        retargetSettingsCommand()
+        retargetCommands()
         wallpaper.onShowSettings = { [weak self] in self?.present(tab: 0) }
         wallpaper.onStateChange = { [weak self] in self?.reload() }
         reload()
@@ -85,34 +84,46 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Install Home around the Library's existing window. This is a one-time app
-    /// bootstrap seam; Settings never owns or reparents Home content.
+    deinit {
+        DisplayAssignmentController.homePresenter = nil
+    }
+
+    /// Install Home around the Library's own window. The view argument exists for
+    /// compatibility with main.swift; it is never installed into Settings.
     func installLibrary(_ view: NSView) {
         guard home == nil,
               let modes,
               let library = view.window?.windowController as? SceneLibraryController else { return }
         libraryWindow = library.window
         library.hostWindow = library.window
+
         let displays = DisplayAssignmentViewController(wallpaper: wallpaper)
         displays.onArrangementChange = { [weak modes] in modes?.adoptManualDisplayArrangement() }
         displaysDestination = displays
-        home = HomeWindowController(
+
+        let home = HomeWindowController(
             library: library,
             wallpaper: wallpaper,
             comfort: comfort,
             modes: modes,
             displaysDestinationController: displays,
             activateDisplaysDestination: { [weak displays] in displays?.activate() })
+        self.home = home
+
+        DisplayAssignmentController.homePresenter = { [weak home] in home?.presentDisplays() }
+        retargetCommands()
     }
 
     /// Historical callers use 3 for Library, 1 for the removed Automation pane,
-    /// and 2 for Screen Saver. Preserve those routes while changing destinations.
+    /// and 2 for Screen Saver. Keep those call sites stable while changing where
+    /// the user lands.
     func present(tab: Int? = nil) {
         let requested = tab ?? 0
         if requested == 3 {
             onLibraryVisible?()
-            if let home { home.presentLibrary() }
-            else {
+            if let home {
+                home.presentLibrary()
+            } else {
                 libraryWindow?.deminiaturize(nil)
                 libraryWindow?.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
@@ -123,6 +134,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             home.presentAmbientSets()
             return
         }
+
         reload()
         selectPage(requested == 2 ? 1 : 0)
         window?.level = comfort.isDimmed ? .mainMenu : .normal
@@ -137,12 +149,26 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     func presentAmbientSets() { home?.presentAmbientSets() }
 
     @objc private func openSettingsFromMenu(_ sender: Any?) { present(tab: 0) }
+    @objc private func openAmbientSetsFromMenu(_ sender: Any?) { present(tab: 1) }
 
-    private func retargetSettingsCommand() {
-        guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
-              let item = appMenu.items.first(where: { $0.title == "Settings…" }) else { return }
-        item.target = self
-        item.action = #selector(openSettingsFromMenu(_:))
+    private func retargetCommands() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        if let appMenu = mainMenu.items.first?.submenu,
+           let settings = appMenu.items.first(where: { $0.title == "Settings…" }) {
+            settings.target = self
+            settings.action = #selector(openSettingsFromMenu(_:))
+        }
+        func visit(_ menu: NSMenu) {
+            for item in menu.items {
+                if item.title == "Bedtime Display…" {
+                    item.title = "Ambient Sets…"
+                    item.target = self
+                    item.action = #selector(openAmbientSetsFromMenu(_:))
+                }
+                if let submenu = item.submenu { visit(submenu) }
+            }
+        }
+        visit(mainMenu)
     }
 
     private func installContent(in window: NSWindow) {
@@ -212,6 +238,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         transitionStyle.setAccessibilityLabel("Transition style")
         let transitionRow = NSStackView(views: [transition, transitionStyle])
         transitionRow.spacing = 8
+
         liveMenu.target = self
         liveMenu.action = #selector(changeMenuAnimation)
         batteryThrottle.target = self
@@ -245,7 +272,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         for button in navigation {
             let selected = button.tag == index
             button.state = selected ? .on : .off
-            button.layer?.backgroundColor = (selected ? NSColor.controlAccentColor.withAlphaComponent(0.16) : .clear).cgColor
+            button.layer?.backgroundColor = (selected
+                ? NSColor.controlAccentColor.withAlphaComponent(0.16)
+                : .clear).cgColor
             button.contentTintColor = selected ? .controlAccentColor : .labelColor
         }
     }
@@ -256,6 +285,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         heading.font = .systemFont(ofSize: 24, weight: .semibold)
         heading.translatesAutoresizingMaskIntoConstraints = false
         page.addSubview(heading)
+
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 16
         grid.columnSpacing = 16
@@ -273,6 +303,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             grid.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 26),
             grid.trailingAnchor.constraint(lessThanOrEqualTo: page.trailingAnchor, constant: -26),
         ])
+
         let item = NSTabViewItem(identifier: title)
         item.label = title
         item.view = page
@@ -287,7 +318,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         updateStatus()
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
-        transitionStyle.selectItem(at: WallpaperController.TransitionStyle.allCases.firstIndex(of: wallpaper.transitionStyle) ?? 0)
+        transitionStyle.selectItem(at:
+            WallpaperController.TransitionStyle.allCases.firstIndex(of: wallpaper.transitionStyle) ?? 0)
         batteryThrottle.state = SceneFrameRate.throttleOnBattery ? .on : .off
         coveragePause.state = wallpaper.coveragePauseEnabled ? .on : .off
     }
@@ -299,6 +331,7 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlessePreferences")
     }
+    func windowWillClose(_ notification: Notification) { onClose?() }
 
     @objc private func changeMenuAnimation() {
         UserDefaults.standard.set(liveMenu.state == .on, forKey: "comfort.liveMenuStrip")
@@ -326,8 +359,6 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         wallpaper.coveragePauseEnabled = coveragePause.state == .on
     }
 
-    /// Dimming belongs to Home/Ambient, but callers use this to keep Settings at
-    /// an appropriate window level while the desktop is dimmed.
     func updateDimming() {
         window?.level = comfort.isDimmed ? .mainMenu : .normal
     }
