@@ -110,6 +110,24 @@ enum WallpaperPolicyTests {
         precondition(defaults.data(forKey: store.identityKey(identity)) == nil,
                      "Clearing the reconnected display must clear its durable assignment")
 
+        let variantSuite = "Idlesse.DisplayVariantTests." + UUID().uuidString
+        let variantDefaults = UserDefaults(suiteName: variantSuite)!
+        defer { variantDefaults.removePersistentDomain(forName: variantSuite) }
+        let variantStore = DisplayAssignmentStore(defaults: variantDefaults, prefix: "variant-test")
+        let variantID = UUID()
+        let variantBookmark = Data([1, 2, 3, 4])
+        variantStore.setSelection(.init(bookmarkData: variantBookmark, variantID: variantID), persistentID: "session-a")
+        precondition(variantStore.selection(persistentID: "session-a", legacyDisplayID: 100)?.variantID == variantID)
+        _ = variantStore.reconcile(identityKey: "monitor-a", persistentID: "session-a", legacyDisplayID: 100)
+        precondition(variantStore.selection(persistentID: "session-a", legacyDisplayID: 100)?.variantID == variantID)
+        _ = variantStore.reconcile(identityKey: "monitor-a", previousIdentityKey: "monitor-a", persistentID: "session-b", legacyDisplayID: 101)
+        precondition(variantStore.selection(persistentID: "session-b", legacyDisplayID: 101)?.variantID == variantID,
+                     "Reconnect must retain the requested variant UUID independently of scene resolution")
+        let legacyStore = DisplayAssignmentStore(defaults: variantDefaults, prefix: "legacy-variant-test")
+        legacyStore.setBookmarkData(variantBookmark, persistentID: "legacy-session")
+        precondition(legacyStore.selection(persistentID: "legacy-session", legacyDisplayID: 102)?.variantID == nil,
+                     "Legacy display bookmarks decode as Default")
+
         print("Wallpaper policy checks passed: durable assignment migration, shared playback, coverage hysteresis, stale reset, opacity and union sampling")
     }
 }

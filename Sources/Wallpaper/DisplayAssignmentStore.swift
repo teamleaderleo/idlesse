@@ -1,5 +1,10 @@
 import Foundation
 
+struct DisplayWallpaperSelection: Equatable {
+    var bookmarkData: Data
+    var variantID: UUID? = nil
+}
+
 struct DisplayAssignmentStore {
     static let wallpaperPrefix = "wallpaperResumeBookmark"
 
@@ -20,6 +25,34 @@ struct DisplayAssignmentStore {
 
     private func aliasKey(_ persistentID: String) -> String {
         "\(prefix).displayAlias.\(persistentID)"
+    }
+    private func variantKey(_ persistentID: String) -> String {
+        "\(prefix).displayVariant.\(persistentID)"
+    }
+    private func identityVariantKey(_ durableIdentity: String) -> String {
+        "\(prefix).identityVariant.\(durableIdentity)"
+    }
+
+    func selection(persistentID: String, legacyDisplayID: UInt32) -> DisplayWallpaperSelection? {
+        guard let bookmarkData = bookmarkData(persistentID: persistentID, legacyDisplayID: legacyDisplayID) else { return nil }
+        let variantID = defaults.string(forKey: variantKey(persistentID)).flatMap(UUID.init(uuidString:))
+            ?? defaults.string(forKey: aliasKey(persistentID)).flatMap { defaults.string(forKey: identityVariantKey($0)) }.flatMap(UUID.init(uuidString:))
+        return DisplayWallpaperSelection(bookmarkData: bookmarkData, variantID: variantID)
+    }
+
+    func setSelection(_ selection: DisplayWallpaperSelection, persistentID: String) {
+        setBookmarkData(selection.bookmarkData, persistentID: persistentID)
+        if let variantID = selection.variantID {
+            defaults.set(variantID.uuidString, forKey: variantKey(persistentID))
+            if let durable = defaults.string(forKey: aliasKey(persistentID)) {
+                defaults.set(variantID.uuidString, forKey: identityVariantKey(durable))
+            }
+        } else {
+            defaults.removeObject(forKey: variantKey(persistentID))
+            if let durable = defaults.string(forKey: aliasKey(persistentID)) {
+                defaults.removeObject(forKey: identityVariantKey(durable))
+            }
+        }
     }
 
     /// Existing #52 runtime entry point. Once a visual-display reconciliation
@@ -52,8 +85,10 @@ struct DisplayAssignmentStore {
     func clear(persistentID: String, legacyDisplayID: UInt32) {
         defaults.removeObject(forKey: stableKey(persistentID))
         defaults.removeObject(forKey: legacyKey(legacyDisplayID))
+        defaults.removeObject(forKey: variantKey(persistentID))
         if let durable = defaults.string(forKey: aliasKey(persistentID)) {
             defaults.removeObject(forKey: identityKey(durable))
+            defaults.removeObject(forKey: identityVariantKey(durable))
         }
         defaults.removeObject(forKey: aliasKey(persistentID))
     }
@@ -86,13 +121,22 @@ struct DisplayAssignmentStore {
         defaults.set(data, forKey: durableKey)
         defaults.set(data, forKey: sessionKey)
         defaults.set(durableIdentity, forKey: aliasKey(persistentID))
+        let variant = defaults.string(forKey: identityVariantKey(durableIdentity))
+            ?? previousIdentityKey.flatMap { defaults.string(forKey: identityVariantKey($0)) }
+            ?? defaults.string(forKey: variantKey(persistentID))
+        if let variant {
+            defaults.set(variant, forKey: identityVariantKey(durableIdentity))
+            defaults.set(variant, forKey: variantKey(persistentID))
+        }
         defaults.removeObject(forKey: oldKey)
         return data
     }
 
     func clear(identityKey durableIdentity: String, persistentID: String, legacyDisplayID: UInt32) {
         defaults.removeObject(forKey: identityKey(durableIdentity))
+        defaults.removeObject(forKey: identityVariantKey(durableIdentity))
         defaults.removeObject(forKey: stableKey(persistentID))
+        defaults.removeObject(forKey: variantKey(persistentID))
         defaults.removeObject(forKey: legacyKey(legacyDisplayID))
         defaults.removeObject(forKey: aliasKey(persistentID))
     }
@@ -100,5 +144,8 @@ struct DisplayAssignmentStore {
     private func mirrorToIdentity(_ data: Data, persistentID: String) {
         guard let durable = defaults.string(forKey: aliasKey(persistentID)) else { return }
         defaults.set(data, forKey: identityKey(durable))
+        if let variant = defaults.string(forKey: variantKey(persistentID)) {
+            defaults.set(variant, forKey: identityVariantKey(durable))
+        }
     }
 }
