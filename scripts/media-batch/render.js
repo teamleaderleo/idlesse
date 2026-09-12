@@ -61,6 +61,7 @@ window.prepare = async (folder, stem, width, height, animation) => {
     if(["CH0239_home","CH0070_home","CH0260_home"].includes(stem)) for(const slot of model.skeleton.slots) if(slot.data.blendMode===1) slot.color.a *= 0.15;
     app.renderer.render(app.stage);
     if(fast==='draw'){app.renderer.gl.finish();return null;}
+    if(fast==='pipe-png')return app.view.toDataURL('image/png').split(',')[1];
     return app.view.toDataURL(fast?'image/jpeg':'image/png',0.99).split(',')[1];
   };
   return {camera,backgroundAnimations:background?.skeleton.data.animations.map(a=>({name:a.name,duration:a.duration}))??[],slots:model.skeleton.slots.filter(s=>s.data.blendMode!==0).map(s=>({name:s.data.name,blend:s.data.blendMode,alpha:s.color.a,attachment:s.getAttachment()?.name})),bounds:{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},scale,animations:data.animations.map(a=>({name:a.name,duration:a.duration}))};

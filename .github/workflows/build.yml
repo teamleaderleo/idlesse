@@ -27,6 +27,9 @@ jobs:
       - name: Verify unit and preview bounds tests
         run: bash test.sh
 
+      - name: Smoke-test media playback, Library and export
+        run: IDLESSE_MEDIA_COMPAT_ONLY=1 bash test-wallpaper.sh
+
       - name: Verify bundles
         run: |
           file "build/Idlesse.saver/Contents/MacOS/Idlesse"

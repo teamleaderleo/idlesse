@@ -44,8 +44,25 @@ class EdgeBarTests(unittest.TestCase):
     def test_wholly_black_frame_reports_full_span(self):
         self.assertEqual(verify.bars(self.frame()), {'top': 288, 'bottom': 288, 'left': 512, 'right': 512})
     def test_renderer_void_is_caught_like_letterboxing(self):
-        # Azur spine background 0x18202b: not black, so a darkness test misses it.
         edges = verify.bars(self.frame((120, 60, 400, 230), matte=(24, 32, 43)))
         self.assertEqual(edges, {'top': 60, 'bottom': 58, 'left': 120, 'right': 112})
+
+class FidelityTests(unittest.TestCase):
+    def test_main10_requires_profile_and_ten_bit_pixels(self):
+        self.assertTrue(verify.is_main10({'codec_name': 'hevc', 'profile': 'Main 10', 'pix_fmt': 'yuv420p10le'}))
+        self.assertTrue(verify.is_main10({'codec_name': 'hevc', 'profile': 'Main 10', 'pix_fmt': 'p010le'}))
+        self.assertFalse(verify.is_main10({'codec_name': 'hevc', 'profile': 'Main 10', 'pix_fmt': 'yuv420p'}))
+        self.assertFalse(verify.is_main10({'codec_name': 'hevc', 'profile': 'Main', 'pix_fmt': 'yuv420p10le'}))
+    def test_gradient_levels_count_vertical_channel_precision(self):
+        from PIL import Image
+        image=Image.new('RGB',(4,10))
+        pixels=image.load()
+        for y in range(10):
+            for x in range(4):pixels[x,y]=(255,y,80)
+        self.assertEqual(verify.gradient_levels(image,[0,3],'g'),[10,10])
+        self.assertEqual(verify.gradient_levels(image,[1],'r'),[1])
+    def test_gradient_columns_are_bounded(self):
+        from PIL import Image
+        with self.assertRaises(ValueError):verify.gradient_levels(Image.new('RGB',(4,4)),[4],'g')
 
 if __name__ == '__main__': unittest.main()
