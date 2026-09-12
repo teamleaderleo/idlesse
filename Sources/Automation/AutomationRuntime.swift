@@ -82,8 +82,7 @@ final class AutomationRuntimeRegistry {
     }
 
     func currentState() -> AutomationState {
-        guard executor != nil else { return AutomationMailbox.readState(appRunning: true) }
-        return AutomationMailbox.readState(appRunning: true)
+        AutomationMailbox.readState(appRunning: true)
     }
 }
 
@@ -114,6 +113,10 @@ private final class AutomationMailboxServer {
             do {
                 let data = try Data(contentsOf: url)
                 let request = try JSONDecoder().decode(AutomationRequest.self, from: data)
+                guard abs(request.createdAt.timeIntervalSinceNow) <= 60 else {
+                    try? FileManager.default.removeItem(at: url)
+                    continue
+                }
                 let response = await executor.execute(request.command, requestID: request.id)
                 if let state = response.state { AutomationMailbox.writeState(state) }
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -141,13 +144,15 @@ enum AutomationClient {
         }
         try AutomationMailbox.prepare()
         let request = AutomationRequest(command: command)
+        let requestURL = AutomationMailbox.requestURL(request.id)
+        let responseURL = AutomationMailbox.responseURL(request.id)
+        defer { try? FileManager.default.removeItem(at: requestURL) }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(request).write(to: AutomationMailbox.requestURL(request.id), options: .atomic)
+        try encoder.encode(request).write(to: requestURL, options: .atomic)
         DistributedNotificationCenter.default().post(name: AutomationMailbox.notification, object: nil)
         if !running { try launchAppWithoutActivation() }
 
         let deadline = Date().addingTimeInterval(timeout)
-        let responseURL = AutomationMailbox.responseURL(request.id)
         while Date() < deadline {
             if let data = try? Data(contentsOf: responseURL),
                let response = try? JSONDecoder().decode(AutomationResponse.self, from: data) {
@@ -156,6 +161,7 @@ enum AutomationClient {
             }
             Thread.sleep(forTimeInterval: 0.04)
         }
+        try? FileManager.default.removeItem(at: responseURL)
         throw AutomationRuntimeError.requestTimedOut
     }
 
@@ -172,6 +178,7 @@ enum AutomationClient {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.addsToRecentItems = false
+        configuration.arguments = ["--automation-wake"]
         let semaphore = DispatchSemaphore(value: 0)
         var launchError: Error?
         NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
@@ -208,10 +215,12 @@ enum AutomationCLI {
 }
 
 enum LoginItemService {
-    static var enabled: Bool { SMAppService.mainApp.status == .enabled }
+    static let helperIdentifier = "com.teamleaderleo.idlesse.login"
+    static var service: SMAppService { SMAppService.loginItem(identifier: helperIdentifier) }
+    static var enabled: Bool { service.status == .enabled }
 
     static func setEnabled(_ enabled: Bool) throws {
-        let service = SMAppService.mainApp
+        let service = service
         if enabled {
             if service.status != .enabled { try service.register() }
         } else if service.status != .notRegistered {
