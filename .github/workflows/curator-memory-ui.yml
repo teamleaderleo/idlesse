@@ -1,0 +1,30 @@
+name: Curator Library Memory UI
+
+on:
+  push:
+    branches: [curator/library-memory-25-exec]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply memory UI patch
+        run: python3 .github/curator_memory_ui_patch.py
+      - name: Run existing and focused tests
+        run: bash test.sh
+      - name: Compile app
+        run: swift build --product IdlesseApp
+      - name: Commit generated implementation
+        run: |
+          git config user.name '📚 Curator'
+          git config user.email 'curator@users.noreply.github.com'
+          git add Sources/Harness/SceneLibraryController.swift docs/library-memory.md
+          git commit -m 'Expose Library memory in the native surface (#25)' -m 'Add ratings, Smart Collection authoring, exact-duplicate visibility, and Order/Shuffle/Weighted/Surprise collection playback controls.' -m '📚 Curator'
+          git push origin HEAD:curator/library-memory-25-exec
