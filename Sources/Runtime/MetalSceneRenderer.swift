@@ -4,6 +4,179 @@ import MetalKit
 import CoreVideo
 import CoreText
 
+struct MetalShaderDiagnostic: Equatable, Sendable {
+    enum Severity: String, Sendable { case error, warning, note }
+    var line: Int?
+    var column: Int?
+    var severity: Severity
+    var message: String
+
+    var displayText: String {
+        let location: String
+        if let line, let column { location = "Line \(line):\(column) — " }
+        else if let line { location = "Line \(line) — " }
+        else { location = "" }
+        return location + message
+    }
+}
+
+struct MetalShaderCompilationError: LocalizedError {
+    var diagnostics: [MetalShaderDiagnostic]
+    var fallback: String
+
+    var errorDescription: String? {
+        guard !diagnostics.isEmpty else { return "Shader failed to compile: \(fallback)" }
+        return (["Shader failed to compile."] + diagnostics.map(\.displayText)).joined(separator: "\n")
+    }
+}
+
+enum MetalShaderCompiler {
+    static let sourceName = "StudioShader"
+    static let prelude = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct V { float4 position [[position]]; float2 uv; float fade; float2 canvasUV; };
+    struct ShaderU { float time; float2 resolution; float2 pointer; float audio; float opacity; };
+    """
+    private static let validationVertex = """
+    vertex V studioShaderValidationVertex(uint id [[vertex_id]]) {
+        const float2 positions[4] = { float2(-1.0, -1.0), float2(1.0, -1.0), float2(-1.0, 1.0), float2(1.0, 1.0) };
+        const float2 uvs[4] = { float2(0.0, 1.0), float2(1.0, 1.0), float2(0.0, 0.0), float2(1.0, 0.0) };
+        V out;
+        out.position = float4(positions[id], 0.0, 1.0);
+        out.uv = uvs[id];
+        out.fade = 1.0;
+        out.canvasUV = out.uv;
+        return out;
+    }
+    """
+
+    static func makeLibrary(_ shader: SceneNode.Shader, device: MTLDevice) throws -> MTLLibrary {
+        try shader.validate()
+        let combined = prelude + "\n" + validationVertex + "\n#line 1 \"\(sourceName)\"\n" + shader.source
+        do {
+            return try device.makeLibrary(source: combined, options: nil)
+        } catch {
+            throw MetalShaderCompilationError(diagnostics: parseDiagnostics(error.localizedDescription),
+                                              fallback: error.localizedDescription)
+        }
+    }
+
+    static func validate(_ shader: SceneNode.Shader, device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
+        guard let device else { throw SceneError.invalid("Metal is unavailable on this Mac.") }
+        let library = try makeLibrary(shader, device: device)
+        guard let fragment = library.makeFunction(name: "shaderMain") else {
+            throw SceneError.invalid("Shaders must define fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]).")
+        }
+        guard let vertex = library.makeFunction(name: "studioShaderValidationVertex") else {
+            throw SceneError.invalid("The shader validation vertex function is unavailable.")
+        }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertex
+        descriptor.fragmentFunction = fragment
+        descriptor.colorAttachments[0]?.pixelFormat = .bgra8Unorm
+        do {
+            _ = try device.makeRenderPipelineState(descriptor: descriptor)
+        } catch {
+            throw MetalShaderCompilationError(diagnostics: parseDiagnostics(error.localizedDescription),
+                                              fallback: error.localizedDescription)
+        }
+    }
+
+    static func parseDiagnostics(_ text: String) -> [MetalShaderDiagnostic] {
+        let pattern = #"(?:^|\n)(?:StudioShader|program_source|[^:\n]+):(\d+)(?::(\d+))?:\s*(error|warning|note):\s*([^\n]+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            func capture(_ index: Int) -> String? {
+                guard match.range(at: index).location != NSNotFound,
+                      let range = Range(match.range(at: index), in: text) else { return nil }
+                return String(text[range])
+            }
+            guard let lineText = capture(1), let line = Int(lineText),
+                  let severityText = capture(3), let severity = MetalShaderDiagnostic.Severity(rawValue: severityText),
+                  let message = capture(4) else { return nil }
+            return MetalShaderDiagnostic(line: line, column: capture(2).flatMap(Int.init), severity: severity,
+                                         message: message.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+}
+
+extension SceneNode.Shader {
+    struct Preset: Sendable {
+        let name: String
+        let source: String
+        let speed: Double
+    }
+
+    static let studioPresets: [Preset] = [
+        .init(name: "Plasma", source: plasma, speed: 1),
+        .init(name: "Noise / Grain", source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 cell = floor(in.uv * u.resolution + u.time * float2(37.0, 19.0));
+            float n = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+            float v = 0.12 + n * 0.18;
+            return float4(float3(v) * u.opacity, u.opacity);
+        }
+        """, speed: 1),
+        .init(name: "Star Field", source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 p = in.uv * float2(36.0, 22.0);
+            float2 id = floor(p);
+            float2 f = fract(p) - 0.5;
+            float seed = fract(sin(dot(id, float2(127.1, 311.7))) * 43758.5453);
+            float twinkle = 0.55 + 0.45 * sin(u.time * (0.6 + seed) + seed * 31.0);
+            float star = smoothstep(0.075 + seed * 0.025, 0.0, length(f)) * step(0.86, seed) * twinkle;
+            float3 col = float3(0.008, 0.012, 0.025) + star * float3(0.72, 0.82, 1.0);
+            return float4(col * u.opacity, u.opacity);
+        }
+        """, speed: 0.7),
+        .init(name: "Water / Ripple", source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 p = (in.uv - 0.5) * u.resolution / min(u.resolution.x, u.resolution.y);
+            float r = length(p + float2(0.08 * sin(u.time * 0.27), 0.05 * cos(u.time * 0.21)));
+            float wave = 0.5 + 0.5 * sin(r * 30.0 - u.time * 2.2);
+            wave *= exp(-r * 1.7);
+            float3 deep = float3(0.015, 0.09, 0.16);
+            float3 crest = float3(0.10, 0.42, 0.52);
+            float3 col = mix(deep, crest, 0.22 + 0.48 * wave);
+            return float4(col * u.opacity, u.opacity);
+        }
+        """, speed: 1),
+        .init(name: "CRT", source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 p = in.uv;
+            float scan = 0.86 + 0.14 * sin((p.y * u.resolution.y + u.time * 12.0) * 3.14159);
+            float2 edge = p * (1.0 - p);
+            float vignette = smoothstep(0.0, 0.10, edge.x * edge.y);
+            float glow = 0.035 + 0.02 * sin(p.y * 18.0 + u.time * 0.45);
+            float3 col = float3(glow * 0.75, glow, glow * 0.82) * scan * vignette;
+            return float4(col * u.opacity, u.opacity);
+        }
+        """, speed: 0.8),
+        .init(name: "Voronoi", source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float2 p = in.uv * 7.0;
+            float2 cell = floor(p);
+            float2 local = fract(p);
+            float nearest = 10.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    float2 offset = float2(x, y);
+                    float2 key = cell + offset;
+                    float2 point = fract(sin(float2(dot(key, float2(127.1, 311.7)), dot(key, float2(269.5, 183.3)))) * 43758.5453);
+                    point = 0.5 + 0.34 * sin(u.time * 0.55 + 6.28318 * point);
+                    nearest = min(nearest, length(offset + point - local));
+                }
+            }
+            float edge = smoothstep(0.42, 0.03, nearest);
+            float3 col = mix(float3(0.018, 0.025, 0.032), float3(0.16, 0.28, 0.31), edge);
+            return float4(col * u.opacity, u.opacity);
+        }
+        """, speed: 0.65)
+    ]
+}
+
 /// Experimental SDR compositor. One drawable per display; groups use bounded offscreen passes.
 /// Keep the layer renderer as the default until color and power parity are measured.
 final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
@@ -79,7 +252,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var motion: SIMD4<Float> = .zero // wind, gravity, count, wrapped emitter time
     }
     /// Compact uniforms for user shader nodes. Field order matches the
-    /// ShaderU struct in the shader prelude (8-byte alignment throughout).
+    /// ShaderU struct in MetalShaderCompiler (8-byte alignment throughout).
     private struct ShaderUniforms {
         var time: Float
         var resolution: SIMD2<Float>
@@ -87,20 +260,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var audio: Float
         var opacity: Float
     }
-    private static let shaderPrelude = """
-    #include <metal_stdlib>
-    using namespace metal;
-    struct V { float4 position [[position]]; float2 uv; float fade; float2 canvasUV; };
-    struct ShaderU { float time; float2 resolution; float2 pointer; float audio; float opacity; };
-    """
     private static func compileShader(_ shader: SceneNode.Shader, device: MTLDevice, library: MTLLibrary) throws -> MTLRenderPipelineState {
-        let combined = shaderPrelude + "\n" + shader.source
-        let userLibrary: MTLLibrary
-        do {
-            userLibrary = try device.makeLibrary(source: combined, options: nil)
-        } catch {
-            throw SceneError.invalid("Shader failed to compile: \(error.localizedDescription)")
-        }
+        let userLibrary = try MetalShaderCompiler.makeLibrary(shader, device: device)
         guard let fragment = userLibrary.makeFunction(name: "shaderMain") else {
             throw SceneError.invalid("Shaders must define fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]).")
         }
@@ -570,6 +731,14 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         let authored = scene
         guard (sourceScene?.timeline?.videosFollowScene == true) == (scene.timeline?.videosFollowScene == true) else { return false }
         guard let scene = try? scene.evaluated(signals: currentSignals()) else { return false }
+        let existing = Dictionary(uniqueKeysWithValues: inputs.map { ($0.node.id, $0.node) })
+        for node in scene.allNodes where node.kind == .shader {
+            guard let old = existing[node.id]?.shader, let shader = node.shader, old.source == shader.source else {
+                // Shader source owns a Metal pipeline. Rebuild transactionally so Studio can
+                // keep the current renderer alive until the replacement compiles successfully.
+                return false
+            }
+        }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
@@ -703,6 +872,53 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         needsFrame = true
     }
     static func smokeTestGroupTextureBudget() throws {
+        let parsed = MetalShaderCompiler.parseDiagnostics("StudioShader:7:11: error: unknown identifier")
+        precondition(parsed.first?.line == 7 && parsed.first?.column == 11,
+            "Shader diagnostics must retain user-source line and column information")
+        for preset in SceneNode.Shader.studioPresets {
+            try MetalShaderCompiler.validate(.init(source: preset.source, speed: preset.speed))
+        }
+        let invalid = SceneNode.Shader(source: """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            return float4(missingStudioSymbol);
+        }
+        """, speed: 1)
+        do {
+            try MetalShaderCompiler.validate(invalid)
+            preconditionFailure("Invalid Studio Metal source must fail compilation")
+        } catch let error as MetalShaderCompilationError {
+            precondition(!error.diagnostics.isEmpty, "Metal compiler errors should surface inline diagnostics")
+            if let line = error.diagnostics.compactMap(\.line).first {
+                precondition((1...3).contains(line), "Compiler line information must point into the user source")
+            }
+        }
+
+        let shaderClock = SceneClock(now: { 0 })
+        try shaderClock.seek(to: 1)
+        let shaderNode = SceneNode(content: .shader(.init()))
+        let shaderRenderer = try MetalSceneRenderer(playable: .init(title: "Shader transaction", nodes: [shaderNode]),
+            bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: shaderClock, onError: { _ in })
+        let lastValidShaderPixels = try shaderRenderer.renderProbe(dimension: 64)
+        var brokenShaderNode = shaderNode
+        brokenShaderNode.content = .shader(.init(source: "this is not metal", speed: 1))
+        precondition(!shaderRenderer.updateScene(.init(title: "Broken shader draft", nodes: [brokenShaderNode])),
+            "Shader source changes must request transactional renderer replacement")
+        do {
+            _ = try MetalSceneRenderer(playable: .init(title: "Broken shader draft", nodes: [brokenShaderNode]),
+                bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: shaderClock, onError: { _ in })
+            preconditionFailure("Invalid replacement shader source must fail renderer preparation")
+        } catch { }
+        let preservedShaderPixels = try shaderRenderer.renderProbe(dimension: 64)
+        precondition(preservedShaderPixels == lastValidShaderPixels,
+            "Rejected shader source edits must leave the last valid pipeline rendering")
+        var speedShaderNode = shaderNode
+        speedShaderNode.content = .shader(.init(source: shaderNode.shader!.source, speed: 2))
+        precondition(shaderRenderer.updateScene(.init(title: "Shader speed", nodes: [speedShaderNode])),
+            "Shader speed changes should stay on the in-place update path")
+        let fasterShaderPixels = try shaderRenderer.renderProbe(dimension: 64)
+        precondition(fasterShaderPixels != preservedShaderPixels, "Shader speed edits must affect rendered output")
+        shaderRenderer.releaseResources()
+
         let shapeScene = SceneDescriptor(title: "Shape Test", nodes: [SceneNode(content: .shape(.init(primitive: .rectangle, fill: "#00FF00", width: 128, height: 128)))])
         let shape = try MetalSceneRenderer(playable: shapeScene, bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
         defer { shape.releaseResources() }

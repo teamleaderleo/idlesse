@@ -300,18 +300,44 @@ enum WallpaperSmoke {
         wait { particles.intermediateTextureBytes == 0 }
         precondition(particles.intermediateTextureBytes == 0)
         let shaderClock = SceneClock(now: { 0 })
-        let waves = try MetalSceneRenderer(playable: SceneDescriptor(title: "Waves", nodes: [SceneNode(content: .shader(.init()))]),
+        var shaderNode = SceneNode(content: .shader(.init()))
+        let waves = try MetalSceneRenderer(playable: SceneDescriptor(title: "Waves", nodes: [shaderNode]),
             bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: shaderClock) { errors.append($0) }
         defer { waves.releaseResources() }
         let wavePixels = try waves.renderProbe()
         let lit = stride(from: 0, to: wavePixels.count, by: 4).filter { wavePixels[$0] > 8 || wavePixels[$0 + 1] > 8 || wavePixels[$0 + 2] > 8 }.count
         precondition(lit > 100, "A shader layer must paint procedural pixels")
+        for preset in SceneNode.Shader.studioPresets {
+            try MetalShaderCompiler.validate(.init(source: preset.source, speed: preset.speed))
+        }
+        let parsedDiagnostic = MetalShaderCompiler.parseDiagnostics("StudioShader:7:4: error: expected expression")
+        precondition(parsedDiagnostic.first?.line == 7 && parsedDiagnostic.first?.column == 4)
+        let brokenSource = """
+        fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
+            float3 color = float3(1.0);
+            return float4(color broken_token, u.opacity);
+        }
+        """
         do {
-            _ = try MetalSceneRenderer(playable: SceneDescriptor(title: "Broken", nodes: [SceneNode(content: .shader(.init(source: "this is not metal", speed: 1)))]),
+            _ = try MetalSceneRenderer(playable: SceneDescriptor(title: "Broken", nodes: [SceneNode(content: .shader(.init(source: brokenSource, speed: 1)))]),
                 bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: shaderClock) { errors.append($0) }
             preconditionFailure("Invalid shader source must fail surface preparation")
-        } catch { }
-        print("Shader checks passed: procedural layer renders, invalid source rejected")
+        } catch let failure as MetalShaderCompilationError {
+            precondition(failure.diagnostics.contains(where: { $0.line != nil }), "Metal diagnostics should report a user-source line")
+        }
+        let lastValid = try waves.renderProbe()
+        var invalidNode = shaderNode
+        invalidNode.content = .shader(.init(source: brokenSource, speed: 1))
+        precondition(!waves.updateScene(SceneDescriptor(title: "Broken edit", nodes: [invalidNode])))
+        let afterRejectedShader = try waves.renderProbe()
+        precondition(afterRejectedShader == lastValid, "A rejected source edit must preserve the last valid shader")
+        try shaderClock.seek(to: 1)
+        let normalSpeed = try waves.renderProbe()
+        shaderNode.content = .shader(.init(source: SceneNode.Shader.plasma, speed: 2))
+        precondition(waves.updateScene(SceneDescriptor(title: "Faster", nodes: [shaderNode])))
+        let doubleSpeed = try waves.renderProbe()
+        precondition(normalSpeed != doubleSpeed, "Shader speed edits must reach the working preview")
+        print("Shader checks passed: templates compile, diagnostics map lines, failed source preserves preview, speed edits render")
         let sixteenImages = SceneDescriptor(title: "Sixteen", nodes: (0..<16).map { _ in SceneNode(content: .image(imageURL), opacity: 0.2) })
         let audioNode = SceneNode(content: .gradient)
         let audioScene = SceneDescriptor(title: "Audio", nodes: [audioNode], bindings: [
