@@ -2,8 +2,10 @@ name: Palette #32 Studio apply
 
 on:
   push:
-    branches: [palette/32-variants-studio]
-    paths: [.github/workflows/palette-32-studio-apply.yml]
+    branches:
+      - palette/32-variants-studio
+    paths:
+      - '.github/workflows/palette-32-studio-apply.yml'
 
 permissions:
   contents: write
