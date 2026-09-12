@@ -1,220 +1,93 @@
-# Idlesse
+<p align="center">
+  <img src="Assets/Idlesse.png" width="144" alt="Idlesse icon">
+</p>
 
-A native macOS app for creating and playing animated desktop scenes, with a picture screensaver and optional bedtime dimming.
+<h1 align="center">Idlesse</h1>
 
-- **Library:** browse built-in scenes and imported references, search, favorite, preview, and open scenes in Studio or on the desktop. Originals stay in their existing folders. [Library details](docs/library.md)
-- **Studio:** arrange layers, animate properties, add effects and particles, and save editable `.idlesse` packages. [Studio details](docs/scene-preview.md)
-- **Wallpaper:** play image, video, and procedural scenes on your displays. Metal handles creative scenes; Standard remains the compatibility path.
-- **Desktop Comfort:** optional dimming and daily quiet-display schedules, independent of the scene format. [Bedtime controls](docs/desktop-comfort.md)
+<p align="center"><strong>A native Mac app for putting art, pictures, video, and animated scenes on the desktop — and letting them linger.</strong></p>
 
-Screensaver features:
+<p align="center">Library · Studio · Wallpaper · Screen Saver · Desktop Comfort</p>
 
-- choose a folder of images
-- optionally include subfolders
-- automatically notice images added to or removed from that folder while running
-- random shuffle-bag playback or ordered playback by name, creation date, or modification date
-- keep each image up for seconds, minutes, or hours
-- crossfade gently between images
-- fit, fill, or show at actual size
-- choose the background color used around fitted images
-- show the same sequence on every display or offset the sequence per display
-- Timing presets and keyboard-friendly preview playback controls
+Idlesse is a local-first macOS art display. Browse a personal Library, put a scene on the desktop, edit it in Studio, or use a folder of pictures as a traditional screen saver. Originals stay where they already live.
 
-## Beta preparation
+<p align="center">
+  <img src="Examples/AfterHours.idlesse/assets/night-window.jpg" width="47%" alt="After Hours sample artwork">
+  <img src="Examples/Undertow.idlesse/assets/contours.png" width="47%" alt="Undertow sample artwork">
+</p>
+<p align="center"><sub>Bundled sample artwork: After Hours · Undertow</sub></p>
 
-The Library is the front door. Choose a scene, use it on your desktop, or open Studio to edit it. Collections, schedules and crossfades organize everyday playback. Help → Copy Diagnostics provides a local report without scene names or file paths.
+## What it does
 
-[Beta readiness and packaging](docs/beta-readiness.md) tracks the remaining release gates. Local builds are not notarized public releases.
+- **Library** — browse imported media and editable scenes, search, favorite, preview, organize collections, and send something to the desktop.
+- **Wallpaper** — play still images, video, and procedural `.idlesse` scenes behind the desktop, with multi-display support and optional crossfades.
+- **Studio** — compose layers, animate properties, use masks/blends/effects/particles/shaders, expose scene controls, and save reusable scene packages.
+- **Screen Saver** — choose a folder, set long or short display times, shuffle or order pictures, fit/fill/actual-size them, and crossfade between them.
+- **Desktop Comfort** — dim the desktop on a schedule and keep quieter display routines separate from the artwork itself.
 
-Building a wallpaper from game assets is a separate operator pipeline from the app's own Library import: see [the wallpaper pipeline](docs/wallpaper-pipeline.md) for which renderer a source needs, how to calibrate a camera before paying for an export, and the checks that catch a misframed result.
-
-See the [Developer Log: Multi-Monitor Optimization & Feature Toggles (10 Sep 2026)](docs/dev-log-2026-09-10.md) for architectural notes on the 90% memory reduction (1.6 GB → 173 MB), dual-display shared video engine, and feature toggles.
-
-## Current status
-
-Under active development. The build produces **Idlesse.app** (Library, Studio, wallpaper, and Desktop Comfort) and **Idlesse.saver**, a separate ScreenSaver-framework bundle. The app does not replace the installed saver's own preferences or host lifecycle.
-
-Idlesse stores installed-saver preferences with Apple's `ScreenSaverDefaults`. The selected folder is represented by a read-only security-scoped bookmark created from inside the screen-saver host, so the sandboxed `legacyScreenSaver` process can reopen it later.
-
-GitHub Actions compiles the development preview and the arm64 saver on a macOS runner, smoke-tests the Settings UI at runtime, and verifies both bundles.
-
-## Requirements
-
-- macOS 14 or newer
-- Xcode command-line tools / Xcode
-- Apple Silicon for the current development build
-
-The build script produces an `arm64` saver by default. A universal build can be requested later with `ARCHS="arm64 x86_64" ./build.sh` when Intel support is actually needed.
+The creative runtime supports images, video, gradients, nested groups, masks, blend modes, typed controls, keyframes, procedural signals, audio-reactive scenes, and bounded Metal shaders. See [scene format and limits](docs/scenes.md) for the detailed contract.
 
 ## Build
+
+Requirements:
+
+- macOS 14+
+- Xcode command-line tools or Xcode
+- Apple Silicon for the current development build
 
 ```sh
 ./build.sh
 ```
 
-Outputs:
+This produces:
 
 ```text
 build/Idlesse.app
 build/Idlesse.saver
 ```
 
-Run the standalone development preview:
+Run the development app:
 
 ```sh
 ./build.sh run
 ```
 
-Its settings are useful for local iteration only. Configure the installed saver from the screen-saver host.
-
-## Install
+Install the screen saver locally:
 
 ```sh
 ./build.sh install
 ```
 
-This installs:
+On macOS 26 Tahoe, find it under **System Settings → Wallpaper → Screen Saver → Custom → Other → Idlesse**.
 
-```text
-~/Library/Screen Savers/Idlesse.saver
-```
+## Try the examples
 
-and opens Wallpaper settings.
+The repository includes small `.idlesse` scenes under [`Examples/`](Examples/), including gradients, particles, shader effects, animation controls, audio response, and layered compositions.
 
-### macOS 26 Tahoe
+Useful starting points:
 
-Go to:
+- [`AfterHours.idlesse`](Examples/AfterHours.idlesse) — image-based layered scene
+- [`Undertow.idlesse`](Examples/Undertow.idlesse) — stylized scene with editable controls
+- [`Fireflies.idlesse`](Examples/Fireflies.idlesse) — particle example
+- [`AudioAurora.idlesse`](Examples/AudioAurora.idlesse) — opt-in audio response
+- [`DeskClock.idlesse`](Examples/DeskClock.idlesse) — text/time-driven scene
 
-**System Settings → Wallpaper → Screen Saver → Custom**
+## Current status
 
-Scroll to **Other** and select **Idlesse**.
+Idlesse is under active development. The app, scene runtime, Library, Studio, wallpaper host, and separate ScreenSaver-framework bundle all build today; beta packaging and distribution work continue. Local builds are development builds rather than notarized public releases.
 
-Idlesse now follows the public `ScreenSaverView` configuration contract directly. It returns one persistent configuration window from `configureSheet`, lets System Settings run that window as the native sheet, and ends the document-modal session through `NSApplication.endSheet` when Save or Cancel is clicked. Selecting Idlesse itself never opens settings.
+For the live engineering detail, use the docs instead of this README:
 
-This is intentionally the most native third-party path available through the public ScreenSaver framework. Tahoe has known regressions around legacy third-party screen savers, so diagnostics remain enabled while this path is tested on real macOS 26 systems.
+| Area | Read this |
+| --- | --- |
+| Library and imports | [`docs/library.md`](docs/library.md) |
+| Studio | [`docs/scene-preview.md`](docs/scene-preview.md) |
+| Scene format/runtime | [`docs/scenes.md`](docs/scenes.md) |
+| Desktop wallpaper | [`docs/wallpaper-prototype.md`](docs/wallpaper-prototype.md) |
+| Screen saver / desktop comfort | [`docs/desktop-comfort.md`](docs/desktop-comfort.md) |
+| Performance | [`docs/performance-2026-09-08.md`](docs/performance-2026-09-08.md) |
+| Beta readiness | [`docs/beta-readiness.md`](docs/beta-readiness.md) |
+| Verification | [`docs/runtime-qualification.md`](docs/runtime-qualification.md) |
 
-Choose the image folder in **Idlesse Settings** and press **Save**. Because the picker and bookmark creation happen inside `legacyScreenSaver`, the folder permission belongs to the process that actually displays the images.
+## Philosophy
 
-The **Options…** button can appear a short moment after selecting Idlesse. Tahoe loads third-party `.saver` bundles through `legacyScreenSaver` and queries `hasConfigureSheet` at runtime, unlike Apple's built-in Photos UI which is already part of System Settings.
-
-For Tahoe diagnostics after one Options click:
-
-```sh
-./build.sh diagnose
-```
-
-The diagnostic log records `hasConfigureSheet`, `configureSheet`, preview lifecycle calls, process/window state, and whether System Settings attached the returned configuration window.
-
-## Playback behavior
-
-Random playback is a true shuffle bag: every readable image appears once before the deck is rebuilt, and cycle boundaries avoid immediate repeats without dropping an item. Ordered modes support name, file creation date, and file modification date in both directions.
-
-The selected folder is rescanned every 15 seconds. Added images enter the next rebuilt order automatically, removed images stop being selected, and an empty folder begins playing again when new images appear.
-
-The multi-display modes share one per-process shuffle seed. In **Same image on every display**, saver instances use the same deck; in **Different image on each display**, each screen starts at a different offset in that deck. Exact transition timing still follows when macOS starts each saver instance.
-
-## Photos source
-
-Photos album playback remains a separate compatibility task. Settings explains this limitation rather than offering a permission probe that cannot play albums. The prototype probe source remains available for development.
-
-See `docs/photos-source.md`.
-
-## Product direction
-
-The point is restraint. No feed, account, subscription, curation engine, motion effects, or slideshow theatrics. The image gets time.
-
-Next work: verify repeated native Options → Cancel/Save → Options cycles on Tahoe, then continue Photos-source work and distribution hardening. Earlier local verification notes describe the superseded standalone settings experiment.
-
-## Memory and idle work
-
-Images are decoded with ImageIO at the backing-pixel size needed by the view,
-including Retina scaling and fit/fill geometry. Each image is capped at 16 million
-pixels and an 8192-pixel edge. This bounds retained image dimensions, not total
-process memory or temporary decoder allocations. Extreme crops and very large
-Actual Size images can lose detail at the cap. Originals remain untouched.
-Only the first frame/page is displayed. Color space and orientation are retained;
-there is no full-resolution fallback or persistent image cache.
-
-The canvas retains one image while holding and two during a crossfade. Stopping
-releases both images and the folder index. Hidden/minimized development previews
-stop playback, and the unused host animation callback is reduced to hourly; the
-30 Hz fade timer runs only during transitions. Folder refresh remains every 15
-seconds, with timer tolerance for coalescing wakeups.
-
-Run `bash test.sh` for generated-image decoder checks and `CONFIG=release ./build.sh`
-for optimized bundles. This is not yet a measured whole-process comparison against
-Apple's saver: the host, windows and graphics compositor have additional costs.
-Large-library directory scans still run synchronously. Screensaver image decoding
-now runs serially off the UI thread through the shared scene source and image
-preparation path; desktop image preparation remains synchronous.
-
-## Preview controls and timing presets
-
-The standalone preview includes Pause/Resume (Space), Next (Right Arrow), Show in
-Finder, and Settings (Command-comma). Playback controls are confined to the preview;
-the installed saver keeps normal macOS wake/lock behavior. Pausing holds the
-picture; minimizing or hiding the preview releases its decoded images.
-
-Settings groups pictures, pace and presentation. Calm, Gallery and Quick presets
-fill in timing fields; changes are saved only with Save. Invalid timing stays
-unsaved and produces an explanation. Cloud folders must be locally downloaded;
-Photos album playback is not implemented.
-
-See [measured performance and limitations](docs/performance-2026-09-08.md).
-Run `python3 Benchmarks/run.py` after a release build for isolated stress tests.
-
-## Desktop wallpapers
-
-The app now includes **Wallpaper…** for a desktop image or muted looping MP4/MOV,
-with a menu-bar Stop control. This is separate from the screensaver. The interactive
-host sets a small matching still as the underlying macOS wallpaper for menu-bar
-and Show Desktop consistency; the still remains when playback stops. See [wallpaper mode](docs/wallpaper-prototype.md)
-for controls, measured resource use, verification and current limitations.
-
-## Studio
-
-**Samples → Audio Aurora** demonstrates opt-in system-audio response. Enable Audio
-Response to drive effects with level/bass/mid/treble; **Controls…** adjusts sensitivity.
-Studio shows a live meter, and capture is shared across active hosts without saving audio.
-
-**Studio…** (⌘O) opens the scene editor: layers, canvas movement/resize/rotation,
-native Undo/Redo, and Save/Save As for `.idlesse` documents. It keeps editing separate
-from the running desktop. See [Studio controls and saving](docs/scene-preview.md).
-
-**Bind…** connects a layer property to a numeric control. **Controls…** generates
-sliders for the scene, with undoable Apply and saved defaults. The wallpaper menu
-offers the same controls for temporary adjustments without restarting playback.
-Try `Examples/ControlledAurora.idlesse` for adjustable brightness and edge darkness.
-Bindings also support elapsed time, sine waves, and opt-in pointer response. Try
-`Examples/BreathingAurora.idlesse` for a breathing vignette and gentle pointer tilt.
-V9 adds ordered add/multiply modifiers, including control-driven motion strength.
-Studio also supports saved playback duration/modes, direct keyframe curve editing,
-signal smoothing, and opt-in experimental video scrubbing through the scene playhead.
-Try `Examples/AdjustableAurora.idlesse`, or choose **Multiply result by control**
-in Bind to combine a signal with an existing control.
-Studio's **Time…** control seeks, changes motion speed, and loops scene time in
-Metal, including while paused. Video playback remains independent of this clock.
-
-## Scene runtime
-
-The desktop host now resolves `.idlesse` scene packages asynchronously and plays
-them through separate image and video renderers. See [scene format and current
-limits](docs/scenes.md). The screensaver now resolves its images through the shared async source and
-background image preparation. Desktop packages support up to 16 nodes (two videos, four gradients), with transforms, opacity, visibility and canvas locking. V3 packages add nested groups; Studio can combine neighboring layers, expand groups, and edit their children. Metal composites groups through a bounded texture pool. V4 adds ellipse masks, exposure and saturation through Appearance… and automatically uses Metal for styled scenes. See [scene semantics and limits](docs/scenes.md).
-
-Scene format v2 adds typed nodes, positioning, rotation, scale and a built-in
-animated Metal gradient. Open packages hot-reload on save, preserving the last
-working scene on invalid edits. See [the creative runtime](docs/creative-runtime.md)
-and the self-contained `Examples/Gradient.idlesse` example. The shared clock drives
-procedural time; opted-in videos approximately follow scene transport with seeking and drift correction. This is not frame-exact multi-video synchronization.
-
-If the system Options button stops responding, check `./build.sh installed-status`.
-Building or pushing does not update the installed saver. Close System Settings
-before installing and reopen it afterward. See [the verified recovery](docs/options-recovery-2026-09-08.md).
-
-
-Studio now includes **Span Desktop** canvases and global pointer coordinates,
-**Mask & Blend** controls (image/node alpha or luminance masks, normal/add/multiply/screen),
-and image sprites in **Emitter**. **Export Video** produces cancellable silent HEVC
-clips at 1080p/4K and 30/60 fps. The wallpaper menu offers optional 0.5/1/2-second
-crossfades; Instant is the default. See [format, budgets, and export limits](docs/scenes.md).
+A desktop can hold a picture for longer than a few seconds. Idlesse is built around that idea: personal artwork, restrained playback, direct control, and enough creative machinery to make the desktop feel alive without turning it into a feed.
