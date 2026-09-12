@@ -150,14 +150,13 @@ extension SceneLibraryStore {
             match(left[0], right[0])
         }
 
-        var oldByPath: [String: Int] = [:]
-        for i in unmatchedOld { if let path = old[i].relativeMediaPath { oldByPath[path] = i } }
-        for newIndex in unmatchedNew.sorted() {
-            let incoming = scanned[newIndex]
-            guard let oldIndex = oldByPath[incoming.relativeMediaPath], unmatchedOld.contains(oldIndex) else { continue }
-            let oldCatalogID = normalizedIdentity(old[oldIndex].catalogID)
-            let newCatalogID = normalizedIdentity(incoming.catalogID)
-            if let oldCatalogID, let newCatalogID, oldCatalogID != newCatalogID { continue }
+        let oldPaths = groupedIndices(unmatchedOld.sorted(), key: { old[$0].relativeMediaPath })
+        let newPaths = groupedIndices(unmatchedNew.sorted(), key: { scanned[$0].relativeMediaPath })
+        for path in oldPaths.keys.sorted() {
+            guard let left = oldPaths[path], left.count == 1,
+                  let right = newPaths[path], right.count == 1,
+                  let oldIndex = left.first, let newIndex = right.first,
+                  catalogIDsCompatible(old[oldIndex].catalogID, scanned[newIndex].catalogID) else { continue }
             match(oldIndex, newIndex)
         }
 
@@ -165,8 +164,10 @@ extension SceneLibraryStore {
         let newDigest = groupedIndices(unmatchedNew.sorted(), key: { digestIdentity(scanned[$0].observation) })
         for key in oldDigest.keys.sorted() {
             guard let left = oldDigest[key], left.count == 1,
-                  let right = newDigest[key], right.count == 1 else { continue }
-            match(left[0], right[0])
+                  let right = newDigest[key], right.count == 1,
+                  let oldIndex = left.first, let newIndex = right.first,
+                  catalogIDsCompatible(old[oldIndex].catalogID, scanned[newIndex].catalogID) else { continue }
+            match(oldIndex, newIndex)
         }
 
         let oldSignatures = groupedIndices(unmatchedOld.sorted(), key: { probableSignature(entry: old[$0]) })
@@ -176,6 +177,7 @@ extension SceneLibraryStore {
             guard let left = oldSignatures[key], left.count == 1,
                   let right = newSignatures[key], right.count == 1,
                   let oldIndex = left.first, let newIndex = right.first,
+                  catalogIDsCompatible(old[oldIndex].catalogID, scanned[newIndex].catalogID),
                   let from = old[oldIndex].relativeMediaPath else { continue }
             let to = scanned[newIndex].relativeMediaPath
             guard from != to else { continue }
@@ -223,7 +225,6 @@ extension SceneLibraryStore {
         let sourceIDs = Set(catalog.sources.map(\.id))
         guard sourceIDs.contains(diff.sourceID) else { throw Self.libraryFailure("Source no longer exists.") }
 
-        let oldByID = Dictionary(uniqueKeysWithValues: diff.basisEntries.map { ($0.id, $0) })
         let matchByID = Dictionary(uniqueKeysWithValues: diff.matches.map { ($0.entryID, $0.scannedIndex) })
         var acceptedByOld: [String: Int] = [:]
         var acceptedNew = Set<Int>()
@@ -313,6 +314,11 @@ extension SceneLibraryStore {
     private static func normalizedIdentity(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
+    }
+
+    private static func catalogIDsCompatible(_ old: String?, _ incoming: String?) -> Bool {
+        guard let old = normalizedIdentity(old), let incoming = normalizedIdentity(incoming) else { return true }
+        return old == incoming
     }
 
     private static func digestIdentity(_ observation: ReconciliationObservation?) -> String? {
