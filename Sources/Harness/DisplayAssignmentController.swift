@@ -112,9 +112,8 @@ private final class DisplayMapView: NSView {
     }
 }
 
-/// Reusable visual Displays destination. #52 can host this in its conventional
-/// standalone window and #30 Home can host the exact same controller in its
-/// content split without moving a view out of another window.
+/// Reusable visual Displays destination. Home embeds this exact controller; the
+/// standalone wrapper below remains only for compatibility with old commands.
 final class DisplayAssignmentViewController: NSViewController {
     private struct PendingLibraryTarget {
         let liveID: UInt32
@@ -123,6 +122,7 @@ final class DisplayAssignmentViewController: NSViewController {
     }
 
     private weak var wallpaper: WallpaperController?
+    var onArrangementChange: (() -> Void)?
     private let mode = NSSegmentedControl(
         labels: ["Same on All", "Per Display", "Desktop Span"],
         trackingMode: .selectOne, target: nil, action: nil)
@@ -175,8 +175,6 @@ final class DisplayAssignmentViewController: NSViewController {
         rebuild()
     }
 
-    /// Refresh before presenting or embedding this destination. Keeping this
-    /// explicit also gives Home a deterministic lifecycle hook in smoke tests.
     func activate() {
         pendingLibraryTarget = nil
         _ = view
@@ -263,8 +261,6 @@ final class DisplayAssignmentViewController: NSViewController {
         ])
     }
 
-    /// Dock transitions often emit several intermediate screen-parameter events.
-    /// Coalesce those for 300 ms before identity matching or assignment restore.
     private func scheduleTopologyRefresh() {
         topologyRefreshWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -376,6 +372,7 @@ final class DisplayAssignmentViewController: NSViewController {
         default: break
         }
         rebuild()
+        onArrangementChange?()
     }
 
     private func assign(_ url: URL, to displayID: UInt32) {
@@ -383,11 +380,13 @@ final class DisplayAssignmentViewController: NSViewController {
         pendingLibraryTarget = nil
         if wallpaper.desktopSpanActive || wallpaper.sameWallpaperOnAllDisplays {
             wallpaper.assignLibraryWallpaper(url, to: nil)
+            onArrangementChange?()
             return
         }
         let display = topology.displays.first(where: { $0.liveID == displayID })
         let target = display.map { topology.master(for: $0).liveID } ?? displayID
         wallpaper.assignLibraryWallpaper(url, to: target)
+        onArrangementChange?()
     }
 
     @objc private func clearSelected() {
@@ -395,11 +394,9 @@ final class DisplayAssignmentViewController: NSViewController {
               let display = topology.displays.first(where: { $0.liveID == selectedID }) else { return }
         pendingLibraryTarget = nil
         wallpaper.clearDisplayURL(for: topology.master(for: display).liveID)
+        onArrangementChange?()
     }
 
-    /// Reuse the real Library. In Per Display mode, the next ordinary Library
-    /// Set Wallpaper becomes the selected monitor's override, then the prior
-    /// shared/default wallpaper is restored. Desktop Span remains global.
     @objc private func showLibrary() {
         guard let wallpaper, let selectedID,
               let display = topology.displays.first(where: { $0.liveID == selectedID }) else { return }
@@ -440,6 +437,7 @@ final class DisplayAssignmentViewController: NSViewController {
         }
         reconcilingLibraryTarget = false
         rebuild()
+        onArrangementChange?()
     }
 }
 
