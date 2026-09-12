@@ -30,9 +30,10 @@ def main():
    with (a.job/(key+'.log')).open('w') as log:
     subprocess.run(['python3',str(scripts/'encode.py'),str(temp),str(frames),'3840','2160','models/'+key,key,item['animation']],cwd=root,stdout=log,stderr=log,check=True,timeout=1900)
    verified=batch.probe(temp);stream=verified['streams'][0]
+   rendered=json.loads(Path(str(temp)+'.json').read_text()) if Path(str(temp)+'.json').exists() else {}
    assert (stream['width'],stream['height'],stream['r_frame_rate'],int(stream['nb_read_frames']))==(3840,2160,'60/1',frames)
    poster=a.output/(title+'.jpg');subprocess.run(['ffmpeg','-v','error','-y','-ss',str(min(2,duration/2)),'-i',str(temp),'-frames:v','1','-vf','scale=1024:-2','-q:v','3',str(poster)],check=True)
    temp.replace(final)
-   receipt={**item,'path':str(final.resolve()),'poster':str(poster.resolve()),'sha256':batch.digest(final),'probe':verified,'seconds':round(time.monotonic()-start,2),'source':'Game assets mirrored by azurlane.nagami.moe; not an official wallpaper download','sourceAssetResolution':'Original downloaded textures, rendered at 4K; not AI-upscaled','limitations':'Idle only; no interactive gestures, audio or Unity-specific effects. Visual loop review required.'}
+   receipt={**item,'path':str(final.resolve()),'poster':str(poster.resolve()),'sha256':batch.digest(final),'probe':verified,'camera':rendered.get('camera'),'seconds':round(time.monotonic()-start,2),'source':'Game assets mirrored by azurlane.nagami.moe; not an official wallpaper download','sourceAssetResolution':'Original downloaded textures, rendered at 4K; not AI-upscaled','limitations':'Idle only; no interactive gestures, audio or Unity-specific effects. Visual loop review required.'}
    batch.save(final.with_suffix('.source.json'),receipt);state['items'][key]=receipt;batch.save(state_path,state);print('Completed',item['title'],frames,'frames',receipt['seconds'],'seconds',flush=True)
 if __name__=='__main__':main()

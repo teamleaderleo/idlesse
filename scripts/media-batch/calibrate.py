@@ -41,17 +41,63 @@ def render(workspace, server, asset, stem, animation, out, width, height, second
     subprocess.run([str(binary), str(out), '1', str(width), str(height), asset, stem, animation, str(seconds)],
                    cwd=workspace, check=True, capture_output=True,
                    env={**os.environ, 'IDLESSE_RENDER_PORT': str(server.server_port)})
-    return Image.open(out / '000000.png').convert('RGB')
+    meta_path = Path(str(out) + '.json')
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    return Image.open(out / '000000.png').convert('RGB'), meta
 
 
-def report(im, label):
-    small = im.resize((512, 288), Image.LANCZOS)
-    edges = verify.bars(small)
+def worst_edges(workspace, server, args, width, height, samples):
+    """Framing held across the loop, not just at one instant.
+
+    Characters sway, so a recipe can cover the frame at t=0 and leave a gap a
+    second later; measuring one frame is how a barred export passes review.
+    Returns the worst matte over the sampled times, plus a frame to look at.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        first, meta = render(workspace, server, args.asset, args.stem, args.animation,
+                             Path(tmp) / 'f0', width, height, args.seconds)
+    duration = next((x['duration'] for x in meta.get('animations', [])
+                     if x['name'] == args.animation), 0) or 0
+    times = [args.seconds] if samples <= 1 or not duration else \
+        [round(args.seconds + duration * i / samples, 4) for i in range(samples)]
+    worst, shown = None, first
+    for i, t in enumerate(times):
+        if i == 0:
+            im = first
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                im, _ = render(workspace, server, args.asset, args.stem, args.animation,
+                               Path(tmp) / 'f', width, height, t)
+        e = verify.bars(im.resize((512, 288), Image.LANCZOS))
+        if worst is None:
+            worst = e
+        else:
+            if max(e.values()) > max(worst.values()):
+                shown = im
+            worst = {k: max(worst[k], e[k]) for k in worst}
+    return worst, shown, duration
+
+
+def report(edges, label):
     worst = max(edges.values())
     covered = 100 * (1 - (edges['left'] + edges['right']) / 512) * (1 - (edges['top'] + edges['bottom']) / 288)
     status = 'OK  ' if worst <= 2 else 'MATTE'
     print(f'  {status} {label:22s} edges={edges}  art covers ~{covered:.0f}% of frame')
     return worst
+
+
+def current_recipe(workspace, stem, animation):
+    """Whatever the workspace's cameras.json already says for this stem."""
+    path = workspace / 'cameras.json'
+    if not path.exists():
+        return None
+    entry = json.loads(path.read_text()).get(stem)
+    if isinstance(entry, list):
+        return list(entry)
+    if isinstance(entry, dict):
+        got = entry.get(animation) or entry.get('default')
+        return list(got) if got else None
+    return None
 
 
 def patch_cameras(workspace, stem, camera):
@@ -80,9 +126,14 @@ def main():
     p.add_argument('--animation', required=True)
     p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'))
     p.add_argument('--sweep', type=float, nargs='+', metavar='ZOOM', help='Try these zooms at the given centre')
+    p.add_argument('--solve', action='store_true', help='Nudge the recipe until no matte remains, then print it')
+    p.add_argument('--solve-from', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Starting recipe for --solve')
+    p.add_argument('--rounds', type=int, default=8, help='Maximum --solve iterations')
     p.add_argument('--centre', type=float, nargs=2, default=[0.5, 0.5], metavar=('CX', 'CY'))
     p.add_argument('--seconds', type=float, default=0.0)
     p.add_argument('--size', type=int, nargs=2, default=[1920, 1080], metavar=('W', 'H'))
+    p.add_argument('--samples', type=int, default=4,
+                   help='Frames spread across the loop to measure; 1 checks only --seconds')
     p.add_argument('--out', type=Path, help='Where to write the preview PNG(s)')
     a = p.parse_args()
 
@@ -93,6 +144,39 @@ def main():
     width, height = a.size
     restore = None
     try:
+        if a.solve:
+            camera = list(a.solve_from) if a.solve_from else current_recipe(workspace, a.stem, a.animation) or [1.0, 0.5, 0.5]
+            print(f'{a.stem} / {a.animation}, solving from [{camera[0]:g}, {camera[1]:g}, {camera[2]:g}]:')
+            for round_ in range(a.rounds):
+                restore = patch_cameras(workspace, a.stem, camera) if restore is None else restore
+                patch_cameras(workspace, a.stem, camera)
+                rebundle(workspace)
+                e, im, _ = worst_edges(workspace, server, a, width, height, a.samples)
+                print(f'  round {round_+1}: [{camera[0]:g}, {camera[1]:.4g}, {camera[2]:.4g}] -> {e}')
+                if max(e.values()) <= 2:
+                    im.save(out_root / f'{a.stem}-{a.animation}-solved.png')
+                    print(f'\nsolved: [{camera[0]:g}, {camera[1]:.4g}, {camera[2]:.4g}]')
+                    print(f'  preview {out_root}/{a.stem}-{a.animation}-solved.png')
+                    print('  Look at it: zero matte means the frame is covered, not that the crop is good.')
+                    break
+                zoom, cx, cy = camera
+                # Matte on one side alone is off-centre art and shifts away; matte
+                # summed across both sides is art too small for the frame, which no
+                # amount of shifting fixes. Zoom to close the total, then recentre on
+                # the imbalance. Shifting cx by d moves the art 512*zoom sample px.
+                span = e['left'] + e['right']
+                if span > 2:
+                    zoom *= 512 / max(512 - span - 2, 1)
+                    cx += ((e['left'] - e['right']) / 2) / (512 * zoom)
+                span = e['top'] + e['bottom']
+                if span > 2:
+                    zoom *= 288 / max(288 - span - 2, 1)
+                    cy += ((e['top'] - e['bottom']) / 2) / (288 * zoom)
+                camera = [round(zoom, 4), round(cx, 4), round(cy, 4)]
+            else:
+                print(f'\nno clean recipe within {a.rounds} rounds; last was {camera}')
+            return
+
         attempts = []
         if a.sweep:
             attempts = [(z, *a.centre) for z in a.sweep]
@@ -101,9 +185,8 @@ def main():
 
         if not attempts:
             print(f'{a.stem} / {a.animation} with the workspace camera as it stands:')
-            with tempfile.TemporaryDirectory() as tmp:
-                im = render(workspace, server, a.asset, a.stem, a.animation, Path(tmp), width, height, a.seconds)
-            report(im, 'current')
+            e, im, duration = worst_edges(workspace, server, a, width, height, a.samples)
+            report(e, f'worst of {a.samples} over {duration:g}s')
             im.save(out_root / f'{a.stem}-{a.animation}-current.png')
             print(f'  wrote {out_root}/{a.stem}-{a.animation}-current.png')
             return
@@ -114,10 +197,9 @@ def main():
             restore = patch_cameras(workspace, a.stem, camera) if restore is None else restore
             patch_cameras(workspace, a.stem, camera)
             rebundle(workspace)
-            with tempfile.TemporaryDirectory() as tmp:
-                im = render(workspace, server, a.asset, a.stem, a.animation, Path(tmp), width, height, a.seconds)
+            e, im, _ = worst_edges(workspace, server, a, width, height, a.samples)
             label = f'[{camera[0]:g}, {camera[1]:g}, {camera[2]:g}]'
-            worst = report(im, label)
+            worst = report(e, label)
             name = out_root / f'{a.stem}-{a.animation}-z{camera[0]:g}.png'
             im.save(name)
             if best is None or worst < best[0]:
