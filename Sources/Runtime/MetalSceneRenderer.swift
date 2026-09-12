@@ -328,6 +328,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var lastObservedLoopCount = 0
 
     private var sharedHub: SharedVideoHub?
+    private var desktopAttention = 1.0
 
     init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void, sharedHub: SharedVideoHub? = nil) throws {
@@ -429,7 +430,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             }
             inputs.append(input)
         }
-        diagnostics.animated = playable.animated || authored.usesTime || (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
+        diagnostics.animated = playable.animated || authored.usesTime || authored.usesDesktopAttention ||
+            (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
         diagnostics.activeResources = inputs.count
         // Fail preparation before the host replaces the last working renderer.
         guard let preparedTargets = targets.acquire(device: device, size: metal.drawableSize,
@@ -747,7 +749,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         bindingSmoother.reset()
         inputs = order.map { inputs[$0] }
         for (input, node) in zip(inputs, scene.allNodes) { input.node = node }
-        diagnostics.animated = scene.animated || authored.usesTime || (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
+        diagnostics.animated = scene.animated || authored.usesTime || authored.usesDesktopAttention ||
+            (authored.usesAudio && clock.audioEnabled) || (authored.usesPointer && clock.pointerEnabled)
         setPaused(diagnostics.state != .running)
         metal.draw()
         return true
@@ -800,6 +803,18 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         updateDrawScheduling()
         metal.draw()
     }
+    func setDesktopAttention(_ value: Double) {
+        guard diagnostics.state != .disposed else { return }
+        let next = min(1, max(0, value))
+        guard next != desktopAttention else { return }
+        desktopAttention = next
+        guard sourceScene?.usesDesktopAttention == true else { return }
+        needsFrame = true
+        if diagnostics.state == .running {
+            updateSignals(sampledSignals())
+            metal.draw()
+        }
+    }
     private let textOrigin = Date()
     private var textTimer: Timer?
     private func updateText(at date: Date) throws {
@@ -830,7 +845,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         // A completed once scene has no moving clock. Independent videos,
         // pointer input and smoothing may still change its final composition.
         let independentVideo = inputs.contains { visibleIDs.contains($0.node.id) && $0.node.kind == .video && !$0.followsClock }
-        let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
+        let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true ||
+            sourceScene?.usesDesktopAttention == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
         let finished = clock.isAtEnd && !independentVideo && !reactive
         metal.isPaused = diagnostics.state != .running || !diagnostics.animated || finished
     }
@@ -842,6 +858,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
+        if sourceScene?.usesDesktopAttention == true { signals.desktopAttention = desktopAttention }
         if sourceScene?.usesAudio == true, clock.audioEnabled { signals.audio = clock.audioLevels() }
         if sourceScene?.usesPointer == true, clock.pointerEnabled, let window = metal.window {
             if sourceScene?.canvas == .desktopSpan, let world = desktopFrame {
