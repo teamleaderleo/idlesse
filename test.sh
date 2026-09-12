@@ -120,6 +120,17 @@ if needs_build "build/tests/wallpaper-policy" "${WALLPAPER_POLICY_SRCS[@]}"; the
   pids+=($!)
 fi
 
+# 9. Display identity/topology is a pure synthetic map test: no physical monitor
+# configuration or media decode is needed in CI.
+DISPLAY_TOPOLOGY_SRCS=(
+  Sources/Wallpaper/DisplayTopology.swift
+  Tests/DisplayTopologyTests.swift
+)
+if needs_build "build/tests/display-topology" "${DISPLAY_TOPOLOGY_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${DISPLAY_TOPOLOGY_SRCS[@]}" -framework AppKit -o build/tests/display-topology &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -134,3 +145,4 @@ build/tests/comfort
 build/tests/library
 build/tests/library-grid
 build/tests/wallpaper-policy
+build/tests/display-topology
