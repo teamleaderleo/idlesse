@@ -108,6 +108,18 @@ if needs_build "build/tests/library-grid" "${LIBRARY_GRID_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 8. Wallpaper display/coverage policy
+WALLPAPER_POLICY_SRCS=(
+  Sources/Wallpaper/CoverageRestPolicy.swift
+  Sources/Wallpaper/CoverageMonitor.swift
+  Sources/Wallpaper/DisplayAssignmentStore.swift
+  Tests/WallpaperPolicyTests.swift
+)
+if needs_build "build/tests/wallpaper-policy" "${WALLPAPER_POLICY_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${WALLPAPER_POLICY_SRCS[@]}" -framework AppKit -o build/tests/wallpaper-policy &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -121,3 +133,4 @@ build/tests/audio
 build/tests/comfort
 build/tests/library
 build/tests/library-grid
+build/tests/wallpaper-policy
