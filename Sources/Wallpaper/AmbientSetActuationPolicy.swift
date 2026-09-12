@@ -76,15 +76,56 @@ extension AmbientSetActuationError: LocalizedError {
     }
 }
 
+/// Complete user-controlled baseline beneath Ambient Set automation. The
+/// wallpaper portion keeps #31's Same / Per Display / Desktop Span intent and
+/// durable display identities instead of flattening the baseline to one URL.
 struct AmbientArrangementSnapshot: Codable, Equatable {
-    static let maxBookmarkBytes = 16_384
-
-    var wallpaperBookmark: Data?
+    var wallpaperPlan: PersistedWallpaperAssignmentPlan
     var filesVisible: Bool
     var widgetsVisible: Bool
     var dimming: AmbientDimmingState
 
-    var isValid: Bool { (wallpaperBookmark?.count ?? 0) <= Self.maxBookmarkBytes }
+    private enum CodingKeys: String, CodingKey {
+        case wallpaperPlan, wallpaperBookmark, filesVisible, widgetsVisible, dimming
+    }
+
+    init(wallpaperPlan: PersistedWallpaperAssignmentPlan,
+         filesVisible: Bool,
+         widgetsVisible: Bool,
+         dimming: AmbientDimmingState) {
+        self.wallpaperPlan = wallpaperPlan
+        self.filesVisible = filesVisible
+        self.widgetsVisible = widgetsVisible
+        self.dimming = dimming
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        filesVisible = try values.decode(Bool.self, forKey: .filesVisible)
+        widgetsVisible = try values.decode(Bool.self, forKey: .widgetsVisible)
+        dimming = try values.decode(AmbientDimmingState.self, forKey: .dimming)
+        if let plan = try values.decodeIfPresent(PersistedWallpaperAssignmentPlan.self, forKey: .wallpaperPlan) {
+            wallpaperPlan = plan
+        } else {
+            // One-time compatibility for pre-integration #73 snapshots.
+            let bookmark = try values.decodeIfPresent(Data.self, forKey: .wallpaperBookmark)
+            wallpaperPlan = PersistedWallpaperAssignmentPlan(
+                mode: .sameOnAll,
+                topologySignature: "legacy",
+                baseBookmark: bookmark,
+                assignments: [])
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(wallpaperPlan, forKey: .wallpaperPlan)
+        try values.encode(filesVisible, forKey: .filesVisible)
+        try values.encode(widgetsVisible, forKey: .widgetsVisible)
+        try values.encode(dimming, forKey: .dimming)
+    }
+
+    var isValid: Bool { wallpaperPlan.isValid }
 
     var resolvedState: ResolvedDesktopState {
         ResolvedDesktopState(wallpaper: AmbientSetActuationPolicy.arrangementDefaultTarget,
