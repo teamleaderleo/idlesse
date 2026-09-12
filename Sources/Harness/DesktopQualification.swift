@@ -36,7 +36,9 @@ enum DesktopQualification {
                 "footprintBytes": memory["footprint"]!, "residentBytes": memory["resident"]!,
                 "surfaceCount": controller.surfaces.count]
             row["displays"] = controller.surfaces.map { surface -> [String: Any] in
-                var display: [String: Any] = ["submittedFrames": surface.diagnostics.frameCount,
+                var display: [String: Any] = ["frame": NSStringFromRect(surface.window.frame),
+                    "coverageResting": surface.isCovered,
+                    "submittedFrames": surface.diagnostics.frameCount,
                     "loops": surface.diagnostics.loopCount, "menuStripFrames": surface.menuStripFrames]
                 if let presented = surface.presentedFrameCount { display["presentedFrames"] = presented }
                 if let gpu = surface.gpuTotals { display["gpuSeconds"] = gpu.seconds; display["gpuFrames"] = gpu.frames }
@@ -89,6 +91,7 @@ enum DesktopQualification {
         let report: [String: Any] = ["source": source.path, "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "requestedSecondsPerCycle": seconds, "cycles": cycles,
             "metalRequested": ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1",
+            "coveragePauseEnabled": controller.coveragePauseEnabled,
             "frameRatePreference": SceneFrameRate.selected.title,
             "screens": NSScreen.screens.map { ["frame": NSStringFromRect($0.frame),
                 "scale": $0.backingScaleFactor, "maximumFramesPerSecond": $0.maximumFramesPerSecond] as [String: Any] },

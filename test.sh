@@ -97,6 +97,16 @@ if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 7. Coverage rest policy
+COVERAGE_SRCS=(
+  Sources/Wallpaper/CoverageMonitor.swift
+  Tests/CoverageTests.swift
+)
+if needs_build "build/tests/coverage" "${COVERAGE_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${COVERAGE_SRCS[@]}" -framework AppKit -o build/tests/coverage &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -109,3 +119,4 @@ build/tests/recovery
 build/tests/audio
 build/tests/comfort
 build/tests/library
+build/tests/coverage
