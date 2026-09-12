@@ -68,6 +68,18 @@ It works against any workspace holding a `render` binary and a `cameras.json`, s
 
 Two things it is deliberately strict about. It measures several frames spread across the loop and reports the **worst**, because characters sway and a recipe that covers the frame at `t=0` can leave a gap a second later — that is exactly how barred exports have passed review. And zero matte only means the frame is covered, never that the crop is good; where the character sits in frame is a judgement call, so look at the preview.
 
+### Matte is a defect, bleed is material
+
+These look identical to the edge check and want opposite treatment.
+
+**Matte** is the renderer's own background showing through because the recipe does not cover the frame. It is always wrong, `verify.py` fails on it, and `--solve` exists to remove it.
+
+**Bleed** is low-detail margin the artist painted past the intended composition so that a crop has somewhere to go. It is dark or plain, so it reads like matte and the edge check cannot tell them apart — it measures uniformity, and bleed is usually dark but not uniform. Only looking at the frame distinguishes them.
+
+Do not crop bleed out at export to tidy a frame. Exports are 16:9 and displays are not: a 16:9 frame filling a 1.545 panel is trimmed 13% on the sides, which spends the bleed and lands on a good composition for free. Cropping the bleed away at export removes that margin from every narrower display, which is a real regression in exchange for a tidier 16:9 frame. Hina was cropped this way and reverted for exactly this reason; her camera keeps the bleed deliberately.
+
+So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the widest display in use and let narrower ones spend the margin. Where a wide panel then shows bleed it cannot crop, that is a display-side crop to fix (#96), not a recipe to re-cut — one baked frame cannot be right for two aspects at once, because the narrow display's good view is a crop of the wide display's.
+
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 
 Dependencies retain their upstream licenses, especially the Spine runtimes. This operator harness does not establish redistribution rights for those runtimes or game assets.

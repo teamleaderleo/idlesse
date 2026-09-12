@@ -33,12 +33,27 @@ This caches the selected catalog records and complete declared model files. Use 
 ### Prepared local workspaces
 
 - `build/azur-render`: Live2D. Copy the files from `live2d/`, run `npm ci`, then bundle `render.js` and `../media-batch/fast-export.js` with the pinned esbuild. Supply Cubism Core from its upstream distribution or the viewer; its license is separate and it is not committed here. `catalog.json` comes from the viewer's `l2d_mapping.json`; `viewer-configs.json` combines the selected `skins/<id>.json` records. Download the referenced `bg/star_level_bg_<id>.png` files into `backgrounds/`.
-- `build/azur-spine`: copy `spine/render.js`, use the media-batch dependency lock and HTML/fast-export sources. Each `models/<id>/model.json` is the viewer's `models/<id>.json`; retain every declared layer, atlas and texture beside it. Base Vanguard requires both layers. The adapter currently supports Spine 3.8 and no external image/effect layers; review anything outside that subset separately.
+- `build/azur-spine`: copy `spine/render.js` and `spine/cameras.json` (the renderer imports the recipes, so bundling fails without it), and use the media-batch dependency lock and HTML/fast-export sources. Each `models/<id>/model.json` is the viewer's `models/<id>.json`; retain every declared layer, atlas and texture beside it. Base Vanguard requires both layers. The adapter currently supports Spine 3.8 and no external image/effect layers; review anything outside that subset separately.
 - Compile `scripts/media-batch/Render.swift` and `Encode.swift` into `render` and `encode` in each workspace. Both use AppKit/WebKit and require a macOS GUI session. All network access during rendering is loopback-only.
 
 The Live2D adapter disables automatic pointer, blink and breath behavior so authored animation controls the result. It advances three idle cycles for physics warmup and then samples monotonically at 60 Hz. The scene period is rounded to the nearest frame; a loop flag and warmup alone do not establish a seamless boundary. Inspect first/middle/last and seam metrics before import.
 
 ### Export
+
+### Camera recipes
+
+`spine/cameras.json` holds `[zoom, cx, cy]` per asset, and `live2d/cameras.json` a zoom scalar. Both take the same per-animation object form as the lobby renderer, since a recipe is framed against the posed skeleton and is only valid for the animation it was tuned on.
+
+The spine adapter needs these more than the lobby one does. Skeleton bounds cover the whole rig including transparent effect padding, so fitting bounds alone leaves a character-only model small inside the renderer's `0x18202b` background — `hu`, `makesi` and `qianwei` were 68%, 56% and 64% background before they were calibrated. Anything without a recipe falls back to that bare fit, so a newly prepared asset needs one before it is worth exporting.
+
+Use `media-batch/calibrate.py` rather than editing a recipe and exporting to find out:
+
+```sh
+python3 scripts/media-batch/calibrate.py --workspace build/azur-spine \
+  --asset models/<id> --stem <id> --animation normal --solve
+```
+
+It reports the worst matte over frames spread across the loop, writes previews, and restores the workspace's copy afterwards; commit the recipe you chose here. Remove matte, but keep any bleed margin the artist painted past the composition — narrower displays crop it usefully, and the pipeline README explains why that is not the same thing as a dead edge.
 
 After building the workspaces, run `python3 scripts/azur-lane/previews.py build/azur-render final-previews` and repeat for `build/azur-spine`. This writes 960×540 images and metadata. Review framing before export; existing previews are skipped, so use a fresh directory after changes (and promote reviewed metadata to `final-previews`). Then:
 

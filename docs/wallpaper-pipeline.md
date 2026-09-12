@@ -44,8 +44,23 @@ Then copy the recipe it prints into the tracked `cameras.json`
 (`scripts/media-batch/cameras.json`, `scripts/azur-lane/spine/cameras.json`,
 or `scripts/azur-lane/live2d/cameras.json`) and rebuild the workspace bundle.
 Look at the preview: `--solve` only guarantees the frame is covered, not that
-the crop flatters the character. Prefer the character large; background is
-what you crop away.
+the crop flatters the character.
+
+When you look, separate two things that measure the same and want opposite
+treatment. **Matte** is the renderer's background showing through because the
+recipe does not cover the frame — always wrong, and what `--solve` removes.
+**Bleed** is low-detail margin painted past the intended composition so a crop
+has somewhere to go; it is dark or plain, so the edge check cannot tell it from
+matte, and only your eyes can.
+
+Keep the bleed. Exports are 16:9 and displays are not: a 16:9 frame filling a
+1.545 panel is trimmed 13% on the sides, which spends the bleed and arrives at
+a good composition for nothing. Cropping it away at export buys a tidier 16:9
+frame and takes that margin from every narrower display. Frame for the widest
+display in use and let the narrow ones crop. Where a wide panel then shows
+bleed it has no room to crop, that is a display-side fix (#96), not a recipe to
+re-cut: the narrow display's good framing *is* a crop of the wide display's, so
+no single baked frame is right for both.
 
 **3. Render.** `run.py` for lobbies (restores once, caches, resumes; use
 `--port 0` if something already holds the default port), `export.py` for Azur.
@@ -81,5 +96,19 @@ a superseded copy deliberately.
 - **Only the authored animation plays.** A model can ship separate motions for
   scene effects: Perseus keeps her falling petals in `effect`, so exporting
   `idle` alone freezes them. Check the motion list for anything the idle does
-  not drive, and note that two motions of different lengths may have no short
-  common loop.
+  not drive. Two motions of different lengths may share no short common loop —
+  Perseus's are 5.333s and 6.283s, coprime at 60fps, so the ambient track is
+  retimed to one cycle per idle loop rather than either layer being left to
+  jump.
+- **Two disjoint motions can both play.** Check for overlapping parameters
+  before assuming they conflict; Perseus's idle and ambient groups share none,
+  which is why both can run at once.
+- **A fix on one display can be a regression on another.** Exports are 16:9 and
+  displays are not, so a narrower panel sees a crop rather than the frame. That
+  crop can be doing useful work: Hina's bleed is removed for free on a 1.545
+  panel, and cropping it at export to tidy the 16:9 frame took that margin
+  away. Check what every display in use actually shows before re-cutting.
+- **An automated check measures what it measures.** The edge guard catches a
+  uniform matte, which is not the same as an ugly edge. Hina's dead band was
+  dark but not uniform, so it passed while still looking wrong on a display.
+  Passing verification is a floor, not a verdict.
