@@ -55,6 +55,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selected: Item? {
         didSet { UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID") }
     }
+    /// Launch-restore for the filter popup, matched by title and consumed by
+    /// the first reload (a deleted collection falls back to All Wallpapers).
+    private var pendingFilterTitle: String?
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
     private var importFailureHandler: (([String]) -> Void)?
@@ -172,6 +175,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         filter.target = self; filter.action = #selector(filterChanged)
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
+        sort.selectItem(at: min(max(0, UserDefaults.standard.integer(forKey: "Idlesse.library.sortMode")), sort.numberOfItems - 1))
+        pendingFilterTitle = UserDefaults.standard.string(forKey: "Idlesse.library.filterTitle")
         let add = NSButton(title: "Import…", target: self, action: #selector(addScenes))
         collectionActions.addItem(withTitle: "Collections…")
         collectionActions.target = self
@@ -357,7 +362,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return (name, title, url)
         }
     }
-    @objc private func filterChanged() { reload() }
+    @objc private func filterChanged() {
+        UserDefaults.standard.set(sort.indexOfSelectedItem, forKey: "Idlesse.library.sortMode")
+        UserDefaults.standard.set(filter.selectedItem?.title ?? "All Wallpapers", forKey: "Idlesse.library.filterTitle")
+        reload()
+    }
     /// Forgiving subsequence match: every query character must appear in order,
     /// with bonuses for prefixes, word starts, and contiguity. Lower is better;
     /// nil means no match. Empty queries match everything at zero cost.
@@ -435,6 +444,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         if let collectionID, let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == collectionID }) {
             filter.selectItem(at: index)
         } else { filter.selectItem(at: max(0, previousFilter)) }
+        if let pending = pendingFilterTitle {
+            pendingFilterTitle = nil
+            if let index = filter.itemArray.firstIndex(where: { $0.title == pending }) {
+                filter.selectItem(at: index)
+            }
+        }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
         items = allItems().filter { item in
             let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil

@@ -1277,7 +1277,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             self.updateMenu()
         }
     }
-    @objc private func quit() { onStop = nil; stop(); NSApp.terminate(nil) }
+    /// Menu-bar quit must behave like Cmd+Q: preserve the resume bookmark so
+    /// the next launch autoplays. (Plain stop() clears restart state, which is
+    /// correct for Stop Wallpaper but wrong for quitting the app.)
+    @objc private func quit() { onStop = nil; shutdown(); NSApp.terminate(nil) }
 
     private func showError(_ message: String) {
         if let onError { onError(message); return }
