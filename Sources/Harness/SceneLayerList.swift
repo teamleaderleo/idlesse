@@ -160,11 +160,14 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
     private let rangeLabel = NSTextField(labelWithString: "")
     private let addButton = NSButton(title: "+ Effect", target: nil, action: nil)
     private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let editShaderButton = NSButton(title: "Edit Metal Effect…", target: nil, action: nil)
     private let kinds: [SceneNode.Style.Effect.Kind] = [.bloom, .blur, .exposure, .saturation, .vignette, .displacement]
+    private var customIndex: Int { kinds.count }
     private let dragType = NSPasteboard.PasteboardType("app.idlesse.effect-row")
     private let owner = UUID().uuidString
     private var effects: [SceneNode.Style.Effect]
     private var drafts: [UUID: String] = [:]
+    private var shaderEditor: StudioShaderEffectEditorController?
     init(effects: [SceneNode.Style.Effect]) {
         self.effects = effects
         super.init(frame: .zero)
@@ -185,7 +188,7 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
         addButton.target = self; addButton.action = #selector(addEffect)
         removeButton.target = self; removeButton.action = #selector(removeEffect)
         addArrangedSubview(NSStackView(views: [addButton, removeButton]))
-        kind.addItems(withTitles: kinds.map { $0.rawValue.capitalized })
+        kind.addItems(withTitles: kinds.map { $0.rawValue.capitalized } + ["Custom Shader"])
         kind.target = self; kind.action = #selector(changeKind)
         kind.setAccessibilityLabel("Selected effect type")
         amount.setAccessibilityLabel("Selected effect amount")
@@ -193,6 +196,9 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
         kind.widthAnchor.constraint(equalToConstant: 150).isActive = true
         amount.widthAnchor.constraint(equalToConstant: 110).isActive = true
         addArrangedSubview(NSStackView(views: [kind, amount]))
+        editShaderButton.target = self; editShaderButton.action = #selector(editShader)
+        editShaderButton.setAccessibilityLabel("Edit custom Metal effect source")
+        addArrangedSubview(editShaderButton)
         addArrangedSubview(rangeLabel)
         if !effects.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         updateSelection()
@@ -200,18 +206,23 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func numberOfRows(in tableView: NSTableView) -> Int { effects.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        NSTextField(labelWithString: "\(row + 1).  \(effects[row].type.rawValue.capitalized)")
+        let label = effects[row].shader == nil ? effects[row].type.rawValue.capitalized : "Custom Shader"
+        return NSTextField(labelWithString: "\(row + 1).  \(label)")
     }
     func tableViewSelectionDidChange(_ notification: Notification) { updateSelection() }
     private func updateSelection() {
         let selected = effects.indices.contains(table.selectedRow)
         kind.isEnabled = selected; amount.isEnabled = selected; removeButton.isEnabled = selected
+        editShaderButton.isEnabled = selected && effects[table.selectedRow].shader != nil
         addButton.isEnabled = effects.count < 8
         guard selected else { amount.stringValue = ""; rangeLabel.stringValue = "Add an effect to begin."; return }
         let effect = effects[table.selectedRow]
-        kind.selectItem(at: kinds.firstIndex(of: effect.type)!)
+        if effect.shader != nil { kind.selectItem(at: customIndex) }
+        else { kind.selectItem(at: kinds.firstIndex(of: effect.type)!) }
         amount.stringValue = effect.id.flatMap { drafts[$0] } ?? String(effect.amount)
-        rangeLabel.stringValue = "Amount: \(effect.range.lowerBound)…\(effect.range.upperBound)"
+        rangeLabel.stringValue = effect.shader == nil
+            ? "Amount: \(effect.range.lowerBound)…\(effect.range.upperBound)"
+            : "Amount: 0…1 · one texture sample pass"
     }
     func controlTextDidChange(_ notification: Notification) {
         guard effects.indices.contains(table.selectedRow), let id = effects[table.selectedRow].id else { return }
@@ -234,11 +245,36 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
     @objc private func changeKind() {
         guard effects.indices.contains(table.selectedRow) else { return }
         let index = table.selectedRow
-        effects[index].type = kinds[kind.indexOfSelectedItem]
-        effects[index].amount = effects[index].type == .displacement ? 0.02 : effects[index].type == .blur ? 8 : effects[index].type == .exposure ? 0 : 1
+        if kind.indexOfSelectedItem == customIndex {
+            effects[index].type = .displacement // carrier; shader payload defines the actual effect.
+            effects[index].amount = 1
+            if effects[index].shader == nil {
+                effects[index].shader = .init(source: MetalShaderEffectCompiler.defaultSource, speed: 1)
+            }
+        } else {
+            effects[index].type = kinds[kind.indexOfSelectedItem]
+            effects[index].shader = nil
+            effects[index].amount = effects[index].type == .displacement ? 0.02 : effects[index].type == .blur ? 8 : effects[index].type == .exposure ? 0 : 1
+        }
         if let id = effects[index].id { drafts.removeValue(forKey: id) }
         table.reloadData(); table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         updateSelection()
+    }
+    @objc private func editShader() {
+        guard shaderEditor == nil, effects.indices.contains(table.selectedRow),
+              let shader = effects[table.selectedRow].shader, let parent = window else { return }
+        let effectID = effects[table.selectedRow].id
+        let editor = StudioShaderEffectEditorController(shader: shader)
+        editor.onApply = { [weak self] shader in
+            guard let self, let effectID,
+                  let index = self.effects.firstIndex(where: { $0.id == effectID }) else { return }
+            self.effects[index].shader = shader
+            self.table.reloadData()
+            self.updateSelection()
+        }
+        editor.onClose = { [weak self] in self?.shaderEditor = nil }
+        shaderEditor = editor
+        editor.present(on: parent)
     }
     func validatedEffects() throws -> [SceneNode.Style.Effect] {
         if effects.indices.contains(table.selectedRow), let id = effects[table.selectedRow].id { drafts[id] = amount.stringValue }
@@ -248,7 +284,14 @@ final class SceneEffectsEditor: NSStackView, NSTableViewDataSource, NSTableViewD
                 guard let value = Double(text), value.isFinite else { throw SceneError.invalid("Enter a finite effect amount.") }
                 result.amount = value
             }
-            guard result.range.contains(result.amount) else { throw SceneError.invalid("\(result.type.rawValue.capitalized) amount must be \(result.range.lowerBound)…\(result.range.upperBound).") }
+            guard result.range.contains(result.amount) else {
+                let title = result.shader == nil ? result.type.rawValue.capitalized : "Custom shader"
+                throw SceneError.invalid("\(title) amount must be \(result.range.lowerBound)…\(result.range.upperBound).")
+            }
+            if let shader = result.shader {
+                try shader.validate()
+                try MetalShaderEffectCompiler.validate(shader)
+            }
             return result
         }
     }
