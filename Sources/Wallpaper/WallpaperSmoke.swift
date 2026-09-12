@@ -38,6 +38,18 @@ enum WallpaperSmoke {
         // A taller-than-display source spends its overflow vertically instead.
         let tall = SceneFocus(x: 0.5, y: 0).filledFrame(content: CGSize(width: 1000, height: 4000), in: display)
         precondition(abs(tall.maxY - display.maxY) < 0.01, "focus at the top keeps the top of the source")
+        // Round-trip, because SceneDescriptor codes through explicit CodingKeys: a
+        // field added to the struct alone is silently dropped on both encode and
+        // decode, which is how this shipped unreachable the first time.
+        let focused = SceneDescriptor(title: "focus", nodes: [SceneNode(content: .gradient)], focus: SceneFocus(x: 0.25, y: 0.75))
+        let reread = try JSONDecoder().decode(SceneDescriptor.self, from: JSONEncoder().encode(focused))
+        precondition(reread.focus == SceneFocus(x: 0.25, y: 0.75), "focus must survive an encode/decode round-trip")
+        let unfocused = try JSONDecoder().decode(SceneDescriptor.self,
+            from: JSONEncoder().encode(SceneDescriptor(title: "plain", nodes: [SceneNode(content: .gradient)])))
+        precondition(unfocused.focus == nil, "absent focus must stay absent rather than defaulting to a centre")
+        // Transforms rebuild the descriptor field by field, so each one can drop it.
+        precondition(focused.replacingNodes(focused.nodes).focus == SceneFocus(x: 0.25, y: 0.75),
+            "replacingNodes must carry focus forward")
 
         var viewport = TimelineViewport()
         viewport.resize(to: 10)

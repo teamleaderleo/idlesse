@@ -100,12 +100,13 @@ struct SceneDescriptor: Codable, Sendable {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = []) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = [], focus: SceneFocus? = nil) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants; self.focus = focus
     }
-    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants }
+    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants, focus }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        focus = try c.decodeIfPresent(SceneFocus.self, forKey: .focus)
         canvas = try c.decodeIfPresent(Canvas.self, forKey: .canvas)
         metadata = try c.decodeIfPresent(SceneMetadata.self, forKey: .metadata)
         components = try c.decodeIfPresent([String: SceneComponent].self, forKey: .components)
@@ -120,7 +121,7 @@ struct SceneDescriptor: Codable, Sendable {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         var controls = parameters
         for key in controls.keys { controls[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
-        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants)
+        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants, focus: focus)
     }
     func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
@@ -230,7 +231,7 @@ struct SceneDescriptor: Codable, Sendable {
         for id in result.flatMap({ $0.descendants }).map(\.id) {
             _ = SceneTree.edit(id, in: &result) { siblings, index in siblings[index].componentID = nil }
         }
-        return SceneDescriptor(title: title, nodes: result, canvas: canvas)
+        return SceneDescriptor(title: title, nodes: result, canvas: canvas, focus: focus)
     }
 }
 
@@ -876,6 +877,7 @@ struct LocalSceneSource: SceneSource {
     }
     private struct Scene: Decodable {
         let canvas: SceneDescriptor.Canvas?
+        let focus: SceneFocus?
         let parameters: [String: SceneParameter]?
         let bindings: [SceneParameterBinding]?
         let timeline: SceneTimeline?
@@ -1081,7 +1083,7 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version == SceneFormat.revision || scene.variants == nil else {
             throw SceneError.invalid("Scene variants require revision 21.")
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [])
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [], focus: scene.focus)
         if manifest.version == SceneFormat.revision {
             guard SceneFormat.features(result).isSubset(of: Set(manifest.features ?? [])) else { throw SceneError.invalid("The manifest is missing required scene features.") }
         } else if result.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) {

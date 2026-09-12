@@ -87,6 +87,7 @@ For the live engineering detail, use the docs instead of this README:
 | Performance | [`docs/performance-2026-09-08.md`](docs/performance-2026-09-08.md) |
 | Beta readiness | [`docs/beta-readiness.md`](docs/beta-readiness.md) |
 | Verification | [`docs/runtime-qualification.md`](docs/runtime-qualification.md) |
+| Building wallpapers from game assets | [`docs/wallpaper-pipeline.md`](docs/wallpaper-pipeline.md) |
 
 ## Philosophy
 
