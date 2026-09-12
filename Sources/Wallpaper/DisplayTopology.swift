@@ -41,9 +41,8 @@ struct DisplayIdentity: Codable, Hashable {
     }
 
     func matchScore(to other: DisplayIdentity) -> Int {
-        if let lhs = colorSyncUUID, let rhs = other.colorSyncUUID, lhs.caseInsensitiveCompare(rhs) == .orderedSame {
-            return 10_000
-        }
+        if let lhs = colorSyncUUID, let rhs = other.colorSyncUUID,
+           lhs.caseInsensitiveCompare(rhs) == .orderedSame { return 10_000 }
         var score = 0
         if vendorID != 0 && vendorID == other.vendorID { score += 120 }
         if modelID != 0 && modelID == other.modelID { score += 120 }
@@ -54,9 +53,15 @@ struct DisplayIdentity: Codable, Hashable {
         if name.caseInsensitiveCompare(other.name) == .orderedSame { score += 40 }
         return score
     }
+
+    static func bestMatch(for saved: DisplayIdentity, among current: [DisplayIdentity]) -> DisplayIdentity? {
+        current.map { ($0, saved.matchScore(to: $0)) }
+            .filter { $0.1 >= 300 }
+            .max { $0.1 < $1.1 }?.0
+    }
 }
 
-struct DisplaySnapshot: Hashable {
+struct DisplaySnapshot {
     var liveID: UInt32
     var identity: DisplayIdentity
     var frame: CGRect
@@ -64,7 +69,6 @@ struct DisplaySnapshot: Hashable {
     var pixelHeight: Int
     var scale: CGFloat
     var isMain: Bool
-    /// nil for an independent display; the master's live ID for a mirror.
     var mirrorMasterID: UInt32?
 
     var resolutionDescription: String { "\(pixelWidth) × \(pixelHeight)" }
@@ -94,13 +98,8 @@ struct DisplayTopology {
         return DisplayTopology(displays: displays)
     }
 
-    var desktopFrame: CGRect {
-        displays.reduce(CGRect.null) { $0.union($1.frame) }
-    }
-
-    var independentDisplays: [DisplaySnapshot] {
-        displays.filter { $0.mirrorMasterID == nil }
-    }
+    var desktopFrame: CGRect { displays.reduce(CGRect.null) { $0.union($1.frame) } }
+    var independentDisplays: [DisplaySnapshot] { displays.filter { $0.mirrorMasterID == nil } }
 
     func master(for display: DisplaySnapshot) -> DisplaySnapshot {
         guard let masterID = display.mirrorMasterID,
@@ -108,8 +107,9 @@ struct DisplayTopology {
         return master
     }
 
-    /// Durable assignment key. Exact hardware identity leads; only indistinguishable
-    /// siblings receive a deterministic relative-position suffix.
+    /// Exact hardware identity leads. Only indistinguishable siblings receive a
+    /// deterministic relative-position suffix so CGDirectDisplayID never leaks
+    /// into durable persistence.
     func persistentKey(for display: DisplaySnapshot) -> String {
         let base = display.identity.durableKey
         let siblings = displays.filter { $0.identity.durableKey == base }
@@ -118,28 +118,29 @@ struct DisplayTopology {
             if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
             if $0.frame.minY != $1.frame.minY { return $0.frame.minY < $1.frame.minY }
             if $0.frame.width != $1.frame.width { return $0.frame.width < $1.frame.width }
-            return $0.liveID < $1.liveID
+            return $0.frame.height < $1.frame.height
         }
         let index = ordered.firstIndex(where: { $0.liveID == display.liveID }) ?? 0
         return "\(base)#\(index)"
     }
 
+    /// Preserve actual AppKit desktop geometry: negative origins, gaps, offsets,
+    /// portrait displays and different point sizes all survive normalization.
     func normalizedFrames(in canvas: CGSize, padding: CGFloat = 12) -> [UInt32: CGRect] {
         let union = desktopFrame
-        guard !union.isNull, union.width > 0, union.height > 0, canvas.width > padding * 2, canvas.height > padding * 2 else { return [:] }
+        guard !union.isNull, union.width > 0, union.height > 0,
+              canvas.width > padding * 2, canvas.height > padding * 2 else { return [:] }
         let usable = CGSize(width: canvas.width - padding * 2, height: canvas.height - padding * 2)
         let scale = min(usable.width / union.width, usable.height / union.height)
         let drawn = CGSize(width: union.width * scale, height: union.height * scale)
         let origin = CGPoint(x: (canvas.width - drawn.width) / 2, y: (canvas.height - drawn.height) / 2)
         return Dictionary(uniqueKeysWithValues: displays.map { display in
             let f = display.frame
-            let rect = CGRect(
+            return (display.liveID, CGRect(
                 x: origin.x + (f.minX - union.minX) * scale,
                 y: origin.y + (f.minY - union.minY) * scale,
                 width: max(18, f.width * scale),
-                height: max(12, f.height * scale)
-            )
-            return (display.liveID, rect)
+                height: max(12, f.height * scale)))
         })
     }
 
@@ -158,11 +159,7 @@ struct DisplayTopology {
     }
 }
 
-enum DisplayAssignmentMode: String, Codable {
-    case sameOnAll
-    case perDisplay
-    case desktopSpan
-}
+enum DisplayAssignmentMode: String, Codable { case sameOnAll, perDisplay, desktopSpan }
 
 struct ResolvedDisplayAssignment {
     var persistentKey: String
@@ -179,47 +176,6 @@ struct ResolvedWallpaperAssignmentPlan {
 
     func assignment(for liveID: UInt32) -> ResolvedDisplayAssignment? {
         assignments.first { $0.liveID == liveID }
-    }
-}
-
-extension WallpaperController {
-    /// Canonical resolved assignment view consumed by visual Displays. #52's
-    /// live surfaces and system-backdrop code already resolve through the same
-    /// selected/explicit assignment APIs; this exposes that result as one plan
-    /// for topology-aware callers and mirror groups.
-    func resolvedDisplayAssignmentPlan(topology: DisplayTopology = .current()) -> ResolvedWallpaperAssignmentPlan {
-        let mode: DisplayAssignmentMode = desktopSpanActive ? .desktopSpan : (sameWallpaperOnAllDisplays ? .sameOnAll : .perDisplay)
-        let assignments = topology.displays.map { display -> ResolvedDisplayAssignment in
-            let master = topology.master(for: display)
-            let source: URL?
-            let explicit: Bool
-            switch mode {
-            case .desktopSpan, .sameOnAll:
-                source = selectedURL
-                explicit = false
-            case .perDisplay:
-                source = displayURL(for: master.liveID)
-                explicit = explicitDisplayURL(for: master.liveID) != nil
-            }
-            return ResolvedDisplayAssignment(
-                persistentKey: topology.persistentKey(for: master),
-                liveID: display.liveID,
-                sourceURL: source,
-                explicit: explicit,
-                mirroredFrom: display.mirrorMasterID
-            )
-        }
-        return ResolvedWallpaperAssignmentPlan(mode: mode, topology: topology, assignments: assignments)
-    }
-
-    func reconcileDurableDisplayAssignments(topology: DisplayTopology = .current()) {
-        let store = DisplayAssignmentStore(defaults: resumeDefaults, prefix: DisplayAssignmentStore.wallpaperPrefix)
-        for display in topology.displays {
-            let persistentID = Self.persistentDisplayIdentifier(display.liveID)
-            store.reconcile(identityKey: topology.persistentKey(for: display),
-                            persistentID: persistentID,
-                            legacyDisplayID: display.liveID)
-        }
     }
 }
 
@@ -274,8 +230,7 @@ struct KnownDisplayArrangementsStore {
     }
 
     func bestMatch(for topology: DisplayTopology) -> DisplayArrangementProfile? {
-        let exact = profiles().first { $0.signature == topology.signature }
-        if let exact { return exact }
+        if let exact = profiles().first(where: { $0.signature == topology.signature }) { return exact }
         let current = Set(topology.displays.map { topology.persistentKey(for: $0) })
         return profiles().map { profile in
             (profile, Set(profile.memberKeys).intersection(current).count)
@@ -324,8 +279,14 @@ enum DisplayTopologySmoke {
             DisplaySnapshot(liveID: 21, identity: external, frame: CGRect(x: 1512, y: -98, width: 2560, height: 1440),
                             pixelWidth: 2560, pixelHeight: 1440, scale: 1, isMain: false, mirrorMasterID: nil)
         ])
-        precondition(mixed.normalizedFrames(in: CGSize(width: 700, height: 360))[21]!.height >
-                     mixed.normalizedFrames(in: CGSize(width: 700, height: 360))[20]!.height)
+        let mixedFrames = mixed.normalizedFrames(in: CGSize(width: 700, height: 360))
+        precondition(mixedFrames[21]!.height > mixedFrames[20]!.height)
+
+        let reconnectSaved = DisplayIdentity(colorSyncUUID: nil, vendorID: 9, modelID: 99, serialNumber: 777,
+                                             builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
+        let reconnectCurrent = DisplayIdentity(colorSyncUUID: "NEW-SESSION-UUID", vendorID: 9, modelID: 99, serialNumber: 777,
+                                               builtIn: false, physicalWidthMM: 598, physicalHeightMM: 336, name: "Desk")
+        precondition(DisplayIdentity.bestMatch(for: reconnectSaved, among: [builtin, reconnectCurrent]) == reconnectCurrent)
 
         let suite = "DisplayTopologySmoke.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
