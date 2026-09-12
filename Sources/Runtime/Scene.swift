@@ -51,6 +51,7 @@ struct SceneDescriptor: Codable, Sendable {
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
+    var usesDesktopAttention: Bool { bindings.contains { $0.signal == .desktopAttention } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
     var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .shader].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool {
@@ -146,6 +147,7 @@ struct SceneDescriptor: Codable, Sendable {
                 case .audioBass: source = signals.audio.bass
                 case .audioMid: source = signals.audio.mid
                 case .audioTreble: source = signals.audio.treble
+                case .desktopAttention: source = signals.desktopAttention
                 }
             } else {
                 guard let parameter = parameters[binding.parameter], parameter.type == .number else { throw SceneError.invalid("Motion bindings require a numeric parameter.") }
@@ -229,7 +231,7 @@ struct SceneComponent: Codable, Sendable {
         for (key, parameter) in parameters {
             var cloned = parameter
             cloned.name = String("\(root.displayName) · \(parameter.name)".prefix(80))
-            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: $0.property) }
+            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: target.property) }
             next.parameters[keys[key]!] = cloned
         }
         for binding in bindings {
@@ -426,7 +428,12 @@ struct SceneParameterBinding: Codable, Sendable {
         var parameter: String? = nil
         var value: Double? = nil
     }
-    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
+    enum Signal: String, Codable, Sendable {
+        case time, sine
+        case pointerX = "pointer.x", pointerY = "pointer.y"
+        case audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble"
+        case desktopAttention = "desktop.attention"
+    }
     var target: ScenePropertyAddress
     var parameter: String = ""
     var scale: Double = 1
@@ -468,6 +475,7 @@ struct SceneSignals: Sendable {
     var time: Double = 0
     var pointerX: Double = 0
     var pointerY: Double = 0
+    var desktopAttention: Double = 1
 }
 
 struct SceneNode: Codable, Sendable {
@@ -794,7 +802,12 @@ struct LocalSceneSource: SceneSource {
         } else if manifest.features != nil || manifest.metadata != nil {
             throw SceneError.invalid("Feature declarations and metadata require revision 21.")
         }
-        guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
+        guard Set(manifest.capabilities).count == manifest.capabilities.count,
+              manifest.capabilities.allSatisfy({
+                  ($0 == "pointer" && manifest.version >= 8) ||
+                  ($0 == "audio" && manifest.version >= 14) ||
+                  ($0 == "desktop-attention" && manifest.version == SceneFormat.revision)
+              }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
@@ -911,6 +924,9 @@ struct LocalSceneSource: SceneSource {
         }
         guard !result.usesAudio || (manifest.version >= 14 && manifest.capabilities.contains("audio")) else { throw SceneError.invalid("Audio bindings require v14 and the audio capability.") }
         guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
+        guard !result.usesDesktopAttention || (manifest.version == SceneFormat.revision && manifest.capabilities.contains("desktop-attention")) else {
+            throw SceneError.invalid("Desktop-attention bindings require revision 21 and the desktop-attention capability.")
+        }
         _ = try result.evaluated()
         return result
     }
@@ -1119,9 +1135,12 @@ enum ScenePackageWriter {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
         }
+        var capabilities: [String] = []
+        if scene.usesPointer { capabilities.append("pointer") }
+        if scene.usesAudio { capabilities.append("audio") }
+        if scene.usesDesktopAttention { capabilities.append("desktop-attention") }
         var manifest: [String: Any] = ["version": SceneFormat.revision, "title": scene.title,
-            "features": SceneFormat.features(scene).sorted(),
-            "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])]
+            "features": SceneFormat.features(scene).sorted(), "capabilities": capabilities]
         if let metadata = scene.metadata {
             manifest["metadata"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata))
         }
