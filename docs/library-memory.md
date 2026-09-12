@@ -11,3 +11,7 @@ Duplicate detection is conservative: individual imports already coalesce the sam
 A disk thumbnail cache is intentionally deferred: #35/#36 already bound live thumbnail work, and this slice has no repeated-browsing measurement showing disk caching would repay its invalidation and storage cost.
 
 📚 Curator
+
+## Library surface
+
+The preview shows an explicit 1–5 star rating and local play count. Smart Collections are authored from one required and one optional readable condition, with name/rating/recent/play-count sorting. Collection playback offers Order, Shuffle, Weighted, and Surprise choices. Exact duplicate membership is visible in the preview and available as a Smart Collection condition; detection remains advisory and never merges entries.

@@ -42,6 +42,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
+    private let rating = NSPopUpButton(frame: .zero, pullsDown: false)
     private let apply = NSButton(title: "Set Wallpaper", target: nil, action: nil)
     private let edit = NSButton(title: "Edit in Studio", target: nil, action: nil)
     private let clearSearchButton = NSButton(title: "Clear search", target: nil, action: nil)
@@ -77,7 +78,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var rotationTimer: Timer?
     private var rotationCollectionID: String?
     private var rotationQueue = SceneRotationQueue()
-    private var rotationShuffle = false
+    private var rotationMode: SceneLibraryStore.Playback.SelectionMode = .ordered
+    private var rotationSeed: UInt64 = 0
     private var rotationMinutes = 30
     private var scheduleTimer: Timer?
     private var scheduleToken: String?
@@ -102,13 +104,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard token != scheduleToken else { return }
         scheduleToken = token
         stopRotation(manual: false)
-        if let collection { beginRotation(collection, shuffle: collection.playback?.shuffle ?? false) }
+        if let collection { beginRotation(collection, mode: collection.playback?.effectiveMode ?? .ordered) }
     }
-    private func beginRotation(_ collection: SceneLibraryStore.Collection, shuffle: Bool) {
+    private func beginRotation(_ collection: SceneLibraryStore.Collection, mode: SceneLibraryStore.Playback.SelectionMode) {
         rotationCollectionID = collection.id
-        rotationShuffle = shuffle
+        rotationMode = mode
         rotationMinutes = collection.playback?.minutes ?? 30
         rotationQueue = SceneRotationQueue()
+        rotationSeed = Date().timeIntervalSinceReferenceDate.bitPattern
         advanceRotation()
         if rotationCollectionID != nil { armRotationTimer() }
     }
@@ -138,8 +141,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         let available = allItems(flat: true, query: "")
         let ids = collection.sceneIDs.filter { id in available.contains { $0.id == id } }
-        guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
-              let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
+        let next: String?
+        if rotationMode == .ordered || rotationMode == .shuffle {
+            next = rotationQueue.next(ids, shuffle: rotationMode == .shuffle)
+        } else {
+            rotationSeed &+= 0x9E3779B97F4A7C15
+            next = LibraryMemoryPlayback.select(from: ids, catalog: store.catalog, mode: rotationMode, seed: rotationSeed)
+        }
+        guard let next, let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
         do {
             let opened = try open(item)
             try store.used(item.id)
@@ -246,6 +255,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         detail.textColor = .secondaryLabelColor
         favorite.target = self; favorite.action = #selector(toggleFavorite)
+        rating.addItems(withTitles: ["Unrated", "★", "★★", "★★★", "★★★★", "★★★★★"])
+        rating.target = self; rating.action = #selector(rateSelected)
+        rating.setAccessibilityLabel("Wallpaper rating")
         apply.target = self; apply.action = #selector(useScene)
         edit.target = self; edit.action = #selector(editScene)
         clearSearchButton.target = self; clearSearchButton.action = #selector(clearSearch)
@@ -256,7 +268,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         more.menu?.autoenablesItems = false
         more.target = self; more.action = #selector(moreAction)
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
-        let heading = NSStackView(views: [titleLabel, NSView(), favorite])
+        let heading = NSStackView(views: [titleLabel, NSView(), rating, favorite])
         heading.orientation = .horizontal
         let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
         primary.spacing = 10
@@ -503,7 +515,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private func reload(selecting id: String? = nil) {
         reloadSourceActions()
         let previous = id ?? selected?.id
-        let collectionID = filter.selectedItem?.representedObject as? String
+        let filterKey = filter.selectedItem?.representedObject as? String
+        let collectionID = filterKey.flatMap { $0.hasPrefix("smart:") ? nil : $0 }
+        let smartID = filterKey.flatMap { $0.hasPrefix("smart:") ? String($0.dropFirst(6)) : nil }
         let previousFilter = min(filter.indexOfSelectedItem, 6)
         filter.removeAllItems()
         filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
@@ -511,7 +525,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             filter.addItem(withTitle: "Collection: \(collection.name)")
             filter.lastItem?.representedObject = collection.id
         }
+        for collection in store.catalog.smartCollections {
+            filter.addItem(withTitle: "Smart: \(collection.name)")
+            filter.lastItem?.representedObject = "smart:" + collection.id
+        }
         if let collectionID, let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == collectionID }) {
+            filter.selectItem(at: index)
+        } else if let smartID, let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == "smart:" + smartID }) {
             filter.selectItem(at: index)
         } else { filter.selectItem(at: max(0, previousFilter)) }
         if let pending = pendingFilterTitle {
@@ -520,16 +540,27 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 filter.selectItem(at: index)
             }
         }
-        let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
-        let baseItems = allItems(flat: activeCollection != nil, query: search.stringValue)
+        let selectedKey = filter.selectedItem?.representedObject as? String
+        let activeCollection = store.catalog.collections.first { $0.id == selectedKey }
+        let activeSmart = selectedKey.flatMap { key -> SceneLibraryStore.SmartCollection? in
+            guard key.hasPrefix("smart:") else { return nil }
+            let id = String(key.dropFirst(6))
+            return store.catalog.smartCollections.first { $0.id == id }
+        }
+        let smartMembers = activeSmart.map { LibrarySmartCollectionEngine.members(of: $0, in: store.catalog) } ?? []
+        let smartOrder = Dictionary(uniqueKeysWithValues: smartMembers.enumerated().map { ($0.element.id, $0.offset) })
+        let smartIDs = Set(smartMembers.map(\.id))
+        let baseItems = allItems(flat: activeCollection != nil || activeSmart != nil, query: search.stringValue)
         items = baseItems.filter { item in
             let matches = searchScore(item, query: search.stringValue) != nil
             if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
+            if activeSmart != nil { return matches && smartIDs.contains(item.id) }
             return matches && matchesTypeFilter(item, index: filter.indexOfSelectedItem)
         }.sorted {
             if let activeCollection {
                 return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
             }
+            if activeSmart != nil { return (smartOrder[$0.id] ?? .max) < (smartOrder[$1.id] ?? .max) }
             if !search.stringValue.isEmpty {
                 let a = searchScore($0, query: search.stringValue) ?? .infinity
                 let b = searchScore($1, query: search.stringValue) ?? .infinity
@@ -544,6 +575,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         table.reloadData()
         gridView.update(items: items, selectedID: selected?.id)
         updateEmptyState(activeCollection: activeCollection)
+        if items.isEmpty, let activeSmart, search.stringValue.isEmpty {
+            titleLabel.stringValue = activeSmart.name
+            detail.stringValue = "This Smart Collection has no current matches. Its saved conditions will update automatically as your Library changes."
+        }
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             selected = items[index]
@@ -715,16 +750,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let token = generation
         poster.image = nil
         favorite.isEnabled = selected != nil && selected?.stack == nil
+        rating.isEnabled = selected?.entry != nil && selected?.stack == nil
         apply.isEnabled = selected != nil && selected?.stack == nil
         edit.isEnabled = selected != nil && selected?.stack == nil
         remove.isEnabled = selected?.entry != nil && selected?.stack == nil
         more.isEnabled = selected != nil
         more.item(at: 3)?.isEnabled = selected?.entry != nil && selected?.stack == nil
         collectionActions.removeAllItems()
-        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
-        if filter.selectedItem?.representedObject is String {
+        collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…", "New Smart Collection…"])
+        let activeCollectionForActions = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
+        let activeSmartKey = (filter.selectedItem?.representedObject as? String).flatMap { $0.hasPrefix("smart:") ? String($0.dropFirst(6)) : nil }
+        if activeCollectionForActions != nil {
             collectionActions.addItems(withTitles: ["Rename Collection…", "Delete Collection…",
-                "Move Collection Up", "Move Collection Down", "Move Scene Earlier", "Move Scene Later", "Play Collection in Order", "Shuffle Collection", "Playback & Schedule…"])
+                "Move Collection Up", "Move Collection Down", "Move Scene Earlier", "Move Scene Later", "Play Collection in Order", "Shuffle Collection", "Play Collection Weighted", "Surprise Me", "Playback & Schedule…"])
+        } else if activeSmartKey != nil {
+            collectionActions.addItem(withTitle: "Delete Smart Collection…")
         }
         collectionActions.addItems(withTitles: ["Change Every 5 Minutes", "Change Every 15 Minutes", "Change Every 30 Minutes", "Change Every 60 Minutes"])
         if rotationTimer != nil { collectionActions.addItem(withTitle: "Stop Collection Rotation") }
@@ -741,6 +781,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         titleLabel.stringValue = selected.title
         favorite.title = selected.stack == nil ? (store.catalog.favorites.contains(selected.id) ? "★" : "☆") : ""
+        rating.selectItem(at: selected.entry.map { store.catalog.memory[$0.id]?.rating ?? 0 } ?? 0)
         detail.stringValue = selected.stack.map { "\($0.entryIDs.count) items · Preparing representative preview…" } ?? "Preparing still preview…"
         task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -802,9 +843,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
 
 
     private func detailNote(_ note: String, for item: Item) -> String {
-        guard let stack = item.stack else { return note }
-        let hint = item.stackHint ?? LibraryStackBrowser.typeHint(for: stack, in: store.catalog)
-        return "\(stack.entryIDs.count) items · \(hint) · \(note). Double-click to open the stack."
+        if let stack = item.stack {
+            let hint = item.stackHint ?? LibraryStackBrowser.typeHint(for: stack, in: store.catalog)
+            return "\(stack.entryIDs.count) items · \(hint) · \(note). Double-click to open the stack."
+        }
+        guard let entry = item.entry else { return note }
+        let memory = store.catalog.memory[entry.id] ?? .init()
+        let stars = memory.rating.map { String(repeating: "★", count: $0) } ?? "Unrated"
+        let duplicate = LibraryDuplicateDetector.duplicateIDs(in: store.catalog).contains(entry.id) ? " · Exact duplicate detected" : ""
+        return "\(note) · \(stars) · Played \(memory.playCount) time\(memory.playCount == 1 ? "" : "s")\(duplicate)"
     }
     private func focusStack(_ item: Item) {
         guard let stack = item.stack else { return }
@@ -1183,6 +1230,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let selected, selected.stack == nil else { return }
         do { try store.favorite(selected.id); reload() } catch { detail.stringValue = error.localizedDescription }
     }
+    @objc private func rateSelected() {
+        guard let id = selected?.entry?.id, selected?.stack == nil else { return }
+        do { try store.rate(id, rating: rating.indexOfSelectedItem == 0 ? nil : rating.indexOfSelectedItem); preview() }
+        catch { detail.stringValue = error.localizedDescription }
+    }
     @objc private func removeScene() {
         guard let selected, selected.entry != nil, selected.stack == nil else { return }
         do { try store.remove(selected.id); cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id }; reload() }
@@ -1204,6 +1256,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     @objc private func collectionAction() {
         guard let item = collectionActions.selectedItem else { return }
+        if item.title == "New Smart Collection…" { createSmartCollection(); return }
+        if item.title == "Delete Smart Collection…",
+           let key = filter.selectedItem?.representedObject as? String, key.hasPrefix("smart:") {
+            do { try store.removeSmartCollection(String(key.dropFirst(6))); filter.selectItem(at: 0); reload() }
+            catch { detail.stringValue = error.localizedDescription }
+            return
+        }
         if ["Move Collection Up", "Move Collection Down"].contains(item.title), let id = filter.selectedItem?.representedObject as? String {
             do { try store.moveCollection(id, by: item.title == "Move Collection Up" ? -1 : 1); reload() }
             catch { detail.stringValue = error.localizedDescription }
@@ -1233,20 +1292,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             detail.stringValue = "Collections change every \(minutes) minutes."
             return
         }
-        if item.title == "Play Collection in Order" || item.title == "Shuffle Collection" {
+        if ["Play Collection in Order", "Shuffle Collection", "Play Collection Weighted", "Surprise Me"].contains(item.title) {
             guard let id = filter.selectedItem?.representedObject as? String,
                   let collection = store.catalog.collections.first(where: { $0.id == id }),
                   !collection.sceneIDs.isEmpty else { detail.stringValue = "Add scenes to this collection first."; return }
             stopRotation()
+            let mode: SceneLibraryStore.Playback.SelectionMode = item.title == "Shuffle Collection" ? .shuffle :
+                (item.title == "Play Collection Weighted" ? .weighted : (item.title == "Surprise Me" ? .surprise : .ordered))
             var settings = collection.playback ?? SceneLibraryStore.Playback()
-            settings.shuffle = item.title == "Shuffle Collection"
+            settings.shuffle = mode == .shuffle
+            settings.mode = mode
             do { try store.setPlayback(id, settings) }
             catch { detail.stringValue = error.localizedDescription; return }
-            beginRotation(store.catalog.collections.first { $0.id == id }!, shuffle: settings.shuffle)
+            beginRotation(store.catalog.collections.first { $0.id == id }!, mode: mode)
             preview()
             return
         }
-        if let id = item.representedObject as? String, let selected {
+        if let id = item.representedObject as? String, !id.hasPrefix("smart:"), let selected {
             do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
             catch { detail.stringValue = error.localizedDescription }
             return
@@ -1278,14 +1340,60 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             } catch { self.detail.stringValue = error.localizedDescription }
         }
     }
+
+    private func createSmartCollection() {
+        guard let window = presentationWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = "New Smart Collection"
+        alert.informativeText = "Saved conditions update automatically from local Library metadata and memory. Conditions are combined with AND."
+        let name = NSTextField(string: "")
+        name.placeholderString = "Smart Collection name"
+        name.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        let current = selected?.entry
+        var choices: [(String, SceneLibraryStore.SmartPredicate?)] = [
+            ("Favorites", .favorite(true)), ("Unplayed", .unplayed), ("Rated 4★ or better", .ratingAtLeast(4)),
+            ("Played 10+ times", .playedAtLeast(10)), ("Exact duplicates", .duplicate),
+            ("Images", .mediaType("image")), ("Videos", .mediaType("video")), ("Interactive scenes", .mediaType("scene"))
+        ]
+        if let series = current?.series { choices.append(("Series: " + series, .series(series))) }
+        if let character = current?.character { choices.append(("Character: " + character, .character(character))) }
+        for tag in current?.tags.prefix(3) ?? [] { choices.append(("Tag: " + tag, .tag(tag))) }
+        if let sourceID = current?.sourceID { choices.append(("Current Source", .sourceID(sourceID))) }
+        let first = NSPopUpButton(); first.addItems(withTitles: choices.map(\.0))
+        let second = NSPopUpButton(); second.addItem(withTitle: "No second condition"); second.addItems(withTitles: choices.map(\.0))
+        let sortPopup = NSPopUpButton(); sortPopup.addItems(withTitles: ["Name", "Rating", "Recently played", "Play count"])
+        let form = NSStackView(views: [name, NSTextField(labelWithString: "Condition"), first,
+            NSTextField(labelWithString: "Optional second condition"), second,
+            NSTextField(labelWithString: "Sort by"), sortPopup])
+        form.orientation = .vertical; form.alignment = .leading; form.spacing = 7
+        form.frame = NSRect(x: 0, y: 0, width: 340, height: 190)
+        alert.accessoryView = form
+        alert.addButton(withTitle: "Create"); alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] result in
+            guard let self, result == .alertFirstButtonReturn else { return }
+            var predicates = [choices[first.indexOfSelectedItem].1!]
+            if second.indexOfSelectedItem > 0 { predicates.append(choices[second.indexOfSelectedItem - 1].1!) }
+            let sorts: [SceneLibraryStore.SmartSort] = [.name, .rating, .recent, .playCount]
+            do {
+                let collection = try self.store.createSmartCollection(name: name.stringValue, predicates: predicates, sort: sorts[sortPopup.indexOfSelectedItem])
+                self.reload()
+                if let index = self.filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == "smart:" + collection.id }) {
+                    self.filter.selectItem(at: index); self.search.stringValue = ""; self.reload()
+                }
+            } catch { self.detail.stringValue = error.localizedDescription }
+        }
+    }
     private func editPlayback() {
         guard let id = filter.selectedItem?.representedObject as? String,
               let collection = store.catalog.collections.first(where: { $0.id == id }), let window = presentationWindow else { return }
         let settings = collection.playback ?? SceneLibraryStore.Playback()
         let enabled = NSButton(checkboxWithTitle: "Play on a schedule", target: nil, action: nil)
         enabled.state = settings.startMinute == nil ? .off : .on
-        let shuffle = NSButton(checkboxWithTitle: "Shuffle without repeats", target: nil, action: nil)
-        shuffle.state = settings.shuffle ? .on : .off
+        let mode = NSPopUpButton()
+        mode.addItems(withTitles: ["Order", "Shuffle without repeats", "Weighted by favorites/ratings", "Surprise: favor less-played/recent"])
+        let modes: [SceneLibraryStore.Playback.SelectionMode] = [.ordered, .shuffle, .weighted, .surprise]
+        mode.selectItem(at: modes.firstIndex(of: settings.effectiveMode) ?? 0)
+        mode.setAccessibilityLabel("Collection playback choice")
         let interval = NSPopUpButton()
         interval.addItems(withTitles: ["5 minutes", "15 minutes", "30 minutes", "60 minutes"])
         interval.selectItem(at: [5, 15, 30, 60].firstIndex(of: settings.minutes) ?? 2)
@@ -1307,7 +1415,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         days.orientation = .horizontal
         days.spacing = 8
         let stack = NSStackView(views: [enabled, days, NSTextField(labelWithString: "From"), start,
-            NSTextField(labelWithString: "Until"), end, NSTextField(labelWithString: "Change scene every"), interval, shuffle])
+            NSTextField(labelWithString: "Until"), end, NSTextField(labelWithString: "Change scene every"), interval,
+            NSTextField(labelWithString: "Choose scenes"), mode])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -1324,8 +1433,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let c = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
                 return c.hour! * 60 + c.minute!
             }
+            let chosenMode = modes[mode.indexOfSelectedItem]
             let updated = SceneLibraryStore.Playback(minutes: [5, 15, 30, 60][interval.indexOfSelectedItem],
-                shuffle: shuffle.state == .on, startMinute: enabled.state == .on ? minute(start) : nil,
+                shuffle: chosenMode == .shuffle, mode: chosenMode, startMinute: enabled.state == .on ? minute(start) : nil,
                 endMinute: enabled.state == .on ? minute(end) : nil,
                 weekdays: enabled.state == .off ? nil : Set(dayButtons.enumerated().compactMap { $0.element.state == .on ? $0.offset + 1 : nil }))
             do {
