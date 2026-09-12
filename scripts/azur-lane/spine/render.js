@@ -7,7 +7,21 @@ window.prepare=async(folder,stem,width,height,animation='normal')=>{
  const descriptor=await(await fetch(`${folder}/model.json`)).json();const container=new PIXI.Container();const models=[];
  for(const layer of descriptor.layers){
   const bytes=new Uint8Array(await(await fetch(`${folder}/${layer.skel}`)).arrayBuffer());const atlasText=await(await fetch(`${folder}/${layer.atlas}`)).text();
-  const pages={};for(const page of layer.textures)pages[page]=await PIXI.Assets.load(`${folder}/${page}`);
+  // Azur Lane atlases declare `pma: true`, and the game blends them as
+  // premultiplied: its textures are drawn for that, so a translucent white hair
+  // strand is stored as mid-grey and only reads as white once blended that way.
+  // Pixi's loader decodes through createImageBitmap with default options, which
+  // WebKit premultiplies at decode, so these pixels were multiplied by alpha a
+  // second time and every translucent layer went grey -- Tiger's blush, a smudge
+  // at her mouth, a strand across her back. alphaMode cannot undo that after the
+  // fact, which is why setting it once changed nothing. Decode without
+  // premultiplying, and mark the page as premultiplied already.
+  const pmaPages=new Set();{let current=null;for(const line of atlasText.split(/\r?\n/)){const t=line.trim();if(/\.(png|jpe?g|webp)$/i.test(t))current=t;else if(current&&/^pma\s*:\s*true$/i.test(t))pmaPages.add(current);}}
+  const pages={};for(const page of layer.textures){
+   if(pmaPages.has(page)){const blob=await(await fetch(`${folder}/${page}`)).blob();
+    const bitmap=await createImageBitmap(blob,{premultiplyAlpha:'none',colorSpaceConversion:'none'});
+    pages[page]=new PIXI.Texture(new PIXI.BaseTexture(new PIXI.ImageBitmapResource(bitmap,{alphaMode:PIXI.ALPHA_MODES.PMA,ownsImageBitmap:true}),{alphaMode:PIXI.ALPHA_MODES.PMA}));}
+   else pages[page]=await PIXI.Assets.load(`${folder}/${page}`);}
   const atlas=new TextureAtlas(atlasText,(name,done)=>done(pages[name].baseTexture));const data=new SkeletonBinary(new AtlasAttachmentLoader(atlas)).readSkeletonData(bytes);
   const model=new Spine(data);model.autoUpdate=false;if(data.findSkin(layer.initialSkin))model.skeleton.setSkinByName(layer.initialSkin);model.skeleton.setSlotsToSetupPose();model.state.setAnimation(0,animation,true);model.update(0);container.addChild(model);models.push(model);
  }

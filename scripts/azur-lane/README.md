@@ -40,6 +40,12 @@ The Live2D adapter disables automatic pointer, blink and breath behavior so auth
 
 ### Export
 
+### Premultiplied alpha
+
+Azur Lane's Spine atlases declare `pma: true`, and the art is drawn for that blend: a translucent white hair strand is stored as mid-grey and only reads as white once blended as premultiplied. `spine/render.js` therefore decodes those pages with `createImageBitmap(..., {premultiplyAlpha: 'none'})` and marks them premultiplied.
+
+Do not go back to `PIXI.Assets.load` for them, and do not try to fix this with `alphaMode` alone. Pixi's loader decodes through `createImageBitmap` with default options, and WebKit premultiplies at decode, so by the time `alphaMode` is read the pixels have already been multiplied by alpha; setting it changes nothing, which is how an earlier attempt came out bit-identical. The symptom is grey wherever the art is translucent -- on Tiger, a smudge at the corner of her mouth, greyed blush, and a grey strand across her back. Premultiplying the PNGs on disk makes it darker still. The Live2D adapter is unaffected: Cubism textures are straight alpha and its renderer premultiplies them once.
+
 ### Camera recipes
 
 `spine/cameras.json` holds `[zoom, cx, cy]` per asset, and `live2d/cameras.json` a zoom scalar. Both take the same per-animation object form as the lobby renderer, since a recipe is framed against the posed skeleton and is only valid for the animation it was tuned on.
