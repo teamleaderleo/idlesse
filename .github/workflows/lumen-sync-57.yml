@@ -17,17 +17,30 @@ jobs:
         with:
           ref: lumen/issue-57-inline-library-controls
           fetch-depth: 0
-      - name: Merge current main
+      - name: Merge current main and preserve both smoke suites
         run: |
           git config user.name "Lumen"
           git config user.email "actions@users.noreply.github.com"
           git fetch origin main
           if ! git merge --no-edit origin/main; then
-            echo "Conflicts:"
-            git diff --name-only --diff-filter=U
-            echo "SceneLibrary conflict context:"
-            grep -n -C 60 -E '^(<<<<<<<|=======|>>>>>>>)' Sources/Harness/SceneLibraryController.swift || true
-            exit 1
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            test "$conflicts" = "Sources/Harness/SceneLibraryController.swift"
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("Sources/Harness/SceneLibraryController.swift")
+          s = p.read_text()
+          old = '''<<<<<<< HEAD
+                  print("Library UI checks passed: built-in poster/color, favorites, search, source controls, active desktop controls, draft routing\\(videoURL == nil ? \"\" : \", composed video poster\"); offscreen snapshot saved")
+          =======
+                  print("Library UI checks passed: built-in poster/color, favorites, search, source controls, draft routing, procedural thumbnails\\(videoURL == nil ? \"\" : \", composed video poster\"); offscreen snapshot saved")
+          >>>>>>> origin/main'''
+          new = '''        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, active desktop controls, draft routing, procedural thumbnails\\(videoURL == nil ? \"\" : \", composed video poster\"); offscreen snapshot saved")'''
+          if old not in s:
+              raise SystemExit("expected smoke conflict changed")
+          p.write_text(s.replace(old, new, 1))
+          PY
+            git add Sources/Harness/SceneLibraryController.swift
+            git commit --no-edit
           fi
       - name: Remove branch-only sync helper and push
         run: |
