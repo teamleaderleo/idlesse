@@ -120,10 +120,12 @@ if needs_build "build/tests/wallpaper-policy" "${WALLPAPER_POLICY_SRCS[@]}"; the
   pids+=($!)
 fi
 
-# 9. Display identity/topology is a pure synthetic map test: no physical monitor
-# configuration or media decode is needed in CI.
+# 9. Display identity/topology is a synthetic map test: no physical monitor
+# configuration or media decode is needed in CI. Include assignment persistence
+# to exercise an actual UUID-A -> UUID-B reconnect migration.
 DISPLAY_TOPOLOGY_SRCS=(
   Sources/Wallpaper/DisplayTopology.swift
+  Sources/Wallpaper/DisplayAssignmentStore.swift
   Tests/DisplayTopologyTests.swift
 )
 if needs_build "build/tests/display-topology" "${DISPLAY_TOPOLOGY_SRCS[@]}"; then
