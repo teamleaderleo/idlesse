@@ -36,3 +36,4 @@ jobs:
           git diff --cached --check
           git commit -m "Finish #32 Studio variant authoring"
           git push origin HEAD:palette/32-variants-studio-reconciled
+# rerun after host repairability/build fix
