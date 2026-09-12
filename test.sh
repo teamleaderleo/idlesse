@@ -132,6 +132,17 @@ if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 10. Automation command contract. Keep URL and CLI parsing headless and
+# independent from AppKit so every external control surface shares one grammar.
+AUTOMATION_SRCS=(
+  Sources/Automation/AutomationCommand.swift
+  Tests/AutomationCommandTests.swift
+)
+if needs_build "build/tests/automation" "${AUTOMATION_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${AUTOMATION_SRCS[@]}" -o build/tests/automation &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -147,3 +158,4 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/automation
