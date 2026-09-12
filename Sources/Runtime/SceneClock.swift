@@ -33,6 +33,14 @@ final class SceneClock {
         authored = timeline
     }
     private func wrapped(_ value: TimeInterval) -> TimeInterval {
+        // Transport loop ranges win while set; otherwise fall back to the
+        // authored scene timeline so clearing the transport loop never leaves
+        // the clock ticking past the scene duration (e.g. "10s / 8s").
+        if let loopRange {
+            let duration = loopRange.upperBound - loopRange.lowerBound
+            guard duration > 0 else { return loopRange.lowerBound }
+            return loopRange.lowerBound + max(0, value - loopRange.lowerBound).truncatingRemainder(dividingBy: duration)
+        }
         if let authored {
             let duration = authored.duration
             switch authored.mode {
@@ -43,11 +51,10 @@ final class SceneClock {
                 return position <= duration ? position : duration * 2 - position
             }
         }
-        guard let loopRange else { return value }
-        let duration = loopRange.upperBound - loopRange.lowerBound
-        return loopRange.lowerBound + max(0, value - loopRange.lowerBound).truncatingRemainder(dividingBy: duration)
+        return value
     }
     /// Atomic transport edit. These settings are host-session state, not authored scene data.
+    /// Clearing the loop keeps the authored timeline as the wrap basis.
     func configure(time: TimeInterval, rate: Double, loop: Range<TimeInterval>?) throws {
         guard time.isFinite, (0...86400).contains(time), rate.isFinite, (0.1...4).contains(rate) else {
             throw SceneError.invalid("Use a time of 0–86400 seconds and a playback rate of 0.1–4.")
@@ -59,7 +66,6 @@ final class SceneClock {
             }
         }
         revision &+= 1
-        authored = nil
         loopRange = loop
         playbackRate = rate
         accumulated = wrapped(time)
