@@ -10,6 +10,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let title: String
         let builtin: URL?
         let entry: SceneLibraryStore.Entry?
+        let stack: LibraryStackProjection?
+        let stackHint: String?
+        init(id: String, title: String, builtin: URL?, entry: SceneLibraryStore.Entry?,
+             stack: LibraryStackProjection? = nil, stackHint: String? = nil) {
+            self.id = id; self.title = title; self.builtin = builtin; self.entry = entry
+            self.stack = stack; self.stackHint = stackHint
+        }
     }
     private struct OpenedItem {
         let url: URL
@@ -21,6 +28,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
     private let viewModeControl = NSSegmentedControl(labels: ["List", "Grid"], trackingMode: .selectOne, target: nil, action: nil)
+    private let stackModeControl = NSSegmentedControl(labels: ["Stacks", "Flat"], trackingMode: .selectOne, target: nil, action: nil)
+    private let stackActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
@@ -58,6 +67,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     /// Launch-restore for the filter popup, matched by title and consumed by
     /// the first reload (a deleted collection falls back to All Wallpapers).
     private var pendingFilterTitle: String?
+    private var focusedStackID: String?
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
     private var importFailureHandler: (([String]) -> Void)?
@@ -126,7 +136,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
               let collection = store.catalog.collections.first(where: { $0.id == id }) else {
             stopRotation(manual: false); return
         }
-        let available = allItems()
+        let available = allItems(flat: true, query: "")
         let ids = collection.sceneIDs.filter { id in available.contains { $0.id == id } }
         guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
               let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
@@ -185,7 +195,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         viewModeControl.target = self
         viewModeControl.action = #selector(viewModeChanged)
         viewModeControl.selectedSegment = UserDefaults.standard.integer(forKey: "Idlesse.library.viewMode")
-        let toolbar = NSStackView(views: [search, filter, sort, viewModeControl, collectionActions, sourceActions, add])
+        stackModeControl.target = self
+        stackModeControl.action = #selector(stackModeChanged)
+        stackModeControl.selectedSegment = min(1, max(0, UserDefaults.standard.integer(forKey: "Idlesse.library.stackMode")))
+        stackModeControl.setAccessibilityLabel("Library stack browsing")
+        stackActions.addItem(withTitle: "Stacks…")
+        stackActions.target = self
+        stackActions.action = #selector(stackAction)
+        let toolbar = NSStackView(views: [search, filter, sort, viewModeControl, stackModeControl, collectionActions, stackActions, sourceActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -289,6 +306,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         gridScroll.isHidden = !isGrid
         if isGrid { gridView.update(items: items, selectedID: selected?.id) }
     }
+    @objc private func stackModeChanged() {
+        UserDefaults.standard.set(stackModeControl.selectedSegment, forKey: "Idlesse.library.stackMode")
+        focusedStackID = nil
+        reload()
+    }
 
     weak var hostWindow: NSWindow?
     private var presentationWindow: NSWindow? { hostWindow ?? window }
@@ -344,10 +366,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             "Hare-Camping": "Hare (Camping)", "Shiroko-Terror": "Shiroko (Terror)", "Vivian-Trust": "Vivian (Trust)"]
         return variants[name] ?? name.replacingOccurrences(of: "-", with: " ")
     }
-    private func allItems() -> [Item] {
+    private func flatItems() -> [Item] {
         Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil) }
             + store.catalog.entries.filter { $0.availability == .present }
                 .map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
+    }
+    private func allItems(flat: Bool = false, query: String = "") -> [Item] {
+        if flat || stackModeControl.selectedSegment == 1 { return flatItems() }
+        if let focusedStackID, let stack = LibraryStackBrowser.projection(id: focusedStackID, in: store.catalog) {
+            return LibraryStackBrowser.matchingChildren(of: stack, in: store.catalog, query: query).map {
+                Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0)
+            }
+        }
+        let builtins = Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil) }
+        let stacks = LibraryStackBrowser.projections(in: store.catalog)
+        let stackedIDs = Set(stacks.flatMap(\.entryIDs))
+        let stackItems = stacks.compactMap { stack -> Item? in
+            guard let representative = LibraryStackBrowser.representative(for: stack, in: store.catalog, query: query) else { return nil }
+            return Item(id: stack.id, title: stack.name, builtin: nil, entry: representative, stack: stack,
+                        stackHint: LibraryStackBrowser.typeHint(for: stack, in: store.catalog))
+        }
+        let singles = store.catalog.entries.filter { $0.availability == .present && !stackedIDs.contains($0.id) }
+            .map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
+        return builtins + stackItems + singles
     }
     static func builtinScenes() -> [(name: String, title: String, url: URL)] {
         let names = ["DeskClock", "AfterHours", "Undertow", "Fireflies", "Ripple", "AudioAurora", "Gradient", "BreathingAurora"]
@@ -394,6 +435,44 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return score + Double(t.count) / 1000
     }
     @objc private func clearSearch() { search.stringValue = ""; reload() }
+
+    private func entries(for item: Item) -> [SceneLibraryStore.Entry] {
+        guard let stack = item.stack else { return item.entry.map { [$0] } ?? [] }
+        let ids = Set(stack.entryIDs)
+        return store.catalog.entries.filter { ids.contains($0.id) }
+    }
+    private func searchScore(_ item: Item, query: String) -> Double? {
+        guard !query.isEmpty else { return 0 }
+        if let stack = item.stack { return LibraryStackBrowser.score(query: query, stack: stack, in: store.catalog) }
+        if let entry = item.entry { return LibraryStackBrowser.entryScore(query: query, entry: entry) }
+        return Self.fuzzyScore(query: query, in: item.title)
+    }
+    private func recentDate(_ item: Item) -> Date {
+        if let stack = item.stack {
+            return stack.entryIDs.compactMap { store.catalog.recent[$0] }.max() ?? .distantPast
+        }
+        return store.catalog.recent[item.id] ?? .distantPast
+    }
+    private func matchesTypeFilter(_ item: Item, index: Int) -> Bool {
+        if index == 0 { return true }
+        if index == 1 { return item.builtin != nil }
+        if index == 2 { return item.entry != nil }
+        if index == 3 {
+            if let stack = item.stack { return stack.entryIDs.contains { store.catalog.favorites.contains($0) } }
+            return store.catalog.favorites.contains(item.id)
+        }
+        let candidates = entries(for: item)
+        func kind(_ entry: SceneLibraryStore.Entry) -> String {
+            let path = entry.relativeMediaPath?.lowercased() ?? ""
+            if entry.mediaType == "video" || path.hasSuffix(".mp4") || path.hasSuffix(".mov") { return "video" }
+            if entry.mediaType == "scene" || path.hasSuffix(".idlesse") { return "scene" }
+            return "image"
+        }
+        if index == 4 { return candidates.contains { kind($0) == "video" } }
+        if index == 5 { return item.builtin != nil || candidates.contains { kind($0) == "scene" } }
+        if index == 6 { return candidates.contains { kind($0) == "image" } }
+        return true
+    }
     private func updateEmptyState(activeCollection: SceneLibraryStore.Collection?) {
         guard items.isEmpty else {
             clearSearchButton.isHidden = true
@@ -442,35 +521,22 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
-        items = allItems().filter { item in
-            let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
+        let baseItems = allItems(flat: activeCollection != nil, query: search.stringValue)
+        items = baseItems.filter { item in
+            let matches = searchScore(item, query: search.stringValue) != nil
             if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
-            switch filter.indexOfSelectedItem {
-            case 1: return matches && item.builtin != nil
-            case 2: return matches && item.entry != nil
-            case 3: return matches && store.catalog.favorites.contains(item.id)
-            case 4:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video")
-            case 5:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene")
-            case 6:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") || path.hasSuffix(".png") || path.hasSuffix(".heic") || item.entry?.mediaType == "image")
-            default: return matches
-            }
+            return matches && matchesTypeFilter(item, index: filter.indexOfSelectedItem)
         }.sorted {
             if let activeCollection {
                 return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
             }
             if !search.stringValue.isEmpty {
-                let a = Self.fuzzyScore(query: search.stringValue, in: $0.title) ?? .infinity
-                let b = Self.fuzzyScore(query: search.stringValue, in: $1.title) ?? .infinity
+                let a = searchScore($0, query: search.stringValue) ?? .infinity
+                let b = searchScore($1, query: search.stringValue) ?? .infinity
                 if a != b { return a < b }
             }
             if sort.indexOfSelectedItem == 1 {
-                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                let a = recentDate($0), b = recentDate($1)
                 if a != b { return a > b }
             }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
@@ -494,7 +560,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item = items[row]
-        let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
+        let favoritePrefix = item.stack == nil && store.catalog.favorites.contains(item.id) ? "★  " : ""
+        let stackSuffix = item.stack.map { "  · \($0.entryIDs.count) items" } ?? ""
+        let text = NSTextField(labelWithString: favoritePrefix + item.title + stackSuffix)
         text.lineBreakMode = .byTruncatingTail
         let cell = NSTableCellView()
         cell.textField = text
@@ -642,15 +710,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         preview()
     }
     private func preview() {
+        reloadStackActions()
         task?.cancel(); task = nil; generation += 1
         let token = generation
         poster.image = nil
-        favorite.isEnabled = selected != nil
-        apply.isEnabled = selected != nil
-        edit.isEnabled = selected != nil
-        remove.isEnabled = selected?.entry != nil
+        favorite.isEnabled = selected != nil && selected?.stack == nil
+        apply.isEnabled = selected != nil && selected?.stack == nil
+        edit.isEnabled = selected != nil && selected?.stack == nil
+        remove.isEnabled = selected?.entry != nil && selected?.stack == nil
         more.isEnabled = selected != nil
-        more.item(at: 3)?.isEnabled = selected?.entry != nil
+        more.item(at: 3)?.isEnabled = selected?.entry != nil && selected?.stack == nil
         collectionActions.removeAllItems()
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
@@ -659,7 +728,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         collectionActions.addItems(withTitles: ["Change Every 5 Minutes", "Change Every 15 Minutes", "Change Every 30 Minutes", "Change Every 60 Minutes"])
         if rotationTimer != nil { collectionActions.addItem(withTitle: "Stop Collection Rotation") }
-        if let selected {
+        if let selected, selected.stack == nil {
             for collection in store.catalog.collections {
                 collectionActions.addItem(withTitle: "\(collection.sceneIDs.contains(selected.id) ? "Remove from" : "Add to") \(collection.name)")
                 collectionActions.lastItem?.representedObject = collection.id
@@ -671,8 +740,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return
         }
         titleLabel.stringValue = selected.title
-        favorite.title = store.catalog.favorites.contains(selected.id) ? "★" : "☆"
-        detail.stringValue = "Preparing still preview…"
+        favorite.title = selected.stack == nil ? (store.catalog.favorites.contains(selected.id) ? "★" : "☆") : ""
+        detail.stringValue = selected.stack.map { "\($0.entryIDs.count) items · Preparing representative preview…" } ?? "Preparing still preview…"
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if token == self.generation { self.task = nil } }
@@ -685,7 +754,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 guard token == self.generation else { return }
                 if let cached = self.cache[selected.id], cached.revision == revision {
                     self.poster.image = cached.image
-                    self.detail.stringValue = cached.note
+                    self.detail.stringValue = self.detailNote(cached.note, for: selected)
                     return
                 }
                 self.cache.removeValue(forKey: selected.id)
@@ -723,7 +792,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.cacheOrder.append(selected.id)
                 self.cache[selected.id] = (image, note, revision)
                 self.poster.image = image
-                self.detail.stringValue = note
+                self.detail.stringValue = self.detailNote(note, for: selected)
             } catch {
                 guard token == self.generation, !Task.isCancelled else { return }
                 self.detail.stringValue = "Preview unavailable: \(error.localizedDescription). Use Relink Source… for a moved Source root, Rescan Source… for changed descendants, or re-add a moved individual file."
@@ -731,6 +800,78 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
     }
 
+
+    private func detailNote(_ note: String, for item: Item) -> String {
+        guard let stack = item.stack else { return note }
+        let hint = item.stackHint ?? LibraryStackBrowser.typeHint(for: stack, in: store.catalog)
+        return "\(stack.entryIDs.count) items · \(hint) · \(note). Double-click to open the stack."
+    }
+    private func focusStack(_ item: Item) {
+        guard let stack = item.stack else { return }
+        focusedStackID = stack.id
+        stackModeControl.selectedSegment = 0
+        UserDefaults.standard.set(0, forKey: "Idlesse.library.stackMode")
+        let representative = LibraryStackBrowser.representative(for: stack, in: store.catalog, query: search.stringValue)?.id
+        reload(selecting: representative)
+    }
+    private func leaveStack() {
+        let previous = focusedStackID
+        focusedStackID = nil
+        reload(selecting: previous)
+    }
+    private func reloadStackActions() {
+        stackActions.removeAllItems()
+        stackActions.addItem(withTitle: focusedStackID == nil ? "Stacks…" : "Stack · Browsing children")
+        if focusedStackID != nil {
+            stackActions.addItem(withTitle: "Back to Stacks")
+            stackActions.lastItem?.representedObject = ["action": "back"]
+        }
+        if let stack = selected?.stack, let userID = stack.userStackID {
+            stackActions.addItem(withTitle: "Delete Stack “\(stack.name)”")
+            stackActions.lastItem?.representedObject = ["action": "delete", "stack": userID]
+        }
+        if let focusedStackID, let stack = LibraryStackBrowser.projection(id: focusedStackID, in: store.catalog),
+           let userID = stack.userStackID, let selected, selected.stack == nil {
+            stackActions.addItem(withTitle: "Use “\(selected.title)” as Representative")
+            stackActions.lastItem?.representedObject = ["action": "representative", "stack": userID, "entry": selected.id]
+        }
+        guard let selected, selected.stack == nil, let entry = selected.entry else { return }
+        let candidates: [(String, String?)] = [("series", entry.series), ("character", entry.character)] + entry.tags.prefix(3).map { ("tag", Optional($0)) }
+        for (field, value) in candidates {
+            guard let value, matchingStackIDs(field: field, value: value).count >= 2 else { continue }
+            stackActions.addItem(withTitle: "Create Stack from \(field.capitalized): \(value)")
+            stackActions.lastItem?.representedObject = ["action": "create", "field": field, "value": value, "entry": selected.id]
+        }
+    }
+    private func matchingStackIDs(field: String, value: String) -> [String] {
+        store.catalog.entries.filter { entry in
+            guard entry.availability == .present else { return false }
+            switch field {
+            case "series": return entry.series?.caseInsensitiveCompare(value) == .orderedSame
+            case "character": return entry.character?.caseInsensitiveCompare(value) == .orderedSame
+            case "tag": return entry.tags.contains { $0.caseInsensitiveCompare(value) == .orderedSame }
+            default: return false
+            }
+        }.map(\.id)
+    }
+    @objc private func stackAction() {
+        guard let command = stackActions.selectedItem?.representedObject as? [String: String], let action = command["action"] else { return }
+        do {
+            switch action {
+            case "back": leaveStack()
+            case "delete":
+                if let id = command["stack"] { try store.removeStack(id); focusedStackID = nil; reload() }
+            case "representative":
+                if let id = command["stack"], let entry = command["entry"] { try store.setStackRepresentative(id, entryID: entry); reload(selecting: entry) }
+            case "create":
+                guard let field = command["field"], let value = command["value"], let entry = command["entry"] else { return }
+                let ids = matchingStackIDs(field: field, value: value)
+                let stack = try store.createStack(name: value, sceneIDs: ids, representativeID: entry)
+                reload(selecting: "user:" + stack.id)
+            default: break
+            }
+        } catch { detail.stringValue = error.localizedDescription }
+    }
     private static func sourceDetails(_ url: URL) async throws -> String {
         let ext = url.pathExtension.lowercased()
         if ["mp4", "mov"].contains(ext) {
@@ -1039,15 +1180,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
     }
     @objc private func toggleFavorite() {
-        guard let selected else { return }
+        guard let selected, selected.stack == nil else { return }
         do { try store.favorite(selected.id); reload() } catch { detail.stringValue = error.localizedDescription }
     }
     @objc private func removeScene() {
-        guard let selected, selected.entry != nil else { return }
+        guard let selected, selected.entry != nil, selected.stack == nil else { return }
         do { try store.remove(selected.id); cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id }; reload() }
         catch { detail.stringValue = error.localizedDescription }
     }
-    @objc private func useScene() { act(editing: false) }
+    @objc private func useScene() {
+        if let selected, selected.stack != nil { focusStack(selected); return }
+        act(editing: false)
+    }
     func cycle(delta: Int) {
         guard !items.isEmpty else { return }
         let current = selected.flatMap { item in items.firstIndex(where: { $0.id == item.id }) } ?? (delta >= 0 ? -1 : 0)
@@ -1213,6 +1357,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }
+        if selected.stack != nil { focusStack(selected); return }
         lastPeekID = nil
         onEndPeek?(false)
         do {
