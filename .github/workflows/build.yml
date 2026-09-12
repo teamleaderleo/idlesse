@@ -29,6 +29,43 @@ jobs:
           xcrun swiftc Tests/CustomShaderEffectProbe.swift -framework Metal -o build/custom-shader-effect-probe
           build/custom-shader-effect-probe
 
+      - name: Verify custom shader effect ABI
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path("build/shader-effect-abi")
+          node_id = "11111111-1111-1111-1111-111111111111"
+          effect_id = "22222222-2222-2222-2222-222222222222"
+          valid = '''fragment float4 effectMain(V in [[stage_in]], constant EffectU &u [[buffer(1)]], constant ShaderInputs &inputs [[buffer(2)]], texture2d<float> source [[texture(0)]]) {
+              constexpr sampler s(filter::linear, address::clamp_to_edge);
+              return source.sample(s, in.uv);
+          }'''
+          invalid = '''fragment float4 effectMain(V in [[stage_in]], constant EffectU &u [[buffer(1)]], constant ShaderInputs &inputs [[buffer(2)]], texture2d<float> source [[texture(0)]], texture2d<float> extra [[texture(1)]]) {
+              constexpr sampler s(filter::linear, address::clamp_to_edge);
+              return mix(source.sample(s, in.uv), extra.sample(s, in.uv), 0.5);
+          }'''
+          for name, source in (("valid", valid), ("extra-texture", invalid)):
+              package = root / f"{name}.idlesse"
+              package.mkdir(parents=True, exist_ok=True)
+              manifest = {"version": 21, "title": name, "capabilities": [],
+                          "features": ["effects", "shader-effects", "shapes"]}
+              effect = {"id": effect_id, "type": "displacement", "amount": 1.0,
+                        "shader": {"source": source, "speed": 1.0}}
+              shape = {"primitive": "rectangle", "fill": "#55AAFF", "width": 128,
+                       "height": 128, "cornerRadius": 0.0, "lineWidth": 8.0}
+              scene = {"nodes": [{"id": node_id, "type": "shape", "shape": shape,
+                                   "style": {"effects": [effect]}}]}
+              (package / "manifest.json").write_text(json.dumps(manifest))
+              (package / "scene.json").write_text(json.dumps(scene))
+          PY
+          APP="build/Idlesse.app/Contents/MacOS/Idlesse"
+          "$APP" --render-scene build/shader-effect-abi/valid.idlesse build/shader-effect-abi/valid.png 0
+          test -s build/shader-effect-abi/valid.png
+          if "$APP" --render-scene build/shader-effect-abi/extra-texture.idlesse build/shader-effect-abi/invalid.png 0; then
+            echo "extra texture binding unexpectedly passed shader-effect ABI validation" >&2
+            exit 1
+          fi
+
       - name: Verify bounded image decoding
         run: bash test.sh
 
