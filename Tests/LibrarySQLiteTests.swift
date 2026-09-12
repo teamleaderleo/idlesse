@@ -62,7 +62,8 @@ struct LibrarySQLiteChecks {
         let beforeExport = try store.debugExportData()
         precondition(try store.migrateToSQLiteIfNeeded())
         precondition(store.usesSQLiteCatalog)
-        precondition(try Data(contentsOf: file) == originalJSON, "Migration must retain the JSON recovery snapshot byte-for-byte")
+        let afterMigrationJSON = try Data(contentsOf: file)
+        precondition(afterMigrationJSON == originalJSON, "Migration must retain the JSON recovery snapshot byte-for-byte")
         precondition(FileManager.default.fileExists(atPath: store.sqliteDatabaseURL.path))
         precondition(FileManager.default.fileExists(atPath: store.backendSelectorURL.path))
         precondition(!FileManager.default.fileExists(atPath: SceneLibrarySQLiteCatalog.paths(for: file).candidate.path))
@@ -83,7 +84,8 @@ struct LibrarySQLiteChecks {
         let jsonSnapshot = try Data(contentsOf: file)
         try reopened.favorite("present")
         precondition(!reopened.catalog.favorites.contains("present"))
-        precondition(try Data(contentsOf: file) == jsonSnapshot, "SQLite mutations must leave the recovery JSON historical")
+        let afterSQLiteMutationJSON = try Data(contentsOf: file)
+        precondition(afterSQLiteMutationJSON == jsonSnapshot, "SQLite mutations must leave the recovery JSON historical")
         let reopenedAgain = try SceneLibraryStore(file: file)
         precondition(!reopenedAgain.catalog.favorites.contains("present"))
         precondition(reopenedAgain.catalog.entries.map(\.id) == expected.entries.map(\.id))
@@ -144,6 +146,7 @@ struct LibrarySQLiteChecks {
             _ = try SceneLibraryStore(file: file)
             preconditionFailure("Unknown Library backend selector was accepted")
         } catch {}
-        precondition(try Data(contentsOf: file) == before)
+        let after = try Data(contentsOf: file)
+        precondition(after == before)
     }
 }
