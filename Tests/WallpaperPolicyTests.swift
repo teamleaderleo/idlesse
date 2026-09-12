@@ -80,11 +80,12 @@ enum WallpaperPolicyTests {
         let suite = "Idlesse.DisplayAssignmentStoreTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = DisplayAssignmentStore(defaults: defaults, prefix: "wallpaperResumeBookmark")
+        let store = DisplayAssignmentStore(defaults: defaults, prefix: DisplayAssignmentStore.wallpaperPrefix)
         let saved = Data([1, 2, 3, 4])
         store.setBookmarkData(saved, persistentID: "DISPLAY-A")
         precondition(store.bookmarkData(persistentID: "DISPLAY-A", legacyDisplayID: 999) == saved,
                      "Stable display identity must survive a changed transient display ID")
+
         let legacy = Data([9, 8, 7])
         defaults.set(legacy, forKey: store.legacyKey(42))
         precondition(store.bookmarkData(persistentID: "DISPLAY-B", legacyDisplayID: 42) == legacy)
@@ -92,10 +93,23 @@ enum WallpaperPolicyTests {
                      "Legacy NSScreenNumber bookmarks should migrate on first read")
         precondition(defaults.data(forKey: store.legacyKey(42)) == nil,
                      "Migration should retire the transient numeric key")
-        store.clear(persistentID: "DISPLAY-B", legacyDisplayID: 42)
-        precondition(defaults.data(forKey: store.stableKey("DISPLAY-B")) == nil)
-        precondition(defaults.data(forKey: store.legacyKey(42)) == nil)
 
-        print("Wallpaper policy checks passed: assignment identity, shared playback, coverage hysteresis, stale reset, opacity and union sampling")
+        let identity = "hw:1552:41032:777:0:600x340:studio-display"
+        precondition(store.reconcile(identityKey: identity, persistentID: "DISPLAY-B", legacyDisplayID: 42) == legacy)
+        precondition(defaults.data(forKey: store.identityKey(identity)) == legacy,
+                     "UUID-backed assignments should acquire the richer durable identity")
+
+        // Simulate reconnect: macOS presents the same hardware under a new
+        // session UUID. The durable identity restores and seeds the new key.
+        precondition(store.reconcile(identityKey: identity, persistentID: "DISPLAY-B-NEW", legacyDisplayID: 777) == legacy)
+        precondition(store.bookmarkData(persistentID: "DISPLAY-B-NEW", legacyDisplayID: 777) == legacy)
+        precondition(defaults.data(forKey: store.stableKey("DISPLAY-B-NEW")) == legacy)
+
+        store.clear(persistentID: "DISPLAY-B-NEW", legacyDisplayID: 777)
+        precondition(defaults.data(forKey: store.stableKey("DISPLAY-B-NEW")) == nil)
+        precondition(defaults.data(forKey: store.identityKey(identity)) == nil,
+                     "Clearing the reconnected display must clear its durable assignment")
+
+        print("Wallpaper policy checks passed: durable assignment migration, shared playback, coverage hysteresis, stale reset, opacity and union sampling")
     }
 }
