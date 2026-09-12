@@ -8,6 +8,11 @@ struct MetalShaderInput: Equatable, Sendable {
     static let maxDeclarationBytes = 8_192
     static let maxIdentifierBytes = 24
 
+    struct Signature: Equatable, Sendable {
+        let id: String
+        let slot: Int
+    }
+
     let id: String
     let slot: Int
     let parameter: SceneParameter
@@ -59,28 +64,43 @@ struct MetalShaderInput: Equatable, Sendable {
 
     static func owns(_ key: String, nodeID: UUID) -> Bool { key.hasPrefix(keyPrefix(nodeID: nodeID)) }
 
+    /// Returns the reserved node-scoped parameter key for a control carrying shader metadata.
+    /// Ordinary scene controls return nil and keep their existing UUID key path.
+    static func preferredParameterKey(_ parameter: SceneParameter, nodeID: UUID) -> String? {
+        guard let value = declaration(in: parameter.name) else { return nil }
+        return parameterKey(nodeID: nodeID, id: value.id)
+    }
+
     static func inputs(nodeID: UUID, parameters: [String: SceneParameter]) throws -> [MetalShaderInput] {
+        let prefix = keyPrefix(nodeID: nodeID)
         var result: [MetalShaderInput] = []
         var slots = Set<Int>()
         var ids = Set<String>()
-        for parameter in parameters.values {
-            guard let declaration = declaration(in: parameter.name) else { continue }
+        for (key, parameter) in parameters where key.hasPrefix(prefix) {
+            let keyID = String(key.dropFirst(prefix.count))
+            try validateIdentifier(keyID)
+            guard let declaration = declaration(in: parameter.name), declaration.id == keyID else {
+                throw SceneError.invalid("Shader input parameter keys must match their declared identifier.")
+            }
             try validateIdentifier(declaration.id)
             guard parameter.targets.isEmpty, parameter.isValid,
                   [.number, .boolean, .color, .choice].contains(parameter.type) else {
                 throw SceneError.invalid("Shader input ‘\(declaration.id)’ must be a valid number, color, toggle or choice without a layer-property target.")
             }
             guard slots.insert(declaration.slot).inserted else {
-                throw SceneError.invalid("Shader input slot \(declaration.slot) is declared more than once.")
+                throw SceneError.invalid("Shader input slot \(declaration.slot) is declared more than once on this shader layer.")
             }
             guard ids.insert(declaration.id).inserted else {
-                throw SceneError.invalid("Shader input id ‘\(declaration.id)’ is declared more than once.")
+                throw SceneError.invalid("Shader input id ‘\(declaration.id)’ is declared more than once on this shader layer.")
             }
             result.append(.init(id: declaration.id, slot: declaration.slot, parameter: parameter))
         }
-        guard result.count <= maxInputs else { throw SceneError.invalid("Use at most \(maxInputs) shader inputs per scene.") }
-        _ = nodeID // Reserved for node-scoped inputs if the fixed scene slots ever need partitioning.
-        return result.sorted { $0.id < $1.id }
+        guard result.count <= maxInputs else { throw SceneError.invalid("Use at most \(maxInputs) shader inputs per shader layer.") }
+        return result.sorted { lhs, rhs in lhs.slot == rhs.slot ? lhs.id < rhs.id : lhs.slot < rhs.slot }
+    }
+
+    static func declarationSignature(nodeID: UUID, parameters: [String: SceneParameter]) throws -> [Signature] {
+        try inputs(nodeID: nodeID, parameters: parameters).map { Signature(id: $0.id, slot: $0.slot) }
     }
 
     /// JSON-lines is the package/test declaration form. It immediately becomes ordinary
@@ -93,7 +113,7 @@ struct MetalShaderInput: Equatable, Sendable {
         let lines = text.split(whereSeparator: { $0.isNewline }).map {
             String($0).trimmingCharacters(in: .whitespacesAndNewlines)
         }.filter { !$0.isEmpty }
-        guard lines.count <= maxInputs else { throw SceneError.invalid("Use at most \(maxInputs) shader inputs per scene.") }
+        guard lines.count <= maxInputs else { throw SceneError.invalid("Use at most \(maxInputs) shader inputs per shader layer.") }
 
         var next = parameters.filter { !owns($0.key, nodeID: nodeID) }
         var seenSlots = Set<Int>()
@@ -145,16 +165,13 @@ struct MetalShaderInput: Equatable, Sendable {
         }.joined(separator: "\n")
     }
 
-    /// The ABI is fixed so Studio can compile source without inspecting Metal text or having
-    /// a second parameter context. Named aliases are generated only when declarations exist;
-    /// authors can always use slot0…slot7 directly.
-    static func metalDeclaration(_ inputs: [MetalShaderInput]) -> String {
+    /// The Metal ABI is always the same fixed slot block. Human-authored identifiers are
+    /// package/Studio metadata only and are never injected into user Metal source.
+    static func metalDeclaration(_ inputs: [MetalShaderInput] = []) -> String {
+        _ = inputs
         var lines = ["struct ShaderInputs {"]
         for index in 0..<maxInputs { lines.append("    float4 slot\(index);") }
         lines.append("};")
-        for input in inputs where input.id != "slot\(input.slot)" {
-            lines.append("#define \(input.id) slot\(input.slot)")
-        }
         return lines.joined(separator: "\n")
     }
 
