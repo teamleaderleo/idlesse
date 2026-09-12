@@ -66,7 +66,7 @@ compile_saver_arch() {
   local output="$2"
 
   xcrun swiftc \
-    "${SWIFT_CACHE_ARGS[@]}" \
+    ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} \
     -sdk "$SDK" \
     -target "$arch-apple-macosx$MIN_MACOS" \
     -swift-version 5 \
@@ -139,7 +139,7 @@ compile_app_full() {
     "${SWIFT_OPT[@]}" -module-name IdlesseApp )
   local f
   for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
-  xcrun swiftc "${SWIFT_CACHE_ARGS[@]}" "${args[@]}" "${APP_SOURCES[@]}" \
+  xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} "${args[@]}" "${APP_SOURCES[@]}" \
     -o "$APP/Contents/MacOS/Idlesse"
 }
 
@@ -175,7 +175,7 @@ compile_preview_extension() {
   local hash
   hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS-$module"; cat "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider") | shasum -a 256 | cut -d' ' -f1)"
   if [[ ! -f "$appex_cache/$hash" ]]; then
-    xcrun swiftc "${SWIFT_CACHE_ARGS[@]}" -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
       -swift-version 5 "${SWIFT_OPT[@]}" -module-name "$module" \
       -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
       "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider" \
@@ -217,7 +217,7 @@ build_app() {
   local appex_hash
   appex_hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS"; cat "$ROOT/Sources/DesktopMenu/FinderSync.swift") | shasum -a 256 | cut -d' ' -f1)"
   if [[ ! -f "$appex_cache/$appex_hash" ]]; then
-    xcrun swiftc "${SWIFT_CACHE_ARGS[@]}" -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
       -swift-version 5 "${SWIFT_OPT[@]}" -module-name IdlesseDesktopMenu \
       -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
       "$ROOT/Sources/DesktopMenu/FinderSync.swift" -framework AppKit -framework FinderSync \
