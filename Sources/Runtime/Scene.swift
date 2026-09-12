@@ -102,6 +102,19 @@ struct SceneBleed: Codable, Sendable, Equatable {
     var bottom: Double = 0
     var right: Double = 0
     var isEmpty: Bool { top == 0 && left == 0 && bottom == 0 && right == 0 }
+    init(top: Double = 0, left: Double = 0, bottom: Double = 0, right: Double = 0) {
+        self.top = top; self.left = left; self.bottom = bottom; self.right = right
+    }
+    /// Every edge is optional. A synthesized decoder would demand all four, so
+    /// `{"right": 0.05}` — the shape anyone would actually write for a margin on
+    /// one side — would throw, and a swallowed throw means framing just vanishes.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        top = try c.decodeIfPresent(Double.self, forKey: .top) ?? 0
+        left = try c.decodeIfPresent(Double.self, forKey: .left) ?? 0
+        bottom = try c.decodeIfPresent(Double.self, forKey: .bottom) ?? 0
+        right = try c.decodeIfPresent(Double.self, forKey: .right) ?? 0
+    }
     /// Clamped so a slip cannot ask for more margin than there is frame.
     var clamped: SceneBleed {
         let unit = { (v: Double) in min(max(v, 0), 0.45) }
@@ -906,6 +919,34 @@ struct SceneNode: Codable, Sendable {
     }
 }
 
+/// Framing for a plain media file, read from `<name>.framing.json` beside it.
+///
+/// An imported picture or video has nowhere to keep a focus or a bleed margin:
+/// a `.idlesse` package carries them in its scene, but a bare `.mp4` is just
+/// the media, and the Library stores a bookmark rather than a scene. A sidecar
+/// keeps originals where they already live, stays editable by hand, and reads
+/// the same whether the file is reached through the Library, the wallpaper or
+/// the screen saver.
+///
+/// Missing or malformed is not an error: framing is an optional refinement, and
+/// a wallpaper that refuses to play because a preferences file has a typo in it
+/// is worse than one that plays centred.
+struct SceneFraming: Decodable {
+    var focus: SceneFocus?
+    var bleed: SceneBleed?
+
+    static func url(for media: URL) -> URL {
+        media.deletingPathExtension().appendingPathExtension("framing.json")
+    }
+    static func beside(_ media: URL) throws -> SceneFraming? {
+        let path = url(for: media)
+        guard FileManager.default.fileExists(atPath: path.path) else { return nil }
+        let data = try Data(contentsOf: path)
+        guard data.count <= 4096 else { throw SceneError.invalid("Framing sidecar is too large.") }
+        return try JSONDecoder().decode(SceneFraming.self, from: data)
+    }
+}
+
 protocol SceneSource {
     func resolve(_ url: URL) async throws -> SceneDescriptor
 }
@@ -1018,7 +1059,12 @@ struct LocalSceneSource: SceneSource {
         try Task.checkCancellation()
         guard url.isFileURL else { throw SceneError.invalid("Download this scene before opening it.") }
         if url.pathExtension.lowercased() != "idlesse" {
-            return SceneDescriptor(title: url.deletingPathExtension().lastPathComponent, assetURL: url, kind: try kind(url))
+            var scene = SceneDescriptor(title: url.deletingPathExtension().lastPathComponent, assetURL: url, kind: try kind(url))
+            if let framing = try? SceneFraming.beside(url) {
+                scene.focus = framing.focus
+                scene.bleed = framing.bleed
+            }
+            return scene
         }
         let root = url.resolvingSymlinksInPath().standardizedFileURL
         let manifest = try json(Manifest.self, name: "manifest.json", root: root)

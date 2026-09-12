@@ -80,6 +80,25 @@ enum WallpaperSmoke {
         precondition(bled.replacingNodes(bled.nodes).bleed == margin, "replacingNodes must carry bleed forward")
         precondition(SceneBleed(right: 9).clamped.right <= 0.45, "a margin cannot exceed the frame")
 
+        // Framing sidecar: the only way a plain imported file can carry either,
+        // since the Library keeps a bookmark rather than a scene.
+        let framingDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("idlesse-framing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: framingDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: framingDir) }
+        let media = framingDir.appendingPathComponent("clip.mp4")
+        try Data().write(to: media)
+        let absent = try SceneFraming.beside(media)
+        precondition(absent == nil, "no sidecar is not an error")
+        try #"{"bleed":{"right":0.052},"focus":{"x":0.25,"y":0.5}}"#
+            .data(using: .utf8)!.write(to: SceneFraming.url(for: media))
+        let read = try SceneFraming.beside(media)
+        precondition(read?.bleed == SceneBleed(right: 0.052), "sidecar bleed must load")
+        precondition(read?.focus == SceneFocus(x: 0.25, y: 0.5), "sidecar focus must load")
+        try "not json at all".data(using: .utf8)!.write(to: SceneFraming.url(for: media))
+        precondition((try? SceneFraming.beside(media)) == nil,
+            "a malformed sidecar must fail rather than pretend to a framing")
+
         var viewport = TimelineViewport()
         viewport.resize(to: 10)
         precondition(viewport.start == 0 && viewport.span == 10)
