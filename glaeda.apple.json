@@ -36,5 +36,8 @@
     "app": {
       "engine": "swiftpm"
     }
+  },
+  "cache_policies": {
+    "app": "native"
   }
 }
