@@ -77,6 +77,24 @@ enum WallpaperPolicyTests {
         ])
         precondition(union == 1, "Overlapping window bounds must be measured as a union")
 
+        precondition(DesktopAttentionSignal.value(coverageFraction: 0) == 1)
+        precondition(DesktopAttentionSignal.value(coverageFraction: 1) == 0)
+        precondition(abs(DesktopAttentionSignal.value(coverageFraction: 0.37) - 0.63) < 0.000001)
+        precondition(DesktopAttentionSignal.value(coverageFraction: -.infinity) == 1)
+
+        if let screen = NSScreen.main {
+            let samples = 20
+            let scanner = CoverageMonitor()
+            let started = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<samples {
+                _ = scanner.measurement(of: screen.frame,
+                    above: Int(CGWindowLevelForKey(.desktopWindow)), excluding: [],
+                    ownPID: Int(ProcessInfo.processInfo.processIdentifier))
+            }
+            let milliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1000 / Double(samples)
+            print(String(format: "Coverage observation benchmark: %.3f ms/sample (%d samples)", milliseconds, samples))
+        }
+
         let suite = "Idlesse.DisplayAssignmentStoreTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -96,6 +114,6 @@ enum WallpaperPolicyTests {
         precondition(defaults.data(forKey: store.stableKey("DISPLAY-B")) == nil)
         precondition(defaults.data(forKey: store.legacyKey(42)) == nil)
 
-        print("Wallpaper policy checks passed: assignment identity, shared playback, coverage hysteresis, stale reset, opacity and union sampling")
+        print("Wallpaper policy checks passed: assignment identity, shared playback, coverage hysteresis, stale reset, opacity, union sampling and desktop attention normalization")
     }
 }
