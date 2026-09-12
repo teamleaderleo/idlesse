@@ -29,3 +29,10 @@ Hard bounds keep package decoding and editor operations predictable:
 Packages with variants must declare `variants` in the revision-21 manifest feature list. Packages and recovery records that predate the field decode with an empty variant list. Writers omit both the scene block and feature declaration when no named variants exist.
 
 Library grid thumbnails continue to represent canonical Default. Variant-specific selected-detail posters and wallpaper resume state layer on this model in the user-facing #32 slices.
+
+
+## Product integration
+
+Library selected-detail previews may choose an authored variant, while ordinary grid/list thumbnails stay on Default. Collections persist `SceneSelection(sceneID, variantID)`; legacy `sceneIDs` decode as Default.
+
+Wallpaper playback keeps three layers separate: the resolved package scene, the selected authored variant, and session-only control changes. Switching a variant clears the temporary control layer and updates live surfaces in place, preserving scene time and media phase. The selected variant UUID is saved beside the wallpaper bookmark, while ad-hoc control edits remain session-only. The menu/status title appends the variant name and `Modified` when temporary controls differ from that variant. System backdrop stills are regenerated from the same effective scene.

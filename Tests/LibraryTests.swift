@@ -6,11 +6,17 @@ import Foundation
         var title: String
         var bookmark: Data
     }
+    struct LegacyCollection: Codable {
+        var id: String
+        var name: String
+        var sceneIDs: [String]
+        var playback: SceneLibraryStore.Playback?
+    }
     struct LegacyCatalog: Codable {
         var entries: [LegacyEntry]
         var favorites: Set<String>
         var recent: [String: Date]
-        var collections: [SceneLibraryStore.Collection]?
+        var collections: [LegacyCollection]?
     }
 
     static func expectFailure(_ message: String, _ action: () throws -> Void) {
@@ -61,6 +67,9 @@ import Foundation
         let collection = try store.createCollection(name: " Chill ")
         try store.toggleMembership(sceneID: entry.id, collectionID: collection.id)
         try store.toggleMembership(sceneID: "builtin.Undertow", collectionID: collection.id)
+        let midnightID = UUID()
+        try store.toggleMembership(selection: .init(sceneID: "builtin.Undertow", variantID: midnightID), collectionID: collection.id)
+        precondition(store.catalog.collections.first?.selection(for: "builtin.Undertow")?.variantID == midnightID)
         expectFailure("Duplicate collection accepted") { _ = try store.createCollection(name: "chill") }
         expectFailure("Empty collection accepted") { _ = try store.createCollection(name: "  ") }
         try store.setPlayback(collection.id, .init(minutes: 15, shuffle: true, startMinute: 1320, endMinute: 420))
@@ -105,6 +114,7 @@ import Foundation
         precondition(reopened.catalog.collections.first?.playback?.minutes == 15)
         precondition(reopened.catalog.collections.first?.playback?.shuffle == true)
         precondition(reopened.catalog.collections.first?.sceneIDs == [entry.id, "builtin.Undertow"])
+        precondition(reopened.catalog.collections.first?.selection(for: "builtin.Undertow")?.variantID == midnightID)
         try reopened.renameCollection(collection.id, name: "Evening")
         precondition(reopened.catalog.entries == [entry])
         precondition(reopened.catalog.favorites.contains(entry.id) && reopened.catalog.recent[entry.id] != nil)
@@ -125,7 +135,7 @@ import Foundation
         let legacyMedia = folder.appendingPathComponent("Legacy Wallpaper.png")
         try Data([4, 5, 6]).write(to: legacyMedia)
         let legacyID = "legacy-entry"
-        let legacyCollection = SceneLibraryStore.Collection(id: "legacy-collection", name: "Legacy Collection",
+        let legacyCollection = LegacyCollection(id: "legacy-collection", name: "Legacy Collection",
             sceneIDs: [legacyID, "builtin.Undertow"], playback: .init(minutes: 30, shuffle: false))
         let legacyPayload = LegacyCatalog(entries: [LegacyEntry(id: legacyID, title: "Legacy Wallpaper", bookmark: try bookmark(legacyMedia))],
             favorites: [legacyID], recent: [legacyID: Date(timeIntervalSinceReferenceDate: 1234)], collections: [legacyCollection])
@@ -138,6 +148,8 @@ import Foundation
         precondition(legacyStore.catalog.entries.count == 1 && legacyStore.catalog.entries[0].bookmark != nil)
         precondition(legacyStore.catalog.favorites == [legacyID])
         precondition(legacyStore.catalog.collections.first?.sceneIDs == [legacyID, "builtin.Undertow"])
+        precondition(legacyStore.catalog.collections.first?.selections.allSatisfy { $0.variantID == nil } == true,
+                     "Legacy scene IDs must decode as Default variant selections")
         try assertContents(legacyFile, equal: legacyBytes, "Opening a legacy index must be side-effect free")
         do {
             let access = try legacyStore.access(legacyStore.catalog.entries[0])
