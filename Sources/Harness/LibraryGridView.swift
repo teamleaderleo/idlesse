@@ -9,6 +9,7 @@ final class LibraryGridView: NSView {
 
     private var items: [LibraryItem] = []
     private var selectedID: String?
+    private var activeID: String?
     private var cardViews: [LibraryCardView] = []
     private var isRelayouting = false
 
@@ -24,6 +25,15 @@ final class LibraryGridView: NSView {
         self.selectedID = id
         for card in cardViews {
             card.isSelected = card.item?.id == id
+        }
+    }
+
+    /// Marks the wallpaper currently on the desktop, independent of cursor
+    /// selection. Pass nil when no wallpaper is playing.
+    func setActive(id: String?) {
+        self.activeID = id
+        for card in cardViews {
+            card.isActive = card.item?.id == id
         }
     }
 
@@ -69,6 +79,7 @@ final class LibraryGridView: NSView {
             let cardFrame = NSRect(x: x, y: y, width: cardWidth, height: cardHeight)
             let card = LibraryCardView(frame: cardFrame, item: item)
             card.isSelected = item.id == selectedID
+            card.isActive = item.id == activeID
             card.onClick = { [weak self] item in
                 self?.selectedID = item.id
                 self?.select(id: item.id)
@@ -104,12 +115,17 @@ final class LibraryCardView: NSView {
     var isSelected = false {
         didSet { updateBorder() }
     }
+    /// The wallpaper currently on the desktop. Distinct from cursor selection.
+    var isActive = false {
+        didSet { updateActiveBadge() }
+    }
     var onClick: ((LibraryItem) -> Void)?
     var onDoubleClick: ((LibraryItem) -> Void)?
 
     let thumbnailView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let badgeLabel = NSTextField(labelWithString: "")
+    private let activeBadge = NSTextField(labelWithString: "On Desktop")
 
     init(frame frameRect: NSRect, item: LibraryItem) {
         self.item = item
@@ -149,7 +165,23 @@ final class LibraryCardView: NSView {
         }
         addSubview(badgeLabel)
 
+        activeBadge.font = .systemFont(ofSize: 10, weight: .semibold)
+        activeBadge.textColor = .white
+        activeBadge.alignment = .center
+        activeBadge.wantsLayer = true
+        activeBadge.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        activeBadge.layer?.cornerRadius = 7
+        activeBadge.isBordered = false
+        activeBadge.isEditable = false
+        activeBadge.isSelectable = false
+        // Overlay pill pinned over the thumbnail's top-leading corner.
+        activeBadge.frame = NSRect(x: 6, y: 6, width: 76, height: 18)
+        activeBadge.autoresizingMask = [.maxXMargin, .minYMargin]
+        activeBadge.setAccessibilityLabel("Currently on desktop")
+        addSubview(activeBadge)
+
         updateBorder()
+        updateActiveBadge()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
@@ -162,6 +194,10 @@ final class LibraryCardView: NSView {
             layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
             layer?.borderWidth = 1
         }
+    }
+
+    private func updateActiveBadge() {
+        activeBadge.isHidden = !isActive
     }
 
     override func mouseDown(with event: NSEvent) {

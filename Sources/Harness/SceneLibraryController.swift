@@ -55,6 +55,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selected: Item? {
         didSet { UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID") }
     }
+    /// The wallpaper currently on the desktop, independent of cursor selection.
+    /// Set via noteActiveWallpaper as committed selections land or stop.
+    private var activeURL: URL?
+    private var activeID: String?
     private var task: Task<Void, Never>?
     private var conversionTask: Task<Void, Never>?
     private var importFailureHandler: (([String]) -> Void)?
@@ -478,7 +482,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
         table.reloadData()
+        activeID = activeURL.flatMap { itemID(for: $0) }
         gridView.update(items: items, selectedID: selected?.id)
+        gridView.setActive(id: activeID)
         updateEmptyState(activeCollection: activeCollection)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -495,10 +501,41 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             preview()
         }
     }
+    /// Records the wallpaper currently on the desktop (or nil when stopped)
+    /// and refreshes the active markers without disturbing cursor selection.
+    /// Call only for committed selections: peek previews must not retarget it.
+    func noteActiveWallpaper(_ url: URL?) {
+        activeURL = url
+        let previousID = activeID
+        activeID = url.flatMap { itemID(for: $0) }
+        guard activeID != previousID else { return }
+        gridView.setActive(id: activeID)
+        var changed = IndexSet()
+        for (index, item) in items.enumerated() where item.id == previousID || item.id == activeID {
+            changed.insert(index)
+        }
+        if !changed.isEmpty {
+            table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
+        }
+    }
+    /// Matches a wallpaper URL back to its Library item by standardized path.
+    /// Bookmark-backed entries resolve through the store; failures simply
+    /// leave the item unmatched rather than disturbing the Library.
+    private func itemID(for url: URL) -> String? {
+        let target = url.standardizedFileURL
+        for item in items {
+            if let builtin = item.builtin, builtin.standardizedFileURL == target { return item.id }
+            if let entry = item.entry,
+               let resolved = try? store.resolve(entry),
+               resolved.standardizedFileURL == target { return item.id }
+        }
+        return nil
+    }
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item = items[row]
-        let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
+        let activeMark = item.id == activeID ? "◉  " : ""
+        let text = NSTextField(labelWithString: activeMark + (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
         text.lineBreakMode = .byTruncatingTail
         let cell = NSTableCellView()
         cell.textField = text

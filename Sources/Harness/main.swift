@@ -64,6 +64,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func showLibrary() {
         do {
             try prepareLibrary()
+            library?.noteActiveWallpaper(wallpaper.selectedURL)
             saverView?.stopAnimation()
             window?.orderOut(nil)
             if let library, let content = library.window?.contentView {
@@ -114,6 +115,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
         wallpaper.onStop = { [weak self] in
             self?.library?.releaseActiveUseAccess()
+            self?.library?.noteActiveWallpaper(nil)
             self?.showLibrary()
         }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
@@ -122,6 +124,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.onSelectionCommitted = { [weak self] url in
             self?.modes.adoptManualSelection(url)
             self?.noteRecentScene(url)
+            self?.library?.noteActiveWallpaper(url)
         }
         hotKeys.onNext = { [weak self] in self?.stepWallpaper(delta: 1) }
         hotKeys.onPrevious = { [weak self] in self?.stepWallpaper(delta: -1) }
@@ -193,6 +196,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.minSize = NSSize(width: 900, height: 360)
 
         wallpaper.restoreSelection()
+        library?.noteActiveWallpaper(wallpaper.selectedURL)
         if OnboardingController.needed && pendingSceneURL == nil {
             showOnboarding()
         } else {
