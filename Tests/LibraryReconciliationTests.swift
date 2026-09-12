@@ -9,9 +9,10 @@ struct LibraryReconciliationChecks {
         try ambiguityStaysUnresolved()
         try identityConflictsNeverFallThrough()
         try cancellationLeavesBytesUntouched()
+        try staleReviewLeavesCurrentCatalogUntouched()
         try relinkAndReconcileStaySeparate()
         try digestBudgetSkipsLargeFiles()
-        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, identity conflicts, atomic cancellation, relink separation and bounded hashing")
+        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, identity conflicts, cancellation, stale-review atomicity, relink separation and bounded hashing")
     }
 
     private static func entry(_ id: String, path: String, catalogID: String? = nil,
@@ -146,6 +147,22 @@ struct LibraryReconciliationChecks {
         _ = try store.prepareReconciliation(sourceID: "source", scanned: [draft("B.mp4", bytes: 2)])
         let after = try Data(contentsOf: store.file)
         precondition(before == after)
+    }
+
+    private static func staleReviewLeavesCurrentCatalogUntouched() throws {
+        let (store, dir) = try seedStore(entries: [entry("a", path: "A.mp4", bytes: 1)])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stale = try store.prepareReconciliation(sourceID: "source", scanned: [draft("A.mp4", bytes: 1)])
+        let newer = try store.prepareReconciliation(sourceID: "source", scanned: [draft("B.mp4", bytes: 2)])
+        try store.applyReconciliation(newer)
+        let before = try Data(contentsOf: store.file)
+        let snapshot = store.catalog
+        do {
+            try store.applyReconciliation(stale)
+            preconditionFailure("A stale reconciliation review was accepted")
+        } catch {}
+        precondition(store.catalog == snapshot)
+        precondition(try Data(contentsOf: store.file) == before)
     }
 
     private static func relinkAndReconcileStaySeparate() throws {
