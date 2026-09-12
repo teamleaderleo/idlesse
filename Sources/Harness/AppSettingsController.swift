@@ -47,6 +47,15 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let showSaver: () -> Void
     private let tabs = NSTabView()
     private var navigation: [NSButton] = []
+    private var home: HomeWindowController?
+    private var displaysDestination: DisplayAssignmentViewController?
+    private weak var libraryWindow: NSWindow?
+
+    /// Runtime dependency injected by the app delegate before Home is installed.
+    /// It is deliberately absent from visible Settings UI.
+    var modes: AmbientModesController?
+    var onLibraryVisible: (() -> Void)?
+    var onClose: (() -> Void)?
 
     private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
     private let batteryThrottle = NSButton(checkboxWithTitle: "Cap to 30 fps on battery", target: nil, action: nil)
@@ -76,12 +85,46 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Legacy callers used tab 2 for Screen Saver. Keep that route stable while
-    /// the removed Automation page no longer occupies a Settings destination.
+    /// Install Home around the Library's existing window. This is a one-time app
+    /// bootstrap seam; Settings never owns or reparents Home content.
+    func installLibrary(_ view: NSView) {
+        guard home == nil,
+              let modes,
+              let library = view.window?.windowController as? SceneLibraryController else { return }
+        libraryWindow = library.window
+        library.hostWindow = library.window
+        let displays = DisplayAssignmentViewController(wallpaper: wallpaper)
+        displays.onArrangementChange = { [weak modes] in modes?.adoptManualDisplayArrangement() }
+        displaysDestination = displays
+        home = HomeWindowController(
+            library: library,
+            wallpaper: wallpaper,
+            comfort: comfort,
+            modes: modes,
+            displaysDestinationController: displays,
+            activateDisplaysDestination: { [weak displays] in displays?.activate() })
+    }
+
+    /// Historical callers use 3 for Library, 1 for the removed Automation pane,
+    /// and 2 for Screen Saver. Preserve those routes while changing destinations.
     func present(tab: Int? = nil) {
-        reload()
         let requested = tab ?? 0
-        selectPage(requested == 2 || requested == 1 ? 1 : 0)
+        if requested == 3 {
+            onLibraryVisible?()
+            if let home { home.presentLibrary() }
+            else {
+                libraryWindow?.deminiaturize(nil)
+                libraryWindow?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            return
+        }
+        if requested == 1, let home {
+            home.presentAmbientSets()
+            return
+        }
+        reload()
+        selectPage(requested == 2 ? 1 : 0)
         window?.level = comfort.isDimmed ? .mainMenu : .normal
         window?.deminiaturize(nil)
         showWindow(nil)
@@ -89,6 +132,9 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         window?.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 720, height: 500))
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func presentDisplays() { home?.presentDisplays() }
+    func presentAmbientSets() { home?.presentAmbientSets() }
 
     @objc private func openSettingsFromMenu(_ sender: Any?) { present(tab: 0) }
 
