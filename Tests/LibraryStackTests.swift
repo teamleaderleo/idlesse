@@ -20,6 +20,8 @@ struct LibraryStackChecks {
         precondition(LibraryStackBrowser.representative(for: sourceProjection, in: catalog, query: "neb")?.id == "b")
         precondition(LibraryStackBrowser.matchingChildren(of: sourceProjection, in: catalog, query: "night").map(\.id) == ["b"])
         precondition(LibraryStackBrowser.typeHint(for: sourceProjection, in: catalog) == "MIXED")
+        precondition(LibraryStackBrowser.representative(for: sourceProjection, in: catalog, query: "warm")?.id == "a")
+        precondition(LibraryStackBrowser.score(query: "Aurora", stack: sourceProjection, in: catalog) != nil)
 
         catalog.stacks = [.init(id: "custom", name: "Favorites Pair", sceneIDs: ["b", "a"], representativeID: "b")]
         let userProjection = LibraryStackBrowser.projections(in: catalog).first { $0.kind == .user }!

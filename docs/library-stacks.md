@@ -13,3 +13,7 @@
 The gallery/UI layer consumes `LibraryStackBrowser`: a card needs only the chosen representative entry, while focused stack browsing can request child artwork on demand. Flat browsing remains a presentation option.
 
 📚 Curator
+
+## Gallery behavior
+
+Studio Library defaults to **Stacks** browsing with a persistent **Flat** toggle. A stack card carries one representative `Entry`, so the virtualized grid asks for one thumbnail. Search can swap that representative to the best matching child. Double-clicking a stack enters a focused child browser; the active query remains in force, and the Stacks menu returns to the compact gallery. User stacks can be created from an explicit shared series, character, or tag and can remember a chosen representative.
