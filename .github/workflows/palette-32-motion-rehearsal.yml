@@ -1,0 +1,26 @@
+name: Palette 32 motion rehearsal
+
+on:
+  push:
+    branches:
+      - palette/32-motion-rehearsal
+
+permissions:
+  contents: read
+
+jobs:
+  merge-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: palette/32-motion-rehearsal
+          fetch-depth: 0
+      - name: Merge current motion branch
+        run: |
+          git fetch origin animator/issue-38-property-motion
+          git merge --no-edit origin/animator/issue-38-property-motion
+      - name: Run tests
+        run: ./test.sh
+      - name: Build app
+        run: ./build.sh
