@@ -79,6 +79,7 @@ fi
 
 # 5. Comfort
 COMFORT_SRCS=(
+  Sources/Wallpaper/AmbientSet.swift
   Sources/Wallpaper/DesktopComfortController.swift
   Tests/ComfortTests.swift
 )
@@ -121,6 +122,21 @@ if needs_build "build/tests/ambient-sets" "${AMBIENT_SET_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 9. Ambient Sets actuation policy. Remains Foundation-only so manual-hold
+# merging, reserved targets, and safe legacy cutover ordering stay synthetic.
+AMBIENT_ACTUATION_SRCS=(
+  Sources/Wallpaper/AmbientSet.swift
+  Sources/Wallpaper/AmbientSetStore.swift
+  Sources/Wallpaper/AmbientLegacyAdapter.swift
+  Sources/Wallpaper/AmbientSetActuationPolicy.swift
+  Sources/Wallpaper/AmbientLegacyMigrationPlan.swift
+  Tests/AmbientSetActuationTests.swift
+)
+if needs_build "build/tests/ambient-set-actuation" "${AMBIENT_ACTUATION_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${AMBIENT_ACTUATION_SRCS[@]}" -o build/tests/ambient-set-actuation &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -135,4 +151,6 @@ build/tests/comfort
 build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
+build/tests/ambient-set-actuation
 python3 Tests/HomeShellContractTests.py
+python3 Tests/AmbientHomeContractTests.py
