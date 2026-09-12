@@ -723,8 +723,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             kCGImageSourceThumbnailMaxPixelSize: 320
         ] as CFDictionary)
     }
-    /// Fallback for scene packages without a baked preview: thumbnail the
-    /// package's own asset (single image, video poster frame, gradient probe).
+    /// Fallback for scene packages without a baked preview. Prefer the package's
+    /// own decodable asset, then render one bounded compositor probe for purely
+    /// procedural scenes (shader, particles, gradients, text, and shapes).
     private static func packageAssetThumbnail(_ package: URL) -> CGImage? {
         guard let scene = try? LocalSceneSource.read(package) else { return nil }
         let candidates: [URL] = ([scene.assetURL] + scene.allNodes.map(\.assetURL)).compactMap { $0 }
@@ -739,7 +740,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 }
             }
         }
-        return nil
+        return proceduralThumbnail(scene)
+    }
+    private static func proceduralThumbnail(_ scene: SceneDescriptor) -> CGImage? {
+        let width = 320, height = 180
+        let previewTime = scene.metadata?.previewTime ?? 2
+        do {
+            let clock = SceneClock(now: { 0 })
+            try clock.configure(timeline: scene.timeline)
+            try clock.seek(to: previewTime)
+            let renderer = try MetalSceneRenderer(playable: scene,
+                bounds: NSRect(x: 0, y: 0, width: width, height: height), scale: 1,
+                clock: clock, onError: { _ in })
+            defer { renderer.releaseResources() }
+            let bytes = try renderer.renderFrame(signals: .init(time: clock.time),
+                width: width, height: height, sampleVideo: false)
+            guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+            return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        } catch {
+            return nil
+        }
     }
     private static func appendThumbLine(_ line: String) {
         guard let data = (line + "\n").data(using: .utf8) else { return }
@@ -1458,6 +1481,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let url = $0.builtin else { return nil }
             return (title: $0.title, url: url)
         })
+
+        func waitForThumbnail(_ item: Item, label: String) -> NSImage {
+            var result: NSImage?
+            controller.requestThumbnail(for: item) { result = $0 }
+            let thumbnailDeadline = Date().addingTimeInterval(10)
+            while result == nil && Date() < thumbnailDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(result != nil, "\(label) procedural thumbnail timed out")
+            return result!
+        }
+        let fireflies = controller.items.first { $0.title == "Fireflies" }!
+        let fireflyThumbnail = waitForThumbnail(fireflies, label: "Fireflies")
+        precondition(Int(fireflyThumbnail.size.width) == 320 && Int(fireflyThumbnail.size.height) == 180,
+                     "Particle thumbnails must use the bounded 320×180 probe")
+        let shaderPackage = folder.appendingPathComponent("Shader Probe.idlesse")
+        try ScenePackageWriter.write(SceneDescriptor(title: "Shader Probe",
+            nodes: [SceneNode(content: .shader(.init()))]), to: shaderPackage)
+        let shaderItem = Item(id: "smoke.shader", title: "Shader Probe", builtin: shaderPackage, entry: nil)
+        let shaderThumbnail = waitForThumbnail(shaderItem, label: "Shader")
+        precondition(Int(shaderThumbnail.size.width) == 320 && Int(shaderThumbnail.size.height) == 180,
+                     "Shader thumbnails must use the bounded 320×180 probe")
+
         if let videoURL {
             let invalidMedia = folder.appendingPathComponent("invalid.webm")
             try Data("not a video".utf8).write(to: invalidMedia)
@@ -1500,6 +1546,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         controller.window?.close()
-        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, active desktop controls, draft routing\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
+        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, active desktop controls, draft routing, procedural thumbnails\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
     }
 }
