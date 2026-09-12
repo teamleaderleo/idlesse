@@ -1,23 +1,20 @@
 import AppKit
 import Foundation
 
-let helper = Bundle.main.bundleURL
-let mainApp = helper
+// Embedded at Idlesse.app/Contents/Library/LoginItems/IdlesseLoginItem.app.
+// Walk from the helper bundle itself so renamed copies launch their containing app
+// instead of assuming the application is literally named Idlesse.app.
+let target = Bundle.main.bundleURL
     .deletingLastPathComponent() // LoginItems
     .deletingLastPathComponent() // Library
     .deletingLastPathComponent() // Contents
-    .deletingLastPathComponent() // Idlesse.app parent calculation target below
-    .appendingPathComponent("Idlesse.app", isDirectory: true)
+    .deletingLastPathComponent() // containing .app
 
-// When installed at Idlesse.app/Contents/Library/LoginItems/IdlesseLoginItem.app,
-// walking four parents lands beside Idlesse.app. Prefer the embedded parent when
-// its path is available so renamed copies continue to launch themselves.
-let embeddedMain = helper
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-let target = embeddedMain.pathExtension == "app" ? embeddedMain : mainApp
+guard target.pathExtension.caseInsensitiveCompare("app") == .orderedSame,
+      FileManager.default.fileExists(atPath: target.path) else {
+    fputs("Idlesse login launch failed: containing application bundle is unavailable.\n", stderr)
+    exit(EXIT_FAILURE)
+}
 
 let configuration = NSWorkspace.OpenConfiguration()
 configuration.activates = false
