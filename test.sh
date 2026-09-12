@@ -133,6 +133,20 @@ if needs_build "build/tests/ambient-sets" "${AMBIENT_SET_SRCS[@]}"; then
   pids+=($!)
 fi
 
+
+# 10. Library stacks over stable entry identity and Quarry SQLite.
+LIBRARY_STACK_SRCS=(
+  Sources/Harness/SceneLibraryStore.swift
+  Sources/Harness/SceneLibraryReconciliation.swift
+  Sources/Harness/SceneLibrarySQLiteStore.swift
+  Sources/Harness/SceneLibraryStacks.swift
+  Tests/LibraryStackTests.swift
+)
+if needs_build "build/tests/library-stacks" "${LIBRARY_STACK_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_STACK_SRCS[@]}" -lsqlite3 -o build/tests/library-stacks &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -148,3 +162,4 @@ build/tests/library
 build/tests/library-reconcile
 build/tests/library-grid
 build/tests/ambient-sets
+build/tests/library-stacks

@@ -16,6 +16,7 @@ final class SceneLibraryStore {
         var title: String
         var bookmark: Data?
         var catalogID: String?
+        var groupID: String?
         var sourceID: String?
         var relativeMediaPath: String?
         var relativePosterPath: String?
@@ -33,7 +34,7 @@ final class SceneLibraryStore {
         var observation: ReconciliationObservation?
 
         init(id: String, title: String, bookmark: Data? = nil, catalogID: String? = nil,
-             sourceID: String? = nil, relativeMediaPath: String? = nil,
+             groupID: String? = nil, sourceID: String? = nil, relativeMediaPath: String? = nil,
              relativePosterPath: String? = nil, series: String? = nil,
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
@@ -45,6 +46,7 @@ final class SceneLibraryStore {
             self.title = title
             self.bookmark = bookmark
             self.catalogID = catalogID
+            self.groupID = groupID
             self.sourceID = sourceID
             self.relativeMediaPath = relativeMediaPath
             self.relativePosterPath = relativePosterPath
@@ -63,7 +65,7 @@ final class SceneLibraryStore {
         }
 
         enum CodingKeys: String, CodingKey {
-            case id, title, bookmark, catalogID, sourceID, relativeMediaPath, relativePosterPath
+            case id, title, bookmark, catalogID, groupID, sourceID, relativeMediaPath, relativePosterPath
             case series, character, variant, tags, mediaType, width, height, fps, duration, provenance
             case availability, observation
         }
@@ -73,6 +75,7 @@ final class SceneLibraryStore {
             title = try values.decode(String.self, forKey: .title)
             bookmark = try values.decodeIfPresent(Data.self, forKey: .bookmark)
             catalogID = try values.decodeIfPresent(String.self, forKey: .catalogID)
+            groupID = try values.decodeIfPresent(String.self, forKey: .groupID)
             sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
             relativeMediaPath = try values.decodeIfPresent(String.self, forKey: .relativeMediaPath)
             relativePosterPath = try values.decodeIfPresent(String.self, forKey: .relativePosterPath)
@@ -95,6 +98,7 @@ final class SceneLibraryStore {
             try values.encode(title, forKey: .title)
             try values.encodeIfPresent(bookmark, forKey: .bookmark)
             try values.encodeIfPresent(catalogID, forKey: .catalogID)
+            try values.encodeIfPresent(groupID, forKey: .groupID)
             try values.encodeIfPresent(sourceID, forKey: .sourceID)
             try values.encodeIfPresent(relativeMediaPath, forKey: .relativeMediaPath)
             try values.encodeIfPresent(relativePosterPath, forKey: .relativePosterPath)
@@ -133,6 +137,7 @@ final class SceneLibraryStore {
         var relativeMediaPath: String
         var title: String?
         var catalogID: String?
+        var groupID: String?
         var relativePosterPath: String?
         var series: String?
         var character: String?
@@ -147,7 +152,7 @@ final class SceneLibraryStore {
         var observation: ReconciliationObservation?
 
         init(relativeMediaPath: String, title: String? = nil, catalogID: String? = nil,
-             relativePosterPath: String? = nil, series: String? = nil,
+             groupID: String? = nil, relativePosterPath: String? = nil, series: String? = nil,
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
              fps: Double? = nil, duration: Double? = nil,
@@ -156,6 +161,7 @@ final class SceneLibraryStore {
             self.relativeMediaPath = relativeMediaPath
             self.title = title
             self.catalogID = catalogID
+            self.groupID = groupID
             self.relativePosterPath = relativePosterPath
             self.series = series
             self.character = character
@@ -212,6 +218,12 @@ final class SceneLibraryStore {
         var sceneIDs: [String] = []
         var playback: Playback?
     }
+    struct UserStack: Codable, Equatable, Sendable {
+        var id: String = UUID().uuidString
+        var name: String
+        var sceneIDs: [String]
+        var representativeID: String?
+    }
     struct Catalog: Codable, Equatable {
         var version: Int = SceneLibraryStore.catalogVersion
         var entries: [Entry] = []
@@ -219,8 +231,9 @@ final class SceneLibraryStore {
         var favorites: Set<String> = []
         var recent: [String: Date] = [:]
         var collections: [Collection] = []
+        var stacks: [UserStack] = []
         init() {}
-        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, collections }
+        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, collections, stacks }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
@@ -229,6 +242,7 @@ final class SceneLibraryStore {
             favorites = try values.decode(Set<String>.self, forKey: .favorites)
             recent = try values.decode([String: Date].self, forKey: .recent)
             collections = try values.decodeIfPresent([Collection].self, forKey: .collections) ?? []
+            stacks = try values.decodeIfPresent([UserStack].self, forKey: .stacks) ?? []
         }
     }
 
@@ -371,6 +385,7 @@ final class SceneLibraryStore {
         next.favorites.subtract(removed)
         for entryID in removed { next.recent.removeValue(forKey: entryID) }
         for index in next.collections.indices { next.collections[index].sceneIDs.removeAll { removed.contains($0) } }
+        Self.pruneStacks(&next.stacks, removing: removed)
         try save(next)
     }
 
@@ -393,6 +408,47 @@ final class SceneLibraryStore {
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
         for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
+        Self.pruneStacks(&next.stacks, removing: [id])
+        try save(next)
+    }
+
+    @discardableResult func createStack(name: String, sceneIDs: [String], representativeID: String? = nil) throws -> UserStack {
+        let stack = UserStack(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                              sceneIDs: sceneIDs, representativeID: representativeID)
+        var next = catalog
+        next.stacks.append(stack)
+        try save(next)
+        return stack
+    }
+    func renameStack(_ id: String, name: String) throws {
+        var next = catalog
+        guard let index = next.stacks.firstIndex(where: { $0.id == id }) else { throw failure("Stack no longer exists.") }
+        next.stacks[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        try save(next)
+    }
+    func removeStack(_ id: String) throws {
+        var next = catalog
+        next.stacks.removeAll { $0.id == id }
+        try save(next)
+    }
+    func setStackRepresentative(_ stackID: String, entryID: String?) throws {
+        var next = catalog
+        guard let index = next.stacks.firstIndex(where: { $0.id == stackID }) else { throw failure("Stack no longer exists.") }
+        guard entryID == nil || next.stacks[index].sceneIDs.contains(entryID!) else {
+            throw failure("Choose a wallpaper already inside this stack.")
+        }
+        next.stacks[index].representativeID = entryID
+        try save(next)
+    }
+    func moveStackScene(_ sceneID: String, in stackID: String, by offset: Int) throws {
+        var next = catalog
+        guard let stack = next.stacks.firstIndex(where: { $0.id == stackID }),
+              let index = next.stacks[stack].sceneIDs.firstIndex(of: sceneID), [-1, 1].contains(offset) else {
+            throw failure("Select a wallpaper in a stack.")
+        }
+        let destination = index + offset
+        guard next.stacks[stack].sceneIDs.indices.contains(destination) else { return }
+        next.stacks[stack].sceneIDs.swapAt(index, destination)
         try save(next)
     }
     @discardableResult func createCollection(name: String) throws -> Collection {
@@ -488,7 +544,7 @@ final class SceneLibraryStore {
             let fallback = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
             result.append(Entry(id: UUID().uuidString,
                 title: Self.bounded(draft.title ?? fallback, bytes: 1024),
-                catalogID: draft.catalogID, sourceID: sourceID, relativeMediaPath: path,
+                catalogID: draft.catalogID, groupID: draft.groupID, sourceID: sourceID, relativeMediaPath: path,
                 relativePosterPath: poster, series: draft.series, character: draft.character,
                 variant: draft.variant, tags: draft.tags, mediaType: draft.mediaType,
                 width: draft.width, height: draft.height, fps: draft.fps,
@@ -564,6 +620,7 @@ final class SceneLibraryStore {
             guard !entry.id.isEmpty, entry.id.utf8.count <= 128,
                   !entry.title.isEmpty, entry.title.utf8.count <= 1024,
                   entry.catalogID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
+                  entry.groupID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
                   entry.series.map({ $0.utf8.count <= 512 }) ?? true,
                   entry.character.map({ $0.utf8.count <= 512 }) ?? true,
                   entry.variant.map({ $0.utf8.count <= 512 }) ?? true,
@@ -577,7 +634,7 @@ final class SceneLibraryStore {
 
             if let bookmark = entry.bookmark {
                 guard entry.availability == .present, bookmark.count <= Self.maxBookmarkBytes,
-                      entry.sourceID == nil, entry.relativeMediaPath == nil, entry.relativePosterPath == nil,
+                      entry.groupID == nil, entry.sourceID == nil, entry.relativeMediaPath == nil, entry.relativePosterPath == nil,
                       entry.observation == nil else {
                     throw failure("A Library entry mixes individual and Source references.")
                 }
@@ -594,9 +651,37 @@ final class SceneLibraryStore {
                 }
             }
         }
+        try validateStacks(value)
         try validateCollections(value)
     }
 
+
+    private func validateStacks(_ value: Catalog) throws {
+        let entryIDs = Set(value.entries.map(\.id))
+        guard value.stacks.count <= 128,
+              Set(value.stacks.map(\.id)).count == value.stacks.count,
+              Set(value.stacks.map { $0.name.lowercased() }).count == value.stacks.count else {
+            throw failure("Use at most 128 stacks with unique names.")
+        }
+        for stack in value.stacks {
+            guard !stack.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  stack.name.utf8.count <= 120, stack.id.utf8.count <= 128,
+                  (2...256).contains(stack.sceneIDs.count), Set(stack.sceneIDs).count == stack.sceneIDs.count,
+                  stack.sceneIDs.allSatisfy(entryIDs.contains),
+                  stack.representativeID.map(stack.sceneIDs.contains) ?? true else {
+                throw failure("Stacks need 2–256 existing wallpapers and an optional representative from the stack.")
+            }
+        }
+    }
+    private static func pruneStacks(_ stacks: inout [UserStack], removing removed: Set<String>) {
+        for index in stacks.indices.reversed() {
+            stacks[index].sceneIDs.removeAll { removed.contains($0) }
+            if let representative = stacks[index].representativeID, removed.contains(representative) {
+                stacks[index].representativeID = nil
+            }
+            if stacks[index].sceneIDs.count < 2 { stacks.remove(at: index) }
+        }
+    }
     private func validateCollections(_ value: Catalog) throws {
         for collection in value.collections {
             guard let settings = collection.playback else { continue }
