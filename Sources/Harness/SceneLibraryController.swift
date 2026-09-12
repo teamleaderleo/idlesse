@@ -104,7 +104,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     func stopRotation(manual: Bool = true) {
         if manual {
-            // Record the current boundary before stopping, including before the first timer tick.
             if scheduleTimer != nil { checkSchedule() }
         }
         rotationTimer?.invalidate()
@@ -140,7 +139,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
-    /// Hover-peek: transient desktop preview while hovering, revert on exit.
     var onPeek: ((URL) -> Void)?
     var onEndPeek: ((Bool) -> Void)?
     private var hoverMonitor: Any?
@@ -338,7 +336,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             onPeek?(opened.url)
         } else { onEndPeek?(true) }
     }
-    /// Presentation only: preserve catalog titles and filenames for round trips.
     static func displayTitle(_ title: String) -> String {
         let suffixes = ["-Restored-4K60", "-Restored-4K-HEVC", "-4K-HEVC", "-4K60"]
         guard let suffix = suffixes.first(where: { title.hasSuffix($0) }) else { return title }
@@ -352,7 +349,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             + store.catalog.entries.filter { $0.availability == .present }
                 .map { Item(id: $0.id, title: Self.displayTitle($0.title), builtin: nil, entry: $0) }
     }
-    /// Shared with first-run onboarding so both list the same starters.
     static func builtinScenes() -> [(name: String, title: String, url: URL)] {
         let names = ["DeskClock", "AfterHours", "Undertow", "Fireflies", "Ripple", "AudioAurora", "Gradient", "BreathingAurora"]
         let titles = ["Desk Clock", "After Hours", "Undertow", "Fireflies", "Ripple", "Audio Aurora", "Aurora", "Breathing Aurora"]
@@ -367,9 +363,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         UserDefaults.standard.set(filter.selectedItem?.title ?? "All Wallpapers", forKey: "Idlesse.library.filterTitle")
         reload()
     }
-    /// Forgiving subsequence match: every query character must appear in order,
-    /// with bonuses for prefixes, word starts, and contiguity. Lower is better;
-    /// nil means no match. Empty queries match everything at zero cost.
     static func fuzzyScore(query: String, in title: String) -> Double? {
         let q = Array(query.lowercased())
         guard !q.isEmpty else { return 0 }
@@ -401,8 +394,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return score + Double(t.count) / 1000
     }
     @objc private func clearSearch() { search.stringValue = ""; reload() }
-    /// Designed empty states instead of a blank panel. Builtins mean the full
-    /// list is never empty; these cover search misses and empty collections.
     private func updateEmptyState(activeCollection: SceneLibraryStore.Collection?) {
         guard items.isEmpty else {
             clearSearchButton.isHidden = true
@@ -588,7 +579,29 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 if let frame = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil) { return frame }
             }
         }
-        return nil
+        return proceduralThumbnail(scene)
+    }
+    private static func proceduralThumbnail(_ scene: SceneDescriptor) -> CGImage? {
+        let width = 320, height = 180
+        let previewTime = scene.metadata?.previewTime ?? 2
+        do {
+            let clock = SceneClock(now: { 0 })
+            try clock.configure(timeline: scene.timeline)
+            try clock.seek(to: previewTime)
+            let renderer = try MetalSceneRenderer(playable: scene,
+                bounds: NSRect(x: 0, y: 0, width: width, height: height), scale: 1,
+                clock: clock, onError: { _ in })
+            defer { renderer.releaseResources() }
+            let bytes = try renderer.renderFrame(signals: .init(time: clock.time),
+                width: width, height: height, sampleVideo: false)
+            guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+            return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        } catch {
+            return nil
+        }
     }
     private static func appendThumbLine(_ line: String) {
         guard let data = (line + "\n").data(using: .utf8) else { return }
@@ -799,7 +812,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 var drafts = try await Task.detached(priority: .utility) { try Self.scanSource(access.url) }.value
                 try Task.checkCancellation()
                 var diff = try self.store.prepareReconciliation(sourceID: id, scanned: drafts)
-
                 let digestLengths = Set(diff.missingEntryIDs.compactMap { entryID -> Int64? in
                     guard let entry = self.store.catalog.entries.first(where: { $0.id == entryID }),
                           entry.observation?.hasDigest == true else { return nil }
@@ -820,7 +832,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     }
                     diff = try self.store.prepareReconciliation(sourceID: id, scanned: drafts)
                 }
-
                 self.detail.stringValue = "Review \(source.name) reconciliation."
                 guard let accepted = await SourceReconciliationReview.choose(diff: diff, sourceName: source.name, window: window) else {
                     self.detail.stringValue = "\(source.name) rescan canceled. Library unchanged."
@@ -1332,6 +1343,27 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let url = $0.builtin else { return nil }
             return (title: $0.title, url: url)
         })
+        func waitForThumbnail(_ item: Item, label: String) -> NSImage {
+            var result: NSImage?
+            controller.requestThumbnail(for: item) { result = $0 }
+            let thumbnailDeadline = Date().addingTimeInterval(10)
+            while result == nil && Date() < thumbnailDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(result != nil, "\(label) procedural thumbnail timed out")
+            return result!
+        }
+        let fireflies = controller.items.first { $0.title == "Fireflies" }!
+        let fireflyThumbnail = waitForThumbnail(fireflies, label: "Fireflies")
+        precondition(Int(fireflyThumbnail.size.width) == 320 && Int(fireflyThumbnail.size.height) == 180,
+                     "Particle thumbnails must use the bounded 320×180 probe")
+        let shaderPackage = folder.appendingPathComponent("Shader Probe.idlesse")
+        try ScenePackageWriter.write(SceneDescriptor(title: "Shader Probe",
+            nodes: [SceneNode(content: .shader(.init()))]), to: shaderPackage)
+        let shaderItem = Item(id: "smoke.shader", title: "Shader Probe", builtin: shaderPackage, entry: nil)
+        let shaderThumbnail = waitForThumbnail(shaderItem, label: "Shader")
+        precondition(Int(shaderThumbnail.size.width) == 320 && Int(shaderThumbnail.size.height) == 180,
+                     "Shader thumbnails must use the bounded 320×180 probe")
         if let videoURL {
             let invalidMedia = folder.appendingPathComponent("invalid.webm")
             try Data("not a video".utf8).write(to: invalidMedia)
@@ -1369,6 +1401,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         controller.window?.close()
-        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, draft routing\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
+        print("Library UI checks passed: built-in poster/color, favorites, search, source controls, draft routing, procedural thumbnails\(videoURL == nil ? "" : ", composed video poster"); offscreen snapshot saved")
     }
 }
