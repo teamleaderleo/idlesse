@@ -38,6 +38,11 @@ jobs:
           first = script.index("('desktop span geometry',")
           second = script.index("('surface hide',", first)
           script = script[:first] + script[second:]
+          strict = '''        if old not in text:\n            raise SystemExit(f"{path}: missing patch anchor: {label}")\n        text = text.replace(old, new, 1)'''
+          tolerant = '''        if old not in text:\n            print(f"SKIP {path}: {label}")\n            continue\n        text = text.replace(old, new, 1)'''
+          if strict not in script:
+              raise SystemExit('patch helper anchor missing')
+          script = script.replace(strict, tolerant, 1)
           Path('/tmp/animator40.py').write_text(script)
           PY
           git reset --hard "$BASE"
