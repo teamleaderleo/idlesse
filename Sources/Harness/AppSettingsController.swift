@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 
 /// Session frame restore that refuses garbage: a saved frame from a different
 /// screen layout (or a runaway resize) that dwarfs the default size is
@@ -40,21 +39,14 @@ extension NSWindow {
     }
 }
 
-/// Conventional preferences window. Library/Home owns browsing, collections,
-/// display targeting and desktop visibility; this controller keeps preferences
-/// for playback, automation and the screen saver.
+/// Conventional preferences window. Home owns Library, Displays, Ambient Sets,
+/// desktop state and automation; Settings keeps playback and screen-saver prefs.
 final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let comfort: DesktopComfortController
     private let wallpaper: WallpaperController
     private let showSaver: () -> Void
     private let tabs = NSTabView()
     private var navigation: [NSButton] = []
-    private var home: HomeWindowController?
-    private weak var libraryWindow: NSWindow?
-    var onLibraryVisible: (() -> Void)?
-    /// Kept as a compatibility hook for older callers. Closing Settings no
-    /// longer tears down Library because Library is a separate primary window.
-    var onClose: (() -> Void)?
 
     private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
     private let batteryThrottle = NSButton(checkboxWithTitle: "Cap to 30 fps on battery", target: nil, action: nil)
@@ -62,41 +54,21 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let transitionStyle = NSPopUpButton()
-    private let schedule = NSButton(checkboxWithTitle: "Schedule dimming", target: nil, action: nil)
-    private let amount = NSSlider(value: 90, minValue: 20, maxValue: 98, target: nil, action: nil)
-    private let percent = NSTextField(labelWithString: "90%")
-    private let from = NSDatePicker()
-    private let until = NSDatePicker()
-    private let dim = NSButton(title: "Dim Now", target: nil, action: nil)
-    var modes: AmbientModesController?
-    private let nightChoose = NSButton(title: "Choose night wallpaper…", target: nil, action: nil)
-    private let nightClear = NSButton(title: "Clear", target: nil, action: nil)
-    private let followSun = NSButton(checkboxWithTitle: "Follow the sun", target: nil, action: nil)
-    private let sunTimes = NSTextField(labelWithString: "")
-    private let myLocation = NSButton(checkboxWithTitle: "Use my location", target: nil, action: nil)
-    private let latField = NSTextField(string: "")
-    private let lonField = NSTextField(string: "")
-    private let weatherEnabled = NSButton(checkboxWithTitle: "Weather scenes", target: nil, action: nil)
-    private let clearSceneBtn = NSButton(title: "Clear", target: nil, action: nil)
-    private let cloudySceneBtn = NSButton(title: "Cloudy", target: nil, action: nil)
-    private let precipSceneBtn = NSButton(title: "Precipitation", target: nil, action: nil)
 
     init(comfort: DesktopComfortController, wallpaper: WallpaperController, showSaver: @escaping () -> Void) {
         self.comfort = comfort
         self.wallpaper = wallpaper
         self.showSaver = showSaver
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Idlesse Settings"
-        window.minSize = NSSize(width: 700, height: 520)
+        window.minSize = NSSize(width: 660, height: 450)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
-        window.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 760, height: 580))
+        window.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 720, height: 500))
         installContent(in: window)
         retargetSettingsCommand()
-        // main.swift installs this before AppSettings is lazily created. Own it
-        // here so menu-extra/settings requests open preferences, not Home.
         wallpaper.onShowSettings = { [weak self] in self?.present(tab: 0) }
         wallpaper.onStateChange = { [weak self] in self?.reload() }
         reload()
@@ -104,37 +76,17 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Compatibility seam for old showLibrary(): recover the controller that
-    /// owns the supplied view and wrap it in Home inside its existing window.
-    /// The view never becomes a child of Settings.
-    func installLibrary(_ view: NSView) {
-        guard home == nil else { return }
-        libraryWindow = view.window
-        guard let library = view.window?.windowController as? SceneLibraryController else { return }
-        library.hostWindow = library.window
-        home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort)
-    }
-
+    /// Legacy callers used tab 2 for Screen Saver. Keep that route stable while
+    /// the removed Automation page no longer occupies a Settings destination.
     func present(tab: Int? = nil) {
-        let requested = tab ?? 3
-        if requested == 3 {
-            onLibraryVisible?()
-            if let home {
-                home.presentLibrary()
-            } else {
-                libraryWindow?.deminiaturize(nil)
-                libraryWindow?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            return
-        }
         reload()
-        selectPage(max(0, min(2, requested)))
+        let requested = tab ?? 0
+        selectPage(requested == 2 || requested == 1 ? 1 : 0)
         window?.level = comfort.isDimmed ? .mainMenu : .normal
         window?.deminiaturize(nil)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        window?.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 760, height: 580))
+        window?.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 720, height: 500))
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -157,7 +109,6 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
         let destinations: [(String, String)] = [
             ("Playback", "play.circle"),
-            ("Automation", "moon.stars"),
             ("Screen Saver", "sparkles.tv"),
         ]
         let navStack = NSStackView()
@@ -231,78 +182,6 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
             [NSView(), coveragePause],
         ])
 
-        schedule.target = self
-        schedule.action = #selector(changeBedtime)
-        amount.target = self
-        amount.action = #selector(changeBedtime)
-        amount.isContinuous = true
-        amount.setAccessibilityLabel("Dimming")
-        percent.alignment = .right
-        let level = NSStackView(views: [amount, percent])
-        level.spacing = 8
-        amount.widthAnchor.constraint(equalToConstant: 170).isActive = true
-        percent.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        for (picker, name) in [(from, "Dim at"), (until, "Restore at")] {
-            picker.datePickerStyle = .textFieldAndStepper
-            picker.datePickerElements = [.hourMinute]
-            picker.target = self
-            picker.action = #selector(changeBedtime)
-            picker.setAccessibilityLabel(name)
-        }
-        dim.bezelStyle = .rounded
-        dim.target = self
-        dim.action = #selector(toggleDim)
-        nightChoose.bezelStyle = .rounded
-        nightChoose.target = self
-        nightChoose.action = #selector(chooseModeScene(_:))
-        nightChoose.tag = 0
-        nightClear.bezelStyle = .rounded
-        nightClear.target = self
-        nightClear.action = #selector(clearModeScene(_:))
-        nightClear.tag = 0
-        let nightRow = NSStackView(views: [nightChoose, nightClear])
-        nightRow.spacing = 8
-        followSun.target = self
-        followSun.action = #selector(changeModes)
-        followSun.toolTip = "Follow local sunrise and sunset for dimming and night scenes."
-        sunTimes.textColor = .secondaryLabelColor
-        let sunRow = NSStackView(views: [followSun, sunTimes])
-        sunRow.spacing = 8
-        myLocation.target = self
-        myLocation.action = #selector(changeModes)
-        myLocation.toolTip = "Use current location for sun times and condition scenes; otherwise enter coordinates."
-        latField.target = self
-        latField.action = #selector(changeCoords)
-        lonField.target = self
-        lonField.action = #selector(changeCoords)
-        latField.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        lonField.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        let locRow = NSStackView(views: [myLocation, NSTextField(labelWithString: "Lat"), latField,
-            NSTextField(labelWithString: "Lon"), lonField])
-        locRow.spacing = 6
-        weatherEnabled.target = self
-        weatherEnabled.action = #selector(changeModes)
-        weatherEnabled.toolTip = "Switch scenes by current condition, checked every 15 minutes."
-        for (index, button) in [clearSceneBtn, cloudySceneBtn, precipSceneBtn].enumerated() {
-            button.bezelStyle = .rounded
-            button.target = self
-            button.action = #selector(chooseModeScene(_:))
-            button.tag = index + 1
-        }
-        let weatherRow = NSStackView(views: [weatherEnabled, clearSceneBtn, cloudySceneBtn, precipSceneBtn])
-        weatherRow.spacing = 8
-        addTab("Automation", rows: [
-            [label("Dimming"), level],
-            [NSView(), schedule],
-            [label("Dim at"), from],
-            [label("Restore at"), until],
-            [NSView(), dim],
-            [label("Night"), nightRow],
-            [label("Sun"), sunRow],
-            [label("Location"), locRow],
-            [label("Conditions"), weatherRow],
-        ])
-
         let saver = NSButton(title: "Screen Saver Options…", target: self, action: #selector(openSaver))
         saver.bezelStyle = .rounded
         let mirror = NSButton(title: "Mirror Active Wallpaper to Screen Saver", target: self,
@@ -359,23 +238,12 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     }
 
     private func reload() {
-        guard window?.isVisible == true || home == nil else { return }
         updateStatus()
         rate.selectItem(at: SceneFrameRate.allCases.firstIndex(of: SceneFrameRate.selected) ?? 0)
         transition.selectItem(at: [0.0, 0.5, 1, 2].firstIndex(of: wallpaper.transitionDuration) ?? 0)
         transitionStyle.selectItem(at: WallpaperController.TransitionStyle.allCases.firstIndex(of: wallpaper.transitionStyle) ?? 0)
         batteryThrottle.state = SceneFrameRate.throttleOnBattery ? .on : .off
         coveragePause.state = wallpaper.coveragePauseEnabled ? .on : .off
-        let values = comfort.bedtimeSettings
-        schedule.state = values.enabled ? .on : .off
-        amount.doubleValue = values.amount * 100
-        percent.stringValue = "\(Int(amount.doubleValue.rounded()))%"
-        from.dateValue = DimSchedule.pickerDate(minute: values.start, on: Date())
-        until.dateValue = DimSchedule.pickerDate(minute: values.end, on: Date())
-        from.isEnabled = values.enabled
-        until.isEnabled = values.enabled
-        dim.title = comfort.isDimmed ? "Restore Display" : "Dim Now"
-        reloadModes()
     }
 
     func windowDidBecomeKey(_ notification: Notification) { reload() }
@@ -412,106 +280,10 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         wallpaper.coveragePauseEnabled = coveragePause.state == .on
     }
 
-    private func modeSlotTitle(_ slot: String, fallback: String) -> String {
-        modes?.sceneURL(for: slot)?.lastPathComponent ?? fallback
-    }
-
-    private func reloadModes() {
-        guard let modes else {
-            for control in [nightChoose, nightClear, followSun, myLocation, latField, lonField,
-                            weatherEnabled, clearSceneBtn, cloudySceneBtn, precipSceneBtn] as [NSControl] {
-                control.isEnabled = false
-            }
-            return
-        }
-        nightChoose.title = modeSlotTitle("night", fallback: "Choose night wallpaper…")
-        followSun.state = modes.followSun ? .on : .off
-        if let sun = modes.solarTimes {
-            func clock(_ minutes: Int) -> String { String(format: "%d:%02d", (minutes / 60) % 24, minutes % 60) }
-            sunTimes.stringValue = "Rise \(clock(sun.rise)) · Set \(clock(sun.set))"
-        } else {
-            sunTimes.stringValue = modes.followSun ? "Sun times unavailable" : ""
-        }
-        myLocation.state = modes.useMyLocation ? .on : .off
-        latField.stringValue = String(format: "%.4f", modes.manualLatitude)
-        lonField.stringValue = String(format: "%.4f", modes.manualLongitude)
-        latField.isEnabled = !modes.useMyLocation
-        lonField.isEnabled = !modes.useMyLocation
-        weatherEnabled.state = modes.weatherEnabled ? .on : .off
-        clearSceneBtn.title = modeSlotTitle("weather.clear", fallback: "Clear")
-        cloudySceneBtn.title = modeSlotTitle("weather.cloudy", fallback: "Cloudy")
-        precipSceneBtn.title = modeSlotTitle("weather.precip", fallback: "Precipitation")
-        for button in [clearSceneBtn, cloudySceneBtn, precipSceneBtn] { button.isEnabled = modes.weatherEnabled }
-    }
-
-    @objc private func changeModes() {
-        guard let modes else { return }
-        modes.followSun = followSun.state == .on
-        modes.useMyLocation = myLocation.state == .on
-        modes.weatherEnabled = weatherEnabled.state == .on
-        reloadModes()
-    }
-
-    @objc private func changeCoords() {
-        guard let modes else { return }
-        modes.manualLatitude = min(90, max(-90, latField.doubleValue))
-        modes.manualLongitude = min(180, max(-180, lonField.doubleValue))
-        reloadModes()
-    }
-
-    private static let modeSlots = ["night", "weather.clear", "weather.cloudy", "weather.precip"]
-    private func modeSlot(for sender: NSButton) -> String? {
-        guard Self.modeSlots.indices.contains(sender.tag) else { return nil }
-        return Self.modeSlots[sender.tag]
-    }
-
-    @objc private func chooseModeScene(_ sender: NSButton) {
-        guard let modes, let slot = modeSlot(for: sender) else { return }
-        let panel = NSOpenPanel()
-        panel.title = "Choose scene"
-        panel.prompt = "Use Scene"
-        panel.allowedContentTypes = [.jpeg, .png, .heic, .mpeg4Movie, .quickTimeMovie,
-            UTType(exportedAs: "com.teamleaderleo.idlesse.scene", conformingTo: .package)]
-        panel.treatsFilePackagesAsDirectories = true
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        NSApp.activate(ignoringOtherApps: true)
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            modes.setScene(url, for: slot)
-            self?.reloadModes()
-        }
-    }
-
-    @objc private func clearModeScene(_ sender: NSButton) {
-        guard let modes, let slot = modeSlot(for: sender) else { return }
-        modes.setScene(nil, for: slot)
-        reloadModes()
-    }
-
-    @objc private func changeBedtime() {
-        func minute(_ picker: NSDatePicker) -> Int {
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: picker.dateValue)
-            return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-        }
-        comfort.applyBedtime(amount: amount.doubleValue / 100, enabled: schedule.state == .on,
-            start: minute(from), end: minute(until))
-        percent.stringValue = "\(Int(amount.doubleValue.rounded()))%"
-        from.isEnabled = schedule.state == .on
-        until.isEnabled = schedule.state == .on
-        updateDimming()
-    }
-
+    /// Dimming belongs to Home/Ambient, but callers use this to keep Settings at
+    /// an appropriate window level while the desktop is dimmed.
     func updateDimming() {
-        dim.title = comfort.isDimmed ? "Restore Display" : "Dim Now"
         window?.level = comfort.isDimmed ? .mainMenu : .normal
-    }
-
-    @objc private func toggleDim() {
-        comfort.toggle()
-        reload()
-        updateDimming()
     }
 
     @objc private func mirrorWallpaperToSaver() {
