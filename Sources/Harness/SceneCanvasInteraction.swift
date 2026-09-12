@@ -1,5 +1,11 @@
 import AppKit
 
+enum SceneTransformGesture {
+    case move
+    case scale
+    case rotate
+}
+
 /// Live manipulation with one document commit per gesture.
 final class SceneDragOverlay: NSView {
     var transform: SceneNode.Transform = .identity { didSet { needsDisplay = true } }
@@ -8,14 +14,15 @@ final class SceneDragOverlay: NSView {
     var selected = 0
     var isEnabled = true
     var onSelect: ((Int) -> Void)?
-    var onPreviewTransform: ((SceneNode.Transform) -> Void)?
-    var onTransform: ((SceneNode.Transform, String) -> Void)?
+    var onBeginTransform: ((SceneTransformGesture) -> Bool)?
+    var onPreviewTransform: ((SceneNode.Transform, SceneTransformGesture) -> Void)?
+    var onTransform: ((SceneNode.Transform, String, SceneTransformGesture) -> Void)?
+    var onCancelTransform: (() -> Void)?
     var onNudge: ((Double, Double) -> Void)?
     var onDelete: (() -> Void)?
     var onDuplicate: (() -> Void)?
     private var sceneRect: NSRect { bounds.insetBy(dx: 40, dy: 40) }
-    private enum Gesture { case move, scale, rotate }
-    private var gesture = Gesture.move
+    private var gesture = SceneTransformGesture.move
     private var origin: NSPoint?
     private var initial = SceneNode.Transform.identity
     override var acceptsFirstResponder: Bool { true }
@@ -137,6 +144,10 @@ final class SceneDragOverlay: NSView {
             } else { return }
             gesture = .move
         }
+        guard onBeginTransform?(gesture) ?? true else {
+            NSSound.beep()
+            return
+        }
         initial = transform
         origin = local(p, index: selected)
     }
@@ -158,17 +169,25 @@ final class SceneDragOverlay: NSView {
             degrees = degrees.truncatingRemainder(dividingBy: 360)
             transform = .init(x: initial.x, y: initial.y, scale: initial.scale, rotation: degrees)
         }
-        onPreviewTransform?(transform)
+        onPreviewTransform?(transform, gesture)
     }
     override func mouseUp(with event: NSEvent) {
         guard origin != nil else { return }
         mouseDragged(with: event)
         origin = nil
         if (transform.x ?? 0) != (initial.x ?? 0) || (transform.y ?? 0) != (initial.y ?? 0) || (transform.scale ?? 1) != (initial.scale ?? 1) || (transform.rotation ?? 0) != (initial.rotation ?? 0) {
-            onTransform?(transform, gesture == .move ? "Move Layer" : gesture == .scale ? "Resize Layer" : "Rotate Layer")
+            onTransform?(transform, gesture == .move ? "Move Layer" : gesture == .scale ? "Resize Layer" : "Rotate Layer", gesture)
+        } else {
+            onCancelTransform?()
         }
     }
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, origin != nil {
+            origin = nil
+            transform = initial
+            onCancelTransform?()
+            return
+        }
         guard isEnabled, eligible(selected) else { return }
         let step = event.modifierFlags.contains(.shift) ? 10.0 : 1.0
         let zero = local(.zero, index: selected)

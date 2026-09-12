@@ -31,16 +31,22 @@ final class SceneTimelineView: NSStackView {
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 8, target: nil, action: nil)
     private let markers = TimelineMarkers()
     private let trackPicker = NSPopUpButton()
+    private let sourceLabel = NSTextField(labelWithString: "")
+    private let autoKey = NSButton(checkboxWithTitle: "Auto-Key", target: nil, action: nil)
     private var viewport = TimelineViewport()
     private let intervalLabel = NSTextField(labelWithString: "")
     private var targets: [ScenePropertyAddress] = []
-    private var tracks: [SceneKeyframeTrack] = []
-    private var chosenTarget: ScenePropertyAddress?
+    private var tracks: [SceneKeyframeTrack?] = []
+    private(set) var chosenTarget: ScenePropertyAddress?
     private let loop = NSButton(title: "Loop Range", target: nil, action: nil)
+    var autoKeyEnabled: Bool { autoKey.state == .on }
     var onSeek: ((Double) -> Void)?
     var onLoop: ((Double) -> Void)?
+    var onAutoKey: ((Bool) -> Void)?
+    var onSelectTarget: ((ScenePropertyAddress?) -> Void)?
     var onMoveKey: ((ScenePropertyAddress, Int, Double) -> Void)?
     var onEditTrack: ((ScenePropertyAddress, SceneKeyframeTrack, String) -> Void)?
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         orientation = .vertical; alignment = .leading; spacing = 3
@@ -50,13 +56,21 @@ final class SceneTimelineView: NSStackView {
         slider.setAccessibilityLabel("Scene playhead in seconds")
         slider.toolTip = "Scrub motion and opted-in videos; pauses playback."
         loop.target = self; loop.action = #selector(loopRange)
-        let row = NSStackView(views: [label, slider, loop])
+        autoKey.target = self; autoKey.action = #selector(changeAutoKey)
+        autoKey.toolTip = "When enabled, writable property edits insert or update a key at the current playhead."
+        autoKey.setAccessibilityLabel("Auto-Key session mode")
+        let row = NSStackView(views: [label, slider, autoKey, loop])
         row.spacing = 12
         addArrangedSubview(row)
-        trackPicker.addItem(withTitle: "No keyframe tracks")
+
+        trackPicker.addItem(withTitle: "No selected motion property")
         trackPicker.target = self; trackPicker.action = #selector(selectTrack)
         trackPicker.setAccessibilityLabel("Timeline property track")
         trackPicker.toolTip = "Drag keys to edit time and value. Return edits exact values; arrows nudge time/value (Shift for larger steps). Double-click adds; Delete removes. ⌘C/⌘V copies and pastes a track."
+        sourceLabel.font = .systemFont(ofSize: 10)
+        sourceLabel.textColor = .secondaryLabelColor
+        sourceLabel.lineBreakMode = .byTruncatingTail
+        sourceLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
         let navigation = NSStackView(views: [trackPicker])
         navigation.spacing = 4
         for (title, action, help) in [
@@ -72,6 +86,7 @@ final class SceneTimelineView: NSStackView {
         }
         intervalLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         navigation.addArrangedSubview(intervalLabel)
+        navigation.addArrangedSubview(sourceLabel)
         addArrangedSubview(navigation)
         markers.onMove = { [weak self] index, time in
             guard let self, let target = self.chosenTarget else { return }
@@ -102,32 +117,70 @@ final class SceneTimelineView: NSStackView {
         label.widthAnchor.constraint(equalToConstant: 170).isActive = true
         markers.heightAnchor.constraint(equalToConstant: 100).isActive = true
     }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func resetAutoKey() {
+        autoKey.state = .off
+        onAutoKey?(false)
+    }
+
     func update(scene: SceneDescriptor, selectedID: UUID?, time: Double, enabled: Bool) {
-        let tracks = scene.bindings.compactMap(\.keyframes)
-        let end = max(0.01, scene.timeline?.duration ?? tracks.compactMap { $0.keys.last?.time }.max() ?? 8)
+        update(scene: scene, selectedID: selectedID, selectedTarget: chosenTarget, time: time, enabled: enabled)
+    }
+
+    func update(scene: SceneDescriptor, selectedID: UUID?, selectedTarget: ScenePropertyAddress?,
+                time: Double, enabled: Bool) {
+        let keyed = scene.bindings.filter { $0.target.nodeID == selectedID && $0.keyframes != nil }
+        let authoredTracks = scene.bindings.compactMap(\.keyframes)
+        let end = max(0.01, scene.timeline?.duration ?? authoredTracks.compactMap { $0.keys.last?.time }.max() ?? 8)
         viewport.resize(to: end)
         slider.maxValue = end; slider.doubleValue = min(end, time)
-        slider.isEnabled = enabled; loop.isEnabled = enabled
+        slider.isEnabled = enabled; loop.isEnabled = enabled; autoKey.isEnabled = enabled
         label.stringValue = String(format: "%.2f s  /  %.2f s", time, end)
-        let bindings = scene.bindings.filter { $0.target.nodeID == selectedID && $0.keyframes != nil }
-        let nextTargets = bindings.map(\.target)
-        if nextTargets != targets || trackPicker.itemTitles != (nextTargets.isEmpty ? ["No keyframe tracks"] : nextTargets.map { $0.label(in: scene.nodes) }) {
+
+        var entries: [(ScenePropertyAddress, SceneKeyframeTrack?)] = keyed.map { ($0.target, $0.keyframes) }
+        if let selectedTarget, selectedTarget.nodeID == selectedID,
+           !entries.contains(where: { $0.0 == selectedTarget }) {
+            entries.insert((selectedTarget, nil), at: 0)
+        }
+        let nextTargets = entries.map { $0.0 }
+        let nextTitles = nextTargets.isEmpty ? ["No selected motion property"] : nextTargets.map { target in
+            let owner = StudioMotionAuthoring.ownership(of: target, in: scene).title
+            return "\(target.label(in: scene.nodes)) · \(owner)"
+        }
+        if nextTargets != targets || trackPicker.itemTitles != nextTitles {
             targets = nextTargets
-            trackPicker.removeAllItems()
-            trackPicker.addItems(withTitles: targets.isEmpty ? ["No keyframe tracks"] : targets.map { $0.label(in: scene.nodes) })
-            if let chosenTarget, let index = targets.firstIndex(of: chosenTarget) { trackPicker.selectItem(at: index) }
+            tracks = entries.map { $0.1 }
+            trackPicker.removeAllItems(); trackPicker.addItems(withTitles: nextTitles)
+            if let selectedTarget, let index = targets.firstIndex(of: selectedTarget) { trackPicker.selectItem(at: index) }
+            else if let chosenTarget, let index = targets.firstIndex(of: chosenTarget) { trackPicker.selectItem(at: index) }
             chosenTarget = targets.indices.contains(trackPicker.indexOfSelectedItem) ? targets[trackPicker.indexOfSelectedItem] : nil
             markers.cancelDrag()
-            viewport.fit()
+        } else {
+            tracks = entries.map { $0.1 }
+            if let selectedTarget, let index = targets.firstIndex(of: selectedTarget) {
+                trackPicker.selectItem(at: index); chosenTarget = selectedTarget
+            }
         }
-        self.tracks = bindings.compactMap(\.keyframes)
+        if chosenTarget?.nodeID != selectedID { chosenTarget = nil }
         trackPicker.isEnabled = !targets.isEmpty
         markers.editable = enabled && scene.allNodes.first(where: { $0.id == selectedID })?.locked == false
         markers.end = end
-        updateViewport()
-        updateMarkers()
+        updateSourceLabel(scene: scene)
+        updateViewport(); updateMarkers()
     }
+
+    private func updateSourceLabel(scene: SceneDescriptor) {
+        guard let target = chosenTarget else { sourceLabel.stringValue = ""; return }
+        switch StudioMotionAuthoring.ownership(of: target, in: scene) {
+        case .staticValue: sourceLabel.stringValue = "Static value"
+        case .controlled(let key): sourceLabel.stringValue = scene.parameters[key].map { "Control · \($0.name)" } ?? "Control"
+        case .driven(let signal): sourceLabel.stringValue = "Driver · \(signal.rawValue)"
+        case .keyframed: sourceLabel.stringValue = "Keyframe track"
+        }
+    }
+
     private func updateViewport() {
         markers.start = viewport.start
         markers.span = viewport.span
@@ -149,8 +202,9 @@ final class SceneTimelineView: NSStackView {
         markers.cancelDrag()
         let index = trackPicker.indexOfSelectedItem
         chosenTarget = targets.indices.contains(index) ? targets[index] : nil
-        updateMarkers()
+        updateMarkers(); onSelectTarget?(chosenTarget)
     }
+    @objc private func changeAutoKey() { onAutoKey?(autoKeyEnabled) }
     @objc private func scrub() { onSeek?(slider.doubleValue) }
     @objc private func loopRange() { onLoop?(slider.maxValue) }
 }
@@ -251,11 +305,11 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
     }
     @objc func paste(_ sender: Any?) {
         guard editable else { return }
-            guard let data = NSPasteboard.general.data(forType: .init("app.idlesse.keyframe-track")), data.count <= 65_536,
-                  let next = try? JSONDecoder().decode(SceneKeyframeTrack.self, from: data),
-                  (try? next.sample(at: 0)) != nil else { NSSound.beep(); return }
-            selected = nil
-            onEdit?(next, "Paste Keyframe Track")
+        guard let data = NSPasteboard.general.data(forType: .init("app.idlesse.keyframe-track")), data.count <= 65_536,
+              let next = try? JSONDecoder().decode(SceneKeyframeTrack.self, from: data),
+              (try? next.sample(at: 0)) != nil else { NSSound.beep(); return }
+        selected = nil
+        onEdit?(next, "Paste Keyframe Track")
     }
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(copy(_:)) { return track != nil }
@@ -312,7 +366,6 @@ private final class TimelineMarkers: NSView, NSUserInterfaceValidations {
         let curve = NSBezierPath()
         let lower = draft == nil ? start : dragStart
         let width = draft == nil ? span : dragSpan
-        // Bounded sampling visualizes hold, linear and ease-in-out without a display timer.
         for index in 0...256 {
             let time = lower + Double(index) / 256 * width
             let point = NSPoint(x: x(time), y: y((try? track.sample(at: time, validating: false)) ?? 0))

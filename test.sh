@@ -132,6 +132,17 @@ if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 10. Property-centric Studio motion and Auto-Key rules.
+STUDIO_MOTION_SRCS=(
+  Sources/Runtime/Scene.swift
+  Sources/Harness/StudioMotionAuthoring.swift
+  Tests/StudioMotionTests.swift
+)
+if needs_build "build/tests/studio-motion" "${STUDIO_MOTION_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${STUDIO_MOTION_SRCS[@]}" -o build/tests/studio-motion &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -147,3 +158,4 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/studio-motion
