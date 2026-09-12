@@ -12,6 +12,33 @@ enum WallpaperSmoke {
         precondition(daytime.contains(minute: 9 * 60) && !daytime.contains(minute: 17 * 60))
         precondition(!DimSchedule(start: 10, end: 10).contains(minute: 10))
         precondition(!DimSchedule(start: -1, end: 10).contains(minute: 0))
+        // Focal crop: a 16:9 source on a 16:10 display overflows horizontally, and
+        // where that overflow is spent is the whole point of a focus.
+        let wide = CGSize(width: 3840, height: 2160)
+        let display = CGRect(x: 0, y: 0, width: 2880, height: 1864)
+        let overflow = (display.height / wide.height) * wide.width - display.width
+        precondition(overflow > 0, "16:9 content should overflow a 16:10 display horizontally")
+        let centred = SceneFocus.centre.filledFrame(content: wide, in: display)
+        precondition(abs(centred.minX + overflow / 2) < 0.01, "centre should split the overflow evenly")
+        precondition(abs(centred.height - display.height) < 0.01, "the bound axis should match exactly")
+        let leftward = SceneFocus(x: 0, y: 0.5).filledFrame(content: wide, in: display)
+        precondition(abs(leftward.minX) < 0.01, "focus at the left edge keeps the left of the source")
+        let rightward = SceneFocus(x: 1, y: 0.5).filledFrame(content: wide, in: display)
+        precondition(abs(rightward.minX + overflow) < 0.01, "focus at the right edge keeps the right of the source")
+        // Hina's bleed sits on the right, so biasing left must not crop further right.
+        precondition(leftward.maxX > display.maxX, "biasing left still covers the display")
+        precondition(rightward.minX < display.minX, "biasing right still covers the display")
+        // Out-of-range authoring is clamped, not honoured and not rejected.
+        precondition(SceneFocus(x: -3, y: 9).filledFrame(content: wide, in: display) == leftward.offsetBy(dx: 0, dy: 0),
+            "a focus outside the frame clamps to the edge")
+        // A focus never changes the scale, only the offset: same size either way.
+        precondition(abs(leftward.width - centred.width) < 0.01 && abs(rightward.width - centred.width) < 0.01)
+        // Degenerate input renders centred rather than collapsing.
+        precondition(SceneFocus.centre.filledFrame(content: .zero, in: display) == display)
+        // A taller-than-display source spends its overflow vertically instead.
+        let tall = SceneFocus(x: 0.5, y: 0).filledFrame(content: CGSize(width: 1000, height: 4000), in: display)
+        precondition(abs(tall.maxY - display.maxY) < 0.01, "focus at the top keeps the top of the source")
+
         var viewport = TimelineViewport()
         viewport.resize(to: 10)
         precondition(viewport.start == 0 && viewport.span == 10)

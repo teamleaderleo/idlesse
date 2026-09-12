@@ -29,11 +29,46 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 }
 
 
+/// Which part of an over-sized frame survives the crop when a scene's aspect does
+/// not match the display's. Unit coordinates from the top-left, so `(0.5, 0.5)` is
+/// the centre and matches what AVFoundation's own fill does on its own.
+///
+/// Exports are 16:9 and displays are not, so something is always cropped. Art is
+/// rarely centred: a subject sits to one side and a low-detail bleed margin runs
+/// off the other, precisely so a crop has somewhere to go. A centred crop spends
+/// the subject and the bleed equally, which is the one split that is never right.
+struct SceneFocus: Codable, Sendable, Equatable {
+    var x: Double
+    var y: Double
+    static let centre = SceneFocus(x: 0.5, y: 0.5)
+    /// Clamped rather than rejected: a focus slightly outside the frame is a
+    /// harmless authoring slip, and refusing to draw a wallpaper over it is worse.
+    var clamped: SceneFocus { SceneFocus(x: min(max(x, 0), 1), y: min(max(y, 0), 1)) }
+
+    /// Where to put `content` so it covers `bounds` with this point kept in view.
+    ///
+    /// Same cover scale AVFoundation's fill picks; only the offset differs. Layer
+    /// geometry runs bottom-up while a focus is quoted from the top, hence the
+    /// flip on y. Degenerate sizes fall back to the bounds, which renders as the
+    /// centred fill rather than as nothing.
+    func filledFrame(content: CGSize, in bounds: CGRect) -> CGRect {
+        guard content.width > 0, content.height > 0, bounds.width > 0, bounds.height > 0 else { return bounds }
+        let point = clamped
+        let scale = max(bounds.width / content.width, bounds.height / content.height)
+        let filled = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(x: bounds.minX - (filled.width - bounds.width) * point.x,
+                      y: bounds.minY - (filled.height - bounds.height) * (1 - point.y),
+                      width: filled.width, height: filled.height)
+    }
+}
+
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
 struct SceneDescriptor: Codable, Sendable {
     enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape, shader }
     enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
     var canvas: Canvas? = nil
+    /// Absent means centred, which is exactly the previous behaviour.
+    var focus: SceneFocus? = nil
     var metadata: SceneMetadata? = nil
     var components: [String: SceneComponent]? = nil
     let title: String

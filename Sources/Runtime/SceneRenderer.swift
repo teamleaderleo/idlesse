@@ -145,8 +145,39 @@ extension SceneRenderer {
     func setPreferredFrameRate(_ rate: Int?) {}
 }
 
+/// Holds the player in a sublayer so the view itself can clip it.
+///
+/// With the player as the backing layer there is nothing above it to crop against,
+/// so the only available fill is AVFoundation's, which always centres. Keeping it
+/// as a child lets an over-sized frame slide under a clipping parent, which is what
+/// a focal point needs. Without a focus the child simply matches the view and the
+/// centred fill applies as before.
 private final class VideoWallpaperView: NSView {
-    override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
+    let playerLayer = AVPlayerLayer()
+    var focus: SceneFocus? { didSet { needsLayout = true } }
+    /// Zero until the item reports it; layout falls back to the centred fill.
+    var presentationSize: CGSize = .zero { didSet { needsLayout = true } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.frame = bounds
+        layer?.addSublayer(playerLayer)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unused") }
+
+    override func layout() {
+        super.layout()
+        // Wallpaper layout is driven by display changes, never by user resizing, so
+        // an implicit animation here would show as a drift rather than a transition.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard let focus else { playerLayer.frame = bounds; return }
+        playerLayer.frame = focus.filledFrame(content: presentationSize, in: bounds)
+    }
 }
 
 /// Native animated stills (GIF/APNG/animated WebP): frames stay on disk and are
@@ -496,15 +527,16 @@ final class VideoRenderer: SceneRenderer {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var observation: NSKeyValueObservation?
+    private var sizeObservation: NSKeyValueObservation?
     private var state: RendererDiagnostics.State = .ready
     var diagnostics: RendererDiagnostics {
         RendererDiagnostics(state: state, animated: true, activeResources: player == nil ? 0 : 1,
             loopCount: looper?.loopCount ?? 0, audioMuted: player?.isMuted ?? true,
             allowsDisplaySleep: !(player?.preventsDisplaySleepDuringVideoPlayback ?? false))
     }
-    init(url: URL, bounds: NSRect, onError: @escaping (String) -> Void) {
+    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, onError: @escaping (String) -> Void) {
         let view = VideoWallpaperView(frame: bounds)
-        view.wantsLayer = true
+        view.focus = focus
         let queue = AVQueuePlayer()
         queue.isMuted = true
         queue.volume = 0
@@ -512,14 +544,22 @@ final class VideoRenderer: SceneRenderer {
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = 0.5
         let loop = AVPlayerLooper(player: queue, templateItem: item)
-        (view.layer as? AVPlayerLayer)?.player = queue
-        (view.layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
+        view.playerLayer.player = queue
         self.view = view
         player = queue
         looper = loop
         observation = loop.observe(\.status, options: [.new]) { loop, _ in
             if loop.status == .failed {
                 DispatchQueue.main.async { onError(loop.error?.localizedDescription ?? "Video playback failed.") }
+            }
+        }
+        // A focus needs the source dimensions, which are only known once the item is
+        // ready. The looper swaps items per cycle, so this follows the queue's
+        // current item rather than the template.
+        if focus != nil {
+            sizeObservation = queue.observe(\.currentItem?.presentationSize, options: [.initial, .new]) { [weak view] player, _ in
+                guard let size = player.currentItem?.presentationSize, size.width > 0, size.height > 0 else { return }
+                DispatchQueue.main.async { view?.presentationSize = size }
             }
         }
     }
@@ -537,7 +577,7 @@ final class VideoRenderer: SceneRenderer {
         observation = nil
         player?.pause()
         looper?.disableLooping()
-        (view.layer as? AVPlayerLayer)?.player = nil
+        (view as? VideoWallpaperView)?.playerLayer.player = nil
         player?.removeAllItems()
         looper = nil
         player = nil
@@ -588,7 +628,7 @@ final class LayeredSceneRenderer: SceneRenderer {
                         child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
-                case .video(let url): child = VideoRenderer(url: url, bounds: bounds, onError: onError)
+                case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, onError: onError)
                 case .particles, .text, .shape, .shader: throw SceneError.invalid("This creative layer requires Metal.")
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
                 case .group(let nodes):
