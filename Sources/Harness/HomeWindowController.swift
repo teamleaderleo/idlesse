@@ -9,6 +9,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         case group(String)
         case library
         case displays
+        case ambient
         case favorites
         case recent
         case collection(id: String, name: String)
@@ -18,6 +19,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             case .group(let title): return title
             case .library: return "Library"
             case .displays: return "Displays"
+            case .ambient: return "Ambient Sets"
             case .favorites: return "Favorites"
             case .recent: return "Recent"
             case .collection(_, let name): return name
@@ -28,6 +30,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             case .group: return nil
             case .library: return "photo.on.rectangle.angled"
             case .displays: return "display.2"
+            case .ambient: return "circle.lefthalf.filled"
             case .favorites: return "star.fill"
             case .recent: return "clock"
             case .collection: return "rectangle.stack"
@@ -42,15 +45,17 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let library: SceneLibraryController
     private let wallpaper: WallpaperController
     private let comfort: DesktopComfortController
+    private let modes: AmbientModesController
     private let indexURL: URL
     private let libraryView: NSView
-    /// Optional visual Displays destination supplied by #31. Home owns this
-    /// controller directly; its view has never belonged to another window.
+    /// Visual Displays destination supplied by the durable #31 controller. Home
+    /// owns the supplied controller directly; its view never moves between windows.
     private let displaysDestinationController: NSViewController?
     private let activateDisplaysDestination: (() -> Void)?
     private let sidebar = NSTableView()
     private let contentHost = NSView(frame: .zero)
     private let displaysView = NSView(frame: .zero)
+    private lazy var ambientController = AmbientSetsHomeController(modes: modes, indexURL: indexURL)
     private let displaySummary = NSTextField(wrappingLabelWithString: "")
     private let filesButton = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
     private let widgetsButton = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
@@ -65,18 +70,25 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let previousButton = NSButton(frame: .zero)
     private let pauseButton = NSButton(frame: .zero)
     private let nextButton = NSButton(frame: .zero)
+    private let ambientStatusButton = NSButton(title: "◐ Ambient Sets", target: nil, action: nil)
     private var nowPlayingPopover: NSPopover?
+    private var ambientPopover: NSPopover?
     private var cachedThumbnailURL: URL?
     private var cachedThumbnail: NSImage?
 
     var window: NSWindow { library.window! }
 
-    init(library: SceneLibraryController, wallpaper: WallpaperController, comfort: DesktopComfortController,
-         indexURL: URL? = nil, displaysDestinationController: NSViewController? = nil,
+    init(library: SceneLibraryController,
+         wallpaper: WallpaperController,
+         comfort: DesktopComfortController,
+         modes: AmbientModesController,
+         indexURL: URL? = nil,
+         displaysDestinationController: NSViewController? = nil,
          activateDisplaysDestination: (() -> Void)? = nil) {
         self.library = library
         self.wallpaper = wallpaper
         self.comfort = comfort
+        self.modes = modes
         self.libraryView = library.window!.contentView!
         self.displaysDestinationController = displaysDestinationController
         self.activateDisplaysDestination = activateDisplaysDestination
@@ -87,12 +99,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             self.indexURL = support.appendingPathComponent("Idlesse/Library/index.json")
         }
         super.init()
-        // main.swift installs the legacy Settings owner before AppSettings is
-        // created. Home becomes the sheet/panel owner as soon as it exists.
         wallpaper.presentingWindow = { [weak library] in library?.window }
         installShell()
         installToolbar()
         buildDisplaysView()
+        installAmbientView()
         refreshSidebar()
         refreshState()
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.refreshState() }
@@ -117,6 +128,12 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     func presentDisplays() {
         refreshSidebar()
         showDisplays()
+        presentWindow()
+    }
+
+    func presentAmbientSets() {
+        refreshSidebar()
+        showAmbientSets()
         presentWindow()
     }
 
@@ -180,7 +197,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func refreshSidebar() {
         var next: [SidebarRow] = [
-            .group("Idlesse"), .library, .displays,
+            .group("Idlesse"), .library, .displays, .ambient,
             .group("Library"), .favorites, .recent,
         ]
         if let store = try? SceneLibraryStore(file: indexURL) {
@@ -246,6 +263,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         switch rows[index] {
         case .library, .favorites, .recent, .collection(_, _): showLibraryScope(rows[index])
         case .displays: showDisplays()
+        case .ambient: showAmbientSets()
         case .group: break
         }
     }
@@ -254,6 +272,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         currentRow = row
         libraryView.isHidden = false
         displaysView.isHidden = true
+        ambientController.view.isHidden = true
         if previousSortBeforeRecent != nil, row != .recent {
             if let sort = sortPopup(), let old = previousSortBeforeRecent, sort.numberOfItems > old {
                 sort.selectItem(at: old)
@@ -286,7 +305,29 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         activateDisplaysDestination?()
         libraryView.isHidden = true
         displaysView.isHidden = false
+        ambientController.view.isHidden = true
         refreshDisplaysSummary()
+    }
+
+    private func installAmbientView() {
+        let ambientView = ambientController.view
+        ambientView.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(ambientView)
+        NSLayoutConstraint.activate([
+            ambientView.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            ambientView.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            ambientView.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            ambientView.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+        ])
+        ambientView.isHidden = true
+    }
+
+    private func showAmbientSets() {
+        currentRow = .ambient
+        libraryView.isHidden = true
+        displaysView.isHidden = true
+        ambientController.view.isHidden = false
+        ambientController.reloadCatalog(selecting: nil)
     }
 
     /// Drive the Library's existing filter/sort controls so there is one source
@@ -419,6 +460,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     @objc private func changeSameDisplays() {
         wallpaper.sameWallpaperOnAllDisplays = sameDisplaysButton.state == .on
+        modes.adoptManualDisplayArrangement()
         refreshState()
     }
     @objc private func toggleFiles() { comfort.toggleDesktopIcons(); refreshState() }
@@ -427,7 +469,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func refreshDisplaysSummary() {
         let count = NSScreen.screens.count
-        let mode = wallpaper.sameWallpaperOnAllDisplays ? "Same on All Displays" : "Per Display"
+        let mode = wallpaper.desktopSpanActive ? "Desktop Span" :
+            (wallpaper.sameWallpaperOnAllDisplays ? "Same on All Displays" : "Per Display")
         displaySummary.stringValue = "\(count) connected display\(count == 1 ? "" : "s") · \(mode)"
         sameDisplaysButton.state = wallpaper.sameWallpaperOnAllDisplays ? .on : .off
         filesButton.state = comfort.desktopIconsVisible ? .on : .off
@@ -436,7 +479,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         widgetsButton.isEnabled = !comfort.changingDesktopWidgets
     }
 
-    // MARK: - Now Playing
+    // MARK: - Now Playing / Ambient status
 
     private static let nowPlayingItem = NSToolbarItem.Identifier("Idlesse.Home.NowPlaying")
 
@@ -475,13 +518,21 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         destinationLabel.textColor = .secondaryLabelColor
         destinationLabel.lineBreakMode = .byTruncatingTail
 
+        ambientStatusButton.bezelStyle = .rounded
+        ambientStatusButton.controlSize = .small
+        ambientStatusButton.font = .systemFont(ofSize: 11, weight: .medium)
+        ambientStatusButton.target = self
+        ambientStatusButton.action = #selector(showAmbientStatus)
+        ambientStatusButton.toolTip = "Ambient Sets status"
+        ambientStatusButton.setAccessibilityLabel("Ambient Sets status")
+
         let labels = NSStackView(views: [nowPlayingButton, destinationLabel])
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 0
         labels.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
         labels.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
-        let controls = NSStackView(views: [previousButton, pauseButton, nextButton, labels])
+        let controls = NSStackView(views: [previousButton, pauseButton, nextButton, labels, ambientStatusButton])
         controls.spacing = 7
         controls.alignment = .centerY
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -532,6 +583,68 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         popover.show(relativeTo: nowPlayingButton.bounds, of: nowPlayingButton, preferredEdge: .maxY)
     }
 
+    @objc private func showAmbientStatus() {
+        let resolution = modes.currentAmbientResolution
+        let popover = NSPopover()
+        let controller = NSViewController()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: 210))
+        let title = NSTextField(labelWithString:
+            AmbientSetsHomeController.chipTitle(resolution, authoritative: modes.isAmbientSetsAuthoritative))
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        let explanation = NSTextField(wrappingLabelWithString: AmbientSetsHomeController.explanationText(resolution))
+        explanation.textColor = .secondaryLabelColor
+        explanation.maximumNumberOfLines = 4
+        explanation.preferredMaxLayoutWidth = 350
+        let resolved = NSTextField(wrappingLabelWithString: AmbientSetsHomeController.resolvedStateText(resolution))
+        resolved.textColor = .secondaryLabelColor
+        resolved.preferredMaxLayoutWidth = 350
+        let next = NSTextField(labelWithString: AmbientSetsHomeController.nextChangeText(resolution))
+        next.textColor = .secondaryLabelColor
+        let open = NSButton(title: "Open Ambient Sets", target: self, action: #selector(openAmbientSetsFromPopover))
+        open.bezelStyle = .rounded
+        let resume = NSButton(title: "Resume Automation", target: self, action: #selector(resumeAmbientAutomation))
+        resume.bezelStyle = .rounded
+        let source = resolution?.explanation.source
+        resume.isHidden = source != .manualSet && source != .manualOverrides
+        let actions = NSStackView(views: [open, resume])
+        actions.spacing = 8
+        let stack = NSStackView(views: [title, explanation, resolved, next, actions])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 7
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+        ])
+        controller.view = container
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        ambientPopover = popover
+        popover.show(relativeTo: ambientStatusButton.bounds, of: ambientStatusButton, preferredEdge: .maxY)
+    }
+
+    @objc private func openAmbientSetsFromPopover() {
+        ambientPopover?.close()
+        presentAmbientSets()
+    }
+
+    @objc private func resumeAmbientAutomation() {
+        do {
+            try modes.resumeAutomaticAmbientSets()
+            ambientPopover?.close()
+            refreshState()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Ambient Sets"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        }
+    }
+
     @objc private func stopWallpaper() {
         wallpaper.stop()
         nowPlayingPopover?.close()
@@ -550,13 +663,19 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         nowPlayingButton.image = cachedThumbnail ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
         pauseButton.image = NSImage(systemSymbolName: wallpaper.pausedByUser ? "play.fill" : "pause.fill",
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
-        pauseButton.isEnabled = url != nil
+        let pauseValidation = NSMenuItem(title: "", action: #selector(WallpaperController.togglePause), keyEquivalent: "")
+        pauseButton.isEnabled = wallpaper.validateMenuItem(pauseValidation)
         previousButton.isEnabled = url != nil
         nextButton.isEnabled = true
         let count = NSScreen.screens.count
-        var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
+        let displayText = wallpaper.desktopSpanActive ? "Desktop Span" :
+            (wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display")
+        var parts = [displayText]
         if let rotation = rotationSummary() { parts.append(rotation) }
         destinationLabel.stringValue = parts.joined(separator: " · ")
+        ambientStatusButton.title = AmbientSetsHomeController.chipTitle(
+            modes.currentAmbientResolution, authoritative: modes.isAmbientSetsAuthoritative)
+        ambientController.refreshResolution()
         refreshDisplaysSummary()
     }
 
@@ -590,15 +709,16 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let wallpaper = WallpaperController()
         wallpaper.presentsWindows = false
         let comfort = DesktopComfortController()
+        let modes = AmbientModesController(wallpaper: wallpaper, comfort: comfort)
         let displayDestination = NSViewController()
         displayDestination.view = NSView(frame: .zero)
         var displayActivated = false
         let home = HomeWindowController(
-            library: library, wallpaper: wallpaper, comfort: comfort, indexURL: index,
+            library: library, wallpaper: wallpaper, comfort: comfort, modes: modes, indexURL: index,
             displaysDestinationController: displayDestination,
             activateDisplaysDestination: { displayActivated = true })
         precondition(home.window.contentViewController is NSSplitViewController)
-        precondition(home.rows.contains(.library) && home.rows.contains(.displays))
+        precondition(home.rows.contains(.library) && home.rows.contains(.displays) && home.rows.contains(.ambient))
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
         precondition(displayDestination.view.superview === home.displaysView)
@@ -607,6 +727,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         home.showDisplays()
         precondition(displayActivated)
         precondition(home.currentRow == .displays && !home.displaysView.isHidden && home.libraryView.isHidden)
+        home.showAmbientSets()
+        precondition(home.currentRow == .ambient && !home.ambientController.view.isHidden && home.libraryView.isHidden)
         home.showLibraryScope(.library)
         precondition(home.currentRow == .library && !home.libraryView.isHidden)
     }
