@@ -30,6 +30,12 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     var onShowSettings: (() -> Void)?
 
     static let desktopVisibilityChanged = Notification.Name("Idlesse.DesktopVisibilityChanged")
+    static let manualStateChanged = Notification.Name("Idlesse.DesktopComfortManualStateChanged")
+    static let manualStateKindKey = "kind"
+    static let manualFilesKind = "files"
+    static let manualWidgetsKind = "widgets"
+    static let manualDimmingKind = "dimming"
+
     var desktopIconsVisible: Bool { !UserDefaults.standard.bool(forKey: "comfort.keepDesktopFilesHidden") }
 
     var desktopWidgetsVisible: Bool {
@@ -38,8 +44,15 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     }
 
     @objc func toggleDesktopWidgets() {
-        guard !changingDesktopWidgets else { return }
-        let visible = !desktopWidgetsVisible
+        setDesktopWidgetsVisible(!desktopWidgetsVisible, manual: true)
+    }
+
+    func applyResolvedDesktopWidgetsVisible(_ visible: Bool) {
+        setDesktopWidgetsVisible(visible, manual: false)
+    }
+
+    private func setDesktopWidgetsVisible(_ visible: Bool, manual: Bool) {
+        guard !changingDesktopWidgets, visible != desktopWidgetsVisible else { return }
         changingDesktopWidgets = true
         updateDesktopIconsItems()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -55,6 +68,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
                 guard let self else { return }
                 self.changingDesktopWidgets = false
                 self.updateDesktopIconsItems()
+                if manual && failure == nil { self.postManualChange(Self.manualWidgetsKind) }
                 NotificationCenter.default.post(name: Self.desktopVisibilityChanged, object: nil)
                 if let failure {
                     let alert = NSAlert(); alert.messageText = "Desktop Widgets"
@@ -102,10 +116,21 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     }
 
     @objc func toggleDesktopIcons() {
-        UserDefaults.standard.set(desktopIconsVisible, forKey: "comfort.keepDesktopFilesHidden")
+        applyDesktopIconsVisible(!desktopIconsVisible, manual: true)
+    }
+
+    func applyResolvedDesktopIconsVisible(_ visible: Bool) {
+        applyDesktopIconsVisible(visible, manual: false)
+    }
+
+    private func applyDesktopIconsVisible(_ visible: Bool, manual: Bool) {
+        guard visible != desktopIconsVisible else { return }
+        UserDefaults.standard.set(!visible, forKey: "comfort.keepDesktopFilesHidden")
         updateDesktopIconsItems()
+        if manual { postManualChange(Self.manualFilesKind) }
         NotificationCenter.default.post(name: Self.desktopVisibilityChanged, object: nil)
     }
+
     var onDimmingChanged: ((Bool) -> Void)?
     private let defaults = UserDefaults.standard
     private var windows: [NSWindow] = []
@@ -116,6 +141,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     private var previousScheduled = false
     private var inactive = false
     private(set) var isDimmed = false
+    private var ambientAuthorityEnabled = false
     private var schedule: DimSchedule {
         DimSchedule(start: defaults.object(forKey: "comfort.start") as? Int ?? 1320,
                     end: defaults.object(forKey: "comfort.end") as? Int ?? 420)
@@ -123,6 +149,18 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     private var amount: Double {
         let value = defaults.object(forKey: "comfort.amount") as? Double ?? 0.9
         return value.isFinite ? min(0.98, max(0.2, value)) : 0.9
+    }
+
+    var resolvedDimmingState: AmbientDimmingState {
+        AmbientDimmingState(enabled: isDimmed, level: amount)
+    }
+
+    func setAmbientAuthorityEnabled(_ enabled: Bool) {
+        guard ambientAuthorityEnabled != enabled else { return }
+        ambientAuthorityEnabled = enabled
+        manual = nil
+        previousScheduled = false
+        if !enabled { refresh() }
     }
 
     func start() {
@@ -147,6 +185,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
 
     private func refresh() {
         updateDesktopIconsItems()
+        guard !ambientAuthorityEnabled else { return }
         let parts = Calendar.current.dateComponents([.hour, .minute], from: Date())
         let scheduled = defaults.bool(forKey: "comfort.schedule") &&
             schedule.contains(minute: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
@@ -161,15 +200,48 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     }
 
     @objc func toggle() {
+        if ambientAuthorityEnabled {
+            postManualChange(Self.manualDimmingKind, desiredDimming: AmbientDimmingState(enabled: !isDimmed, level: amount))
+            return
+        }
         refresh()
         manual = !isDimmed
         refresh()
     }
 
     @objc private func setLevel(_ sender: NSMenuItem) {
-        defaults.set(Double(sender.tag) / 100, forKey: "comfort.amount")
+        let level = AmbientDimmingState.clamp(Double(sender.tag) / 100)
+        defaults.set(level, forKey: "comfort.amount")
         windows.forEach { $0.alphaValue = amount }
         updateStatusMenu()
+        if ambientAuthorityEnabled {
+            postManualChange(Self.manualDimmingKind, desiredDimming: AmbientDimmingState(enabled: true, level: level))
+        }
+    }
+
+    func applyResolvedDimming(_ state: AmbientDimmingState) {
+        let level = AmbientDimmingState.clamp(state.level)
+        let levelChanged = abs(amount - level) > 0.0001
+        if levelChanged { defaults.set(level, forKey: "comfort.amount") }
+        manual = nil
+        let next = !inactive && state.enabled
+        if next != isDimmed {
+            isDimmed = next
+            rebuild()
+            onDimmingChanged?(next)
+        } else if levelChanged {
+            windows.forEach { $0.alphaValue = level }
+            updateStatusMenu()
+        }
+    }
+
+    private func postManualChange(_ kind: String, desiredDimming: AmbientDimmingState? = nil) {
+        var userInfo: [String: Any] = [Self.manualStateKindKey: kind]
+        if let desiredDimming {
+            userInfo["dimmingEnabled"] = desiredDimming.enabled
+            userInfo["dimmingLevel"] = desiredDimming.level
+        }
+        NotificationCenter.default.post(name: Self.manualStateChanged, object: self, userInfo: userInfo)
     }
 
     private func updateStatusMenu() {
