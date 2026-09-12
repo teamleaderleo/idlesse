@@ -55,6 +55,54 @@ enum MetalShaderEffectCompiler {
         }
     }
 
+    private static func makeReflectedPipeline(_ descriptor: MTLRenderPipelineDescriptor,
+                                              device: MTLDevice) throws -> MTLRenderPipelineState {
+        do {
+            let (state, reflection) = try device.makeRenderPipelineState(descriptor: descriptor, options: .argumentInfo)
+            try validateResources(reflection)
+            return state
+        } catch let error as SceneError {
+            throw error
+        } catch {
+            throw MetalShaderCompilationError(diagnostics: MetalShaderCompiler.parseDiagnostics(error.localizedDescription),
+                                              fallback: error.localizedDescription)
+        }
+    }
+
+    /// Reflection is the format boundary: the fragment stage gets exactly one read-only 2D
+    /// source texture at texture(0), plus the fixed EffectU/ShaderInputs constant buffers.
+    /// This rejects samplers supplied as arguments, argument-buffer/nested resources,
+    /// writable textures, extra buffers, acceleration structures and other GPU capability.
+    private static func validateResources(_ reflection: MTLRenderPipelineReflection?) throws {
+        guard let reflection else { throw SceneError.invalid("Metal could not reflect the shader-effect resource bindings.") }
+        var sourceTextures = 0
+        for binding in reflection.fragmentBindings where binding.isUsed {
+            guard binding.isArgument else {
+                throw SceneError.invalid("Shader effects cannot use nested or argument-buffer resources.")
+            }
+            guard binding.access == .readOnly else {
+                throw SceneError.invalid("Shader-effect resources must be read-only.")
+            }
+            switch binding.type {
+            case .buffer:
+                guard binding.index == 1 || binding.index == 2 else {
+                    throw SceneError.invalid("Shader effects may only use EffectU at buffer(1) and ShaderInputs at buffer(2).")
+                }
+            case .texture:
+                guard binding.index == 0, let texture = binding as? MTLTextureBinding,
+                      texture.textureType == .type2D, texture.arrayLength == 1, !texture.isDepthTexture else {
+                    throw SceneError.invalid("Shader effects may only sample one non-array 2D source texture at texture(0).")
+                }
+                sourceTextures += 1
+            default:
+                throw SceneError.invalid("Shader effects may only bind the fixed constant buffers and source texture(0).")
+            }
+        }
+        guard sourceTextures == 1 else {
+            throw SceneError.invalid("Shader effects must sample exactly one source texture at texture(0).")
+        }
+    }
+
     static func validate(_ shader: SceneNode.Shader, inputs: [MetalShaderInput] = [],
                          device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
         guard let device else { throw SceneError.invalid("Metal is unavailable on this Mac.") }
@@ -69,12 +117,7 @@ enum MetalShaderEffectCompiler {
         descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0]?.pixelFormat = .bgra8Unorm
-        do {
-            _ = try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            throw MetalShaderCompilationError(diagnostics: MetalShaderCompiler.parseDiagnostics(error.localizedDescription),
-                                              fallback: error.localizedDescription)
-        }
+        _ = try makeReflectedPipeline(descriptor, device: device)
     }
 
     static func makePipeline(_ shader: SceneNode.Shader, inputs: [MetalShaderInput], device: MTLDevice,
@@ -87,11 +130,6 @@ enum MetalShaderEffectCompiler {
         descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0]?.pixelFormat = .bgra8Unorm
-        do {
-            return try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            throw MetalShaderCompilationError(diagnostics: MetalShaderCompiler.parseDiagnostics(error.localizedDescription),
-                                              fallback: error.localizedDescription)
-        }
+        return try makeReflectedPipeline(descriptor, device: device)
     }
 }
