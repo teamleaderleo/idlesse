@@ -1,0 +1,164 @@
+import Foundation
+
+@main
+struct LibraryReconciliationChecks {
+    static func main() throws {
+        try additionsMissingAndStateSurvival()
+        try catalogMoveAndReplacement()
+        try digestAndProbableMoveRules()
+        try ambiguityStaysUnresolved()
+        try cancellationLeavesBytesUntouched()
+        try relinkAndReconcileStaySeparate()
+        try digestBudgetSkipsLargeFiles()
+        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, atomic cancellation, relink separation and bounded hashing")
+    }
+
+    private static func entry(_ id: String, path: String, catalogID: String? = nil,
+                              title: String? = nil, bytes: Int64? = nil,
+                              digest: String? = nil, availability: SceneLibraryStore.EntryAvailability = .present) -> SceneLibraryStore.Entry {
+        let observation = bytes == nil && digest == nil ? nil : SceneLibraryStore.ReconciliationObservation(
+            byteLength: bytes, digestAlgorithm: digest == nil ? nil : "sha256", digest: digest)
+        return .init(id: id, title: title ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+                     catalogID: catalogID, sourceID: "source", relativeMediaPath: path,
+                     mediaType: "video", availability: availability, observation: observation)
+    }
+
+    private static func draft(_ path: String, catalogID: String? = nil,
+                              title: String? = nil, bytes: Int64? = nil,
+                              digest: String? = nil) -> SceneLibraryStore.SourceEntry {
+        let observation = bytes == nil && digest == nil ? nil : SceneLibraryStore.ReconciliationObservation(
+            byteLength: bytes, digestAlgorithm: digest == nil ? nil : "sha256", digest: digest)
+        return .init(relativeMediaPath: path, title: title ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+                     catalogID: catalogID, mediaType: "video", observation: observation)
+    }
+
+    private static func seedStore(entries: [SceneLibraryStore.Entry]) throws -> (SceneLibraryStore, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-reconcile-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("index.json")
+        var catalog = SceneLibraryStore.Catalog()
+        catalog.sources = [.init(id: "source", name: "Source", bookmark: Data([1, 2, 3]))]
+        catalog.entries = entries
+        let ids = entries.map(\.id)
+        catalog.favorites = Set(ids.prefix(1))
+        if let last = ids.last { catalog.recent[last] = Date(timeIntervalSince1970: 1234) }
+        if !ids.isEmpty { catalog.collections = [.init(id: "collection", name: "Keep order", sceneIDs: ids, playback: nil)] }
+        try JSONEncoder().encode(catalog).write(to: file, options: .atomic)
+        return (try SceneLibraryStore(file: file), dir)
+    }
+
+    private static func additionsMissingAndStateSurvival() throws {
+        let a = entry("a", path: "A.mp4", bytes: 10)
+        let b = entry("b", path: "B.mp4", bytes: 20)
+        let (store, dir) = try seedStore(entries: [a, b])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let diff = try store.prepareReconciliation(sourceID: "source", scanned: [draft("A.mp4", bytes: 10), draft("C.mp4", bytes: 30)])
+        precondition(diff.summary.unchanged == 1)
+        precondition(diff.summary.added == 1 && diff.summary.missing == 1)
+        try store.applyReconciliation(diff)
+        let keptA = store.catalog.entries.first { $0.id == "a" }!
+        let keptB = store.catalog.entries.first { $0.id == "b" }!
+        let added = store.catalog.entries.first { $0.relativeMediaPath == "C.mp4" }!
+        precondition(keptA.availability == .present)
+        precondition(keptB.availability == .missing)
+        precondition(added.id != "a" && added.id != "b")
+        precondition(store.catalog.favorites.contains("a"))
+        precondition(store.catalog.recent["b"] != nil)
+        precondition(store.catalog.collections[0].sceneIDs == ["a", "b"])
+    }
+
+    private static func catalogMoveAndReplacement() throws {
+        let moved = entry("move-id", path: "old/Movie.mp4", catalogID: "catalog-7", bytes: 100)
+        var diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: [moved],
+            scanned: [draft("new/Movie.mp4", catalogID: "catalog-7", bytes: 100)])
+        precondition(diff.matches.count == 1 && diff.matches[0].entryID == "move-id")
+        precondition(diff.matches[0].kind == .moved)
+
+        let replacement = entry("old-id", path: "same.mp4", catalogID: "old-catalog", bytes: 5)
+        diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: [replacement],
+            scanned: [draft("same.mp4", catalogID: "new-catalog", bytes: 5)])
+        precondition(diff.matches.isEmpty)
+        precondition(diff.missingEntryIDs == ["old-id"])
+        precondition(diff.addedScannedIndices == [0])
+    }
+
+    private static func digestAndProbableMoveRules() throws {
+        let digest = String(repeating: "ab", count: 32)
+        let oldDigest = entry("digest-id", path: "gone.mp4", title: "Renamed", bytes: 123, digest: digest)
+        var diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: [oldDigest],
+            scanned: [draft("elsewhere.mp4", title: "Different", bytes: 123, digest: digest)])
+        precondition(diff.matches.count == 1 && diff.matches[0].entryID == "digest-id")
+        precondition(diff.matches[0].kind == .moved)
+
+        let probable = entry("probable-id", path: "old/Clip.mp4", title: "Clip", bytes: 777)
+        diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: [probable],
+            scanned: [draft("new/Clip.mp4", title: "Clip", bytes: 777)])
+        precondition(diff.matches.isEmpty)
+        precondition(diff.probableMoves.count == 1)
+        let (store, dir) = try seedStore(entries: [probable])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let review = try store.prepareReconciliation(sourceID: "source", scanned: [draft("new/Clip.mp4", title: "Clip", bytes: 777)])
+        let accepted = review.acceptedMoveKeys(review.probableMoves)
+        try store.applyReconciliation(review, accepting: accepted)
+        let retained = store.catalog.entries.first { $0.id == "probable-id" }!
+        precondition(retained.relativeMediaPath == "new/Clip.mp4" && retained.availability == .present)
+    }
+
+    private static func ambiguityStaysUnresolved() throws {
+        let old = [
+            entry("one", path: "old/one.mp4", title: "Same", bytes: 900),
+            entry("two", path: "old/two.mp4", title: "Same", bytes: 900)
+        ]
+        let incoming = [
+            draft("new/one.mp4", title: "Same", bytes: 900),
+            draft("new/two.mp4", title: "Same", bytes: 900)
+        ]
+        let diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: old, scanned: incoming)
+        precondition(diff.matches.isEmpty)
+        precondition(diff.probableMoves.isEmpty)
+        precondition(diff.missingEntryIDs.count == 2 && diff.addedScannedIndices.count == 2)
+    }
+
+    private static func cancellationLeavesBytesUntouched() throws {
+        let (store, dir) = try seedStore(entries: [entry("a", path: "A.mp4", bytes: 1)])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let before = try Data(contentsOf: store.file)
+        _ = try store.prepareReconciliation(sourceID: "source", scanned: [draft("B.mp4", bytes: 2)])
+        let after = try Data(contentsOf: store.file)
+        precondition(before == after)
+    }
+
+    private static func relinkAndReconcileStaySeparate() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-relink-\(UUID().uuidString)")
+        let oldRoot = dir.appendingPathComponent("old")
+        let newRoot = dir.appendingPathComponent("new")
+        try FileManager.default.createDirectory(at: oldRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: newRoot, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("index.json")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try SceneLibraryStore(file: file)
+        let source = try store.addSource(oldRoot, entries: [.init(relativeMediaPath: "A.mp4", title: "A", mediaType: "video")])
+        let entryID = store.catalog.entries.first!.id
+        let beforePath = store.catalog.entries.first!.relativeMediaPath
+        try store.relinkSource(source.id, to: newRoot)
+        precondition(store.catalog.entries.first!.id == entryID)
+        precondition(store.catalog.entries.first!.relativeMediaPath == beforePath)
+        precondition(store.catalog.entries.first!.availability == .present)
+        let diff = try store.prepareReconciliation(sourceID: source.id, scanned: [])
+        precondition(diff.missingEntryIDs == [entryID])
+        precondition(store.catalog.entries.first!.availability == .present)
+    }
+
+    private static func digestBudgetSkipsLargeFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-digest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(repeating: 7, count: 16).write(to: dir.appendingPathComponent("small.bin"))
+        try Data(repeating: 8, count: 64).write(to: dir.appendingPathComponent("large.bin"))
+        let drafts = [draft("small.bin"), draft("large.bin")]
+        let observations = try SceneLibraryStore.boundedDigests(root: dir, drafts: drafts, indices: [0, 1],
+            budget: .init(maximumFiles: 2, maximumTotalBytes: 32, maximumFileBytes: 32))
+        precondition(observations[0]?.hasDigest == true)
+        precondition(observations[1] == nil)
+    }
+}
