@@ -87,13 +87,24 @@ if needs_build "build/tests/comfort" "${COMFORT_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# 6. Library
+# 6. Library storage
 LIBRARY_SRCS=(
   Sources/Harness/SceneLibraryStore.swift
   Tests/LibraryTests.swift
 )
 if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
   xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -o build/tests/library &
+  pids+=($!)
+fi
+
+# 7. Library gallery virtualization. Compile only the production layout planner
+# from LibraryGridView so 1k/4k coverage stays synthetic and never decodes media.
+LIBRARY_GRID_SRCS=(
+  Sources/Harness/LibraryGridView.swift
+  Tests/LibraryGridVirtualizationTests.swift
+)
+if needs_build "build/tests/library-grid" "${LIBRARY_GRID_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" -D LIBRARY_GRID_VIRTUALIZATION_TESTS "${LIBRARY_GRID_SRCS[@]}" -framework AppKit -o build/tests/library-grid &
   pids+=($!)
 fi
 
@@ -109,3 +120,4 @@ build/tests/recovery
 build/tests/audio
 build/tests/comfort
 build/tests/library
+build/tests/library-grid
