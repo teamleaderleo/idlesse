@@ -24,6 +24,10 @@ verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
 from PIL import Image
 
 
+# Largest zoom change the solver makes in one round.
+MAX_ZOOM_STEP = 1.15
+
+
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args): pass
 
@@ -172,6 +176,7 @@ def main():
                     print('  Look at it: zero matte means the frame is covered, not that the crop is good.')
                     break
                 zoom, cx, cy = camera
+                start = zoom
                 # Matte on one side alone is off-centre art and shifts away; matte
                 # summed across both sides is art too small for the frame, which no
                 # amount of shifting fixes. Zoom to close the total, then recentre on
@@ -186,6 +191,12 @@ def main():
                 if span > 0:
                     zoom *= 288 / max(288 - span - 2, 1)
                     cy += ((e['top'] - e['bottom']) / 2) / (288 * zoom)
+                # A wedge in a corner measures nearly the whole edge as depth, and
+                # the bar formula divides by what is left: it once "solved" Saori at
+                # zoom 302, a patch of art with no matte in it. Step instead, so the
+                # first clean round is the smallest zoom that covers the frame.
+                if zoom > start * MAX_ZOOM_STEP:
+                    zoom = start * MAX_ZOOM_STEP
                 camera = [round(zoom, 4), round(cx, 4), round(cy, 4)]
             else:
                 print(f'\nno clean recipe within {a.rounds} rounds; last was {camera}')
