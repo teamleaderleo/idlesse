@@ -16,6 +16,7 @@ private final class DisplayMapView: NSView {
         registerForDraggedTypes([.fileURL])
         wantsLayer = true
     }
+
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
 
@@ -53,9 +54,10 @@ private final class DisplayMapView: NSView {
                 .font: NSFont.systemFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]
-            (title as NSString).draw(in: NSRect(x: frame.minX + 10, y: frame.minY + 9,
-                                                width: max(10, frame.width - 20), height: 17),
-                                     withAttributes: titleAttributes)
+            (title as NSString).draw(
+                in: NSRect(x: frame.minX + 10, y: frame.minY + 9,
+                           width: max(10, frame.width - 20), height: 17),
+                withAttributes: titleAttributes)
             if mirrored, master.liveID != display.liveID {
                 ("Follows \(master.identity.name)" as NSString).draw(
                     in: NSRect(x: frame.minX + 10, y: frame.minY + 27,
@@ -63,9 +65,10 @@ private final class DisplayMapView: NSView {
                     withAttributes: detailAttributes)
             }
             let source = assignment?.sourceURL.map(displayName) ?? "No Wallpaper"
-            (source as NSString).draw(in: NSRect(x: frame.minX + 10, y: frame.maxY - 26,
-                                                 width: max(10, frame.width - 20), height: 15),
-                                      withAttributes: detailAttributes)
+            (source as NSString).draw(
+                in: NSRect(x: frame.minX + 10, y: frame.maxY - 26,
+                           width: max(10, frame.width - 20), height: 15),
+                withAttributes: detailAttributes)
         }
     }
 
@@ -80,9 +83,11 @@ private final class DisplayMapView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         destination(for: sender) == nil ? [] : .copy
     }
+
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         destination(for: sender) == nil ? [] : .copy
     }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let (displayID, url) = destination(for: sender) else { return false }
         selectedID = displayID
@@ -107,10 +112,10 @@ private final class DisplayMapView: NSView {
     }
 }
 
-/// Visual editor for #52's wallpaper-assignment runtime. It renders real AppKit
-/// display geometry and sends all assignments through WallpaperController so
-/// SharedVideoHub/system-backdrop behavior remains shared.
-final class DisplayAssignmentController: NSWindowController {
+/// Reusable visual Displays destination. #52 can host this in its conventional
+/// standalone window and #30 Home can host the exact same controller in its
+/// content split without moving a view out of another window.
+final class DisplayAssignmentViewController: NSViewController {
     private struct PendingLibraryTarget {
         let liveID: UInt32
         let previousDefault: URL?
@@ -118,8 +123,9 @@ final class DisplayAssignmentController: NSWindowController {
     }
 
     private weak var wallpaper: WallpaperController?
-    private let mode = NSSegmentedControl(labels: ["Same on All", "Per Display", "Desktop Span"],
-                                          trackingMode: .selectOne, target: nil, action: nil)
+    private let mode = NSSegmentedControl(
+        labels: ["Same on All", "Per Display", "Desktop Span"],
+        trackingMode: .selectOne, target: nil, action: nil)
     private let arrangement = NSPopUpButton(frame: .zero, pullsDown: false)
     private let rememberArrangement = NSButton(title: "Remember Setup", target: nil, action: nil)
     private let mapView = DisplayMapView(frame: .zero)
@@ -138,15 +144,8 @@ final class DisplayAssignmentController: NSWindowController {
     private let arrangements = KnownDisplayArrangementsStore(defaults: .standard)
 
     init(wallpaper: WallpaperController) {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 650),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        super.init(window: window)
         self.wallpaper = wallpaper
-        window.title = "Displays"
-        window.minSize = NSSize(width: 700, height: 560)
-        window.isReleasedWhenClosed = false
-        window.center()
-        installContent(in: window)
+        super.init(nibName: nil, bundle: nil)
         observers.append(NotificationCenter.default.addObserver(
             forName: .idlesseDisplayAssignmentsChanged, object: wallpaper, queue: .main) { [weak self] _ in
                 self?.assignmentDidChange()
@@ -159,24 +158,32 @@ final class DisplayAssignmentController: NSWindowController {
     }
 
     required init?(coder: NSCoder) { nil }
+
     deinit {
         topologyRefreshWorkItem?.cancel()
         observers.forEach(NotificationCenter.default.removeObserver)
     }
 
-    /// #30 can embed this same destination after #52/#31 land; there is no
-    /// second visual implementation to reconcile later.
-    var destinationView: NSView? { window?.contentView }
-
-    func present() {
-        pendingLibraryTarget = nil
-        rebuild()
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    override func loadView() {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 650))
+        view = root
+        installContent(in: root)
     }
 
-    private func installContent(in window: NSWindow) {
-        guard let content = window.contentView else { return }
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        rebuild()
+    }
+
+    /// Refresh before presenting or embedding this destination. Keeping this
+    /// explicit also gives Home a deterministic lifecycle hook in smoke tests.
+    func activate() {
+        pendingLibraryTarget = nil
+        _ = view
+        rebuild()
+    }
+
+    private func installContent(in content: NSView) {
         let title = NSTextField(labelWithString: "Displays")
         title.font = .systemFont(ofSize: 25, weight: .semibold)
         let subtitle = NSTextField(wrappingLabelWithString:
@@ -262,6 +269,7 @@ final class DisplayAssignmentController: NSWindowController {
         topologyRefreshWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.topologyRefreshWorkItem = nil
+            guard self?.isViewLoaded == true else { return }
             self?.rebuild()
         }
         topologyRefreshWorkItem = work
@@ -269,7 +277,7 @@ final class DisplayAssignmentController: NSWindowController {
     }
 
     private func rebuild() {
-        guard let wallpaper else { return }
+        guard isViewLoaded, let wallpaper else { return }
         topology = .current()
         wallpaper.reconcileDurableDisplayAssignments(topology: topology)
         plan = wallpaper.resolvedDisplayAssignmentPlan(topology: topology)
@@ -286,7 +294,8 @@ final class DisplayAssignmentController: NSWindowController {
         }
         mode.isEnabled = plan?.mode != .desktopSpan
         if selectedID == nil || !topology.displays.contains(where: { $0.liveID == selectedID }) {
-            selectedID = topology.displays.first(where: { $0.isMain })?.liveID ?? topology.displays.first?.liveID
+            selectedID = topology.displays.first(where: { $0.isMain })?.liveID
+                ?? topology.displays.first?.liveID
         }
         mapView.selectedID = selectedID
         refreshDetail()
@@ -336,8 +345,10 @@ final class DisplayAssignmentController: NSWindowController {
         let master = topology.master(for: display)
         let assignment = plan?.assignment(for: display.liveID)
         detailTitle.stringValue = display.identity.name + (display.isMain ? " · Main Display" : "")
-        var details = [display.resolutionDescription,
-                       "\(Int(display.frame.width)) × \(Int(display.frame.height)) desktop points"]
+        var details = [
+            display.resolutionDescription,
+            "\(Int(display.frame.width)) × \(Int(display.frame.height)) desktop points",
+        ]
         if let mirrorID = display.mirrorMasterID,
            let mirrored = topology.displays.first(where: { $0.liveID == mirrorID }) {
             details.append("Mirrors \(mirrored.identity.name)")
@@ -350,7 +361,9 @@ final class DisplayAssignmentController: NSWindowController {
         }
         details.append("Identity: \(topology.persistentKey(for: master))")
         detailText.stringValue = details.joined(separator: " · ")
-        useDefault.isEnabled = plan?.mode == .perDisplay && assignment?.explicit == true && display.mirrorMasterID == nil
+        useDefault.isEnabled = plan?.mode == .perDisplay
+            && assignment?.explicit == true
+            && display.mirrorMasterID == nil
         openLibrary.isEnabled = true
     }
 
@@ -404,7 +417,7 @@ final class DisplayAssignmentController: NSWindowController {
     }
 
     private func assignmentDidChange() {
-        guard !reconcilingLibraryTarget else { return }
+        guard isViewLoaded, !reconcilingLibraryTarget else { return }
         guard let pending = pendingLibraryTarget else { rebuild(); return }
         guard pending.expires > Date() else {
             pendingLibraryTarget = nil
@@ -427,5 +440,34 @@ final class DisplayAssignmentController: NSWindowController {
         }
         reconcilingLibraryTarget = false
         rebuild()
+    }
+}
+
+/// Standalone compatibility shell used by the existing #52 menu/command path.
+/// Home embeds `destinationController` directly, preserving one visual Displays
+/// implementation across both windows.
+final class DisplayAssignmentController: NSWindowController {
+    let destinationController: DisplayAssignmentViewController
+
+    init(wallpaper: WallpaperController) {
+        destinationController = DisplayAssignmentViewController(wallpaper: wallpaper)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 650),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false)
+        super.init(window: window)
+        window.title = "Displays"
+        window.minSize = NSSize(width: 700, height: 560)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = destinationController
+        window.center()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func present() {
+        destinationController.activate()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
