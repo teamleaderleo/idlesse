@@ -25,6 +25,8 @@ for token in [
     "Same wallpaper on all displays",
     "comfort.toggleDesktopIcons()",
     "comfort.toggleDesktopWidgets()",
+    "wallpaper.presentingWindow = { [weak library] in library?.window }",
+    "if standardized != cachedThumbnailURL",
 ]:
     assert token in home, token
 
