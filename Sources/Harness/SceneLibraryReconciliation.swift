@@ -97,10 +97,12 @@ extension SceneLibraryStore {
 
     /// Bounded whole-file SHA-256 for targeted candidates only. Large files are
     /// skipped instead of partially hashing them and treating weak evidence as identity.
+    /// Resolved candidates must remain descendants of the authorized Source root.
     static func boundedDigests(root: URL, drafts: [SourceEntry], indices: [Int],
                                budget: DigestBudget = DigestBudget()) throws -> [Int: ReconciliationObservation] {
         guard budget.maximumFiles > 0, budget.maximumTotalBytes >= 0, budget.maximumFileBytes >= 0 else { return [:] }
         let selected = Array(indices.prefix(budget.maximumFiles))
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
         var remaining = budget.maximumTotalBytes
         var result: [Int: ReconciliationObservation] = [:]
         for index in selected {
@@ -109,6 +111,8 @@ extension SceneLibraryStore {
             let draft = drafts[index]
             let path = try validatedRelativePath(draft.relativeMediaPath)
             let url = root.appendingPathComponent(path).standardizedFileURL
+            let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+            guard isResolvedDescendant(resolvedURL, of: resolvedRoot) else { continue }
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey])
             guard values.isRegularFile == true, let bytes = values.fileSize.map(Int64.init), bytes >= 0,
                   bytes <= budget.maximumFileBytes, bytes <= remaining else { continue }
@@ -366,6 +370,13 @@ extension SceneLibraryStore {
         let incomingTitle = (draft.title ?? URL(fileURLWithPath: draft.relativeMediaPath).deletingPathExtension().lastPathComponent)
         if entry.title.caseInsensitiveCompare(incomingTitle) == .orderedSame { evidence.append("same title") }
         return evidence.joined(separator: ", ")
+    }
+
+    private static func isResolvedDescendant(_ child: URL, of root: URL) -> Bool {
+        let base = root.standardizedFileURL.path
+        let target = child.standardizedFileURL.path
+        let prefix = base == "/" ? "/" : base + "/"
+        return target.hasPrefix(prefix) && target.count > prefix.count
     }
 
     private static func boundedReconciliationTitle(_ value: String) -> String {
