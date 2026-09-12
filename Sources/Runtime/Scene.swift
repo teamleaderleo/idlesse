@@ -244,7 +244,7 @@ struct SceneComponent: Codable, Sendable {
         for (key, parameter) in parameters {
             var cloned = parameter
             cloned.name = String("\(root.displayName) · \(parameter.name)".prefix(80))
-            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: target.property) }
+            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: $0.property) }
             next.parameters[keys[key]!] = cloned
         }
         for binding in bindings {
@@ -377,7 +377,8 @@ struct SceneParameter: Codable, Sendable, Equatable {
         case .boolean: boolean = try c.decode(Bool.self, forKey: .value)
         case .color, .choice, .string: text = try c.decode(String.self, forKey: .value)
         }
-        guard isValid else { throw SceneError.invalid("Invalid typed parameter default or limits.") }
+        guard isValid else { throw SceneError.invalid("Invalid typed parameter default or limits.")
+        }
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
