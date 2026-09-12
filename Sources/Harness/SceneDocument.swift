@@ -81,7 +81,7 @@ final class SceneDocument {
         }
         let recovery = Recovery(version: stored.version, edited: stored.edited,
             scene: SceneDescriptor(title: stored.scene.title, nodes: nodes, parameters: stored.scene.parameters,
-                                   bindings: stored.scene.bindings, timeline: stored.scene.timeline, canvas: stored.scene.canvas, metadata: stored.scene.metadata, components: stored.scene.components))
+                                   bindings: stored.scene.bindings, timeline: stored.scene.timeline, canvas: stored.scene.canvas, metadata: stored.scene.metadata, components: stored.scene.components, variants: stored.scene.variants))
         guard recovery.version == 1 else { throw SceneError.invalid("Unsupported recovery version.") }
         try SceneBudget.validate(recovery.scene.nodes)
         _ = try recovery.scene.evaluated()

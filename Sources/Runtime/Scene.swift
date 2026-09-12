@@ -41,6 +41,7 @@ struct SceneDescriptor: Codable, Sendable {
     var parameters: [String: SceneParameter] = [:]
     var bindings: [SceneParameterBinding] = []
     var timeline: SceneTimeline? = nil
+    var variants: [SceneVariant] = []
     var assetURL: URL? { nodes.first?.assetURL }
     var kind: Kind { nodes.first?.kind ?? .image }
     var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
@@ -64,14 +65,27 @@ struct SceneDescriptor: Codable, Sendable {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = []) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants
+    }
+    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        canvas = try c.decodeIfPresent(Canvas.self, forKey: .canvas)
+        metadata = try c.decodeIfPresent(SceneMetadata.self, forKey: .metadata)
+        components = try c.decodeIfPresent([String: SceneComponent].self, forKey: .components)
+        title = try c.decode(String.self, forKey: .title)
+        nodes = try c.decode([SceneNode].self, forKey: .nodes)
+        parameters = try c.decodeIfPresent([String: SceneParameter].self, forKey: .parameters) ?? [:]
+        bindings = try c.decodeIfPresent([SceneParameterBinding].self, forKey: .bindings) ?? []
+        timeline = try c.decodeIfPresent(SceneTimeline.self, forKey: .timeline)
+        variants = try c.decodeIfPresent([SceneVariant].self, forKey: .variants) ?? []
     }
     func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         var controls = parameters
         for key in controls.keys { controls[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
-        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components)
+        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants)
     }
     func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
@@ -109,6 +123,7 @@ struct SceneDescriptor: Codable, Sendable {
                     throw SceneError.invalid("Parameters need a name and a valid typed default within their limits.")
                 }
             }
+            try SceneVariant.validate(variants)
         }
         var result = nodes
         var controlTargets = Set<SceneControlTarget>()
@@ -268,7 +283,7 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
 enum SceneFormat {
     static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders"]
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants"]
     static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
@@ -278,6 +293,7 @@ enum SceneFormat {
         if scene.canvas == .desktopSpan { result.insert("desktop-span") }
         if !scene.bindings.isEmpty || scene.timeline != nil { result.insert("motion") }
         if scene.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) { result.insert("typed-controls") }
+        if !scene.variants.isEmpty { result.insert("variants") }
         if scene.allNodes.contains(where: { $0.kind == .text }) { result.insert("text") }
         if scene.allNodes.contains(where: { $0.typography?.liveSource != nil }) { result.insert("dynamic-text") }
         if scene.allNodes.contains(where: { $0.kind == .shape }) { result.insert("shapes") }
@@ -375,6 +391,139 @@ struct SceneParameter: Codable, Sendable, Equatable {
         case .color, .choice, .string: try c.encode(text, forKey: .value)
         }
         if type == .choice { try c.encode(choices, forKey: .choices) }
+    }
+}
+
+
+enum SceneControlValue: Codable, Sendable, Equatable {
+    case number(Double)
+    case boolean(Bool)
+    case text(String)
+
+    init(_ parameter: SceneParameter) {
+        switch parameter.type {
+        case .number: self = .number(parameter.value)
+        case .boolean: self = .boolean(parameter.boolean)
+        case .color, .choice, .string: self = .text(parameter.text)
+        }
+    }
+
+    var structurallyValid: Bool {
+        switch self {
+        case .number(let value): return value.isFinite
+        case .boolean: return true
+        case .text(let value): return value.utf8.count <= 4096
+        }
+    }
+
+    func applying(to parameter: SceneParameter) -> SceneParameter? {
+        var result = parameter
+        switch (self, parameter.type) {
+        case (.number(let value), .number):
+            guard value.isFinite, (parameter.min...parameter.max).contains(value) else { return nil }
+            result.value = value
+        case (.boolean(let value), .boolean):
+            result.boolean = value
+        case (.text(let value), .color), (.text(let value), .choice), (.text(let value), .string):
+            result.text = value
+        default:
+            return nil
+        }
+        return result.isValid ? result : nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let value = try? c.decode(Bool.self) { self = .boolean(value) }
+        else if let value = try? c.decode(Double.self) { self = .number(value) }
+        else if let value = try? c.decode(String.self) { self = .text(value) }
+        else { throw DecodingError.dataCorruptedError(in: c, debugDescription: "Variant control values must be JSON scalars.") }
+        guard structurallyValid else {
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Variant control value exceeds its limits.")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard structurallyValid else { throw SceneError.invalid("Variant control value exceeds its limits.") }
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .number(let value): try c.encode(value)
+        case .boolean(let value): try c.encode(value)
+        case .text(let value): try c.encode(value)
+        }
+    }
+}
+
+struct SceneVariant: Codable, Sendable, Equatable {
+    static let maximumCount = 16
+    static let maximumOverrides = 16
+    static let maximumEncodedBytes = 16 * 1024
+
+    var id: UUID
+    var name: String
+    var values: [String: SceneControlValue]
+
+    static func validate(_ variants: [SceneVariant]) throws {
+        guard variants.count <= maximumCount else { throw SceneError.invalid("Use at most 16 scene variants.") }
+        guard Set(variants.map(\.id)).count == variants.count else { throw SceneError.invalid("Scene variant identities must be unique.") }
+        var names = Set<String>()
+        for variant in variants {
+            let trimmed = variant.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, variant.name.count <= 80,
+                  names.insert(trimmed.lowercased()).inserted else {
+                throw SceneError.invalid("Scene variants need unique names of 1–80 characters.")
+            }
+            guard variant.values.count <= maximumOverrides else { throw SceneError.invalid("Use at most 16 overrides per scene variant.") }
+            for (key, value) in variant.values {
+                guard !key.isEmpty, key.utf8.count <= 64, value.structurallyValid else {
+                    throw SceneError.invalid("Scene variant overrides exceed their control/value limits.")
+                }
+            }
+        }
+        let encoded = try JSONEncoder().encode(variants)
+        guard encoded.count <= maximumEncodedBytes else { throw SceneError.invalid("Scene variant data exceeds 16 KiB.") }
+    }
+}
+
+struct SceneVariantDiagnostic: Sendable, Equatable {
+    enum Reason: String, Sendable { case variantUnavailable, missingControl, incompatibleValue }
+    let variantID: UUID?
+    let controlID: String?
+    let reason: Reason
+}
+
+struct SceneVariantApplication: Sendable {
+    let scene: SceneDescriptor
+    let selectedVariantID: UUID?
+    let diagnostics: [SceneVariantDiagnostic]
+}
+
+extension SceneDescriptor {
+    /// Apply only to the canonical authored descriptor. Runtime control edits belong in
+    /// a separate layer above this result so switching variants always starts from Default.
+    func applyingVariant(id: UUID?) -> SceneVariantApplication {
+        guard let id else {
+            return SceneVariantApplication(scene: self, selectedVariantID: nil, diagnostics: [])
+        }
+        guard let variant = variants.first(where: { $0.id == id }) else {
+            return SceneVariantApplication(scene: self, selectedVariantID: nil,
+                diagnostics: [.init(variantID: id, controlID: nil, reason: .variantUnavailable)])
+        }
+        var applied = self
+        var diagnostics: [SceneVariantDiagnostic] = []
+        for key in variant.values.keys.sorted() {
+            guard let value = variant.values[key] else { continue }
+            guard let parameter = applied.parameters[key] else {
+                diagnostics.append(.init(variantID: id, controlID: key, reason: .missingControl))
+                continue
+            }
+            guard let replacement = value.applying(to: parameter) else {
+                diagnostics.append(.init(variantID: id, controlID: key, reason: .incompatibleValue))
+                continue
+            }
+            applied.parameters[key] = replacement
+        }
+        return SceneVariantApplication(scene: applied, selectedVariantID: id, diagnostics: diagnostics)
     }
 }
 
@@ -695,6 +844,7 @@ struct LocalSceneSource: SceneSource {
         let parameters: [String: SceneParameter]?
         let bindings: [SceneParameterBinding]?
         let timeline: SceneTimeline?
+        let variants: [SceneVariant]?
         let layers: [Node]?
         let nodes: [Node]?
         let components: [String: Component]?
@@ -893,7 +1043,10 @@ struct LocalSceneSource: SceneSource {
             guard manifest.version == SceneFormat.revision, definitions.count <= 8 else { throw SceneError.invalid("Use at most eight presets in revision 21.") }
             components = try definitions.mapValues { .init(name: $0.name, node: try decode($0.node, depth: 0), parameters: $0.parameters, bindings: $0.bindings) }
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components)
+        guard manifest.version == SceneFormat.revision || scene.variants == nil else {
+            throw SceneError.invalid("Scene variants require revision 21.")
+        }
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [])
         if manifest.version == SceneFormat.revision {
             guard SceneFormat.features(result).isSubset(of: Set(manifest.features ?? [])) else { throw SceneError.invalid("The manifest is missing required scene features.") }
         } else if result.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) {
@@ -1118,6 +1271,9 @@ enum ScenePackageWriter {
         if controlled {
             contents["parameters"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.parameters))
             contents["bindings"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.bindings))
+        }
+        if !scene.variants.isEmpty {
+            contents["variants"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.variants))
         }
         var manifest: [String: Any] = ["version": SceneFormat.revision, "title": scene.title,
             "features": SceneFormat.features(scene).sorted(),
