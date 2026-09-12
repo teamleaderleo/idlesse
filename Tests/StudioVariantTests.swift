@@ -75,6 +75,21 @@ import Foundation
         state.pruneRemovedControls()
         precondition(state.scene.variants.allSatisfy { $0.values["amount"] == nil })
 
+        // A named look authored in Studio survives serialization/reopen with sparse values.
+        scene = SceneDescriptor(title: "Undertow", nodes: [SceneNode(content: .gradient)], parameters: [
+            "depth": .init(name: "Depth", value: 0.2, min: 0, max: 1)
+        ])
+        state = SceneVariantAuthoringState(scene: scene)
+        let midnight = try state.create(name: "Midnight")
+        var midnightValues = state.visibleParameters
+        midnightValues["depth"]?.value = 0.85
+        try state.updateVisibleParameters(midnightValues)
+        let reopened = try JSONDecoder().decode(SceneDescriptor.self, from: JSONEncoder().encode(state.scene))
+        let reopenedMidnight = reopened.variants.first { $0.id == midnight }
+        precondition(reopenedMidnight?.name == "Midnight")
+        precondition(reopenedMidnight?.values == ["depth": .number(0.85)])
+        precondition(reopened.applyingVariant(id: midnight).scene.parameters["depth"]?.value == 0.85)
+
         // The 16-variant limit is enforced by the authoring layer as well as package validation.
         scene = SceneDescriptor(title: "Limit", nodes: [SceneNode(content: .gradient)])
         scene.variants = (0..<16).map { .init(id: UUID(), name: "Look \($0)", values: [:]) }
