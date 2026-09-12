@@ -132,6 +132,17 @@ if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 10. Custom shader-effect scene semantics. Foundation-only coverage verifies the
+# revision-21 feature gate, package round-trip and authored hard limits.
+SHADER_EFFECT_SRCS=(
+  Sources/Runtime/Scene.swift
+  Tests/ShaderEffectSceneTests.swift
+)
+if needs_build "build/tests/shader-effects" "${SHADER_EFFECT_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${SHADER_EFFECT_SRCS[@]}" -o build/tests/shader-effects &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -147,3 +158,4 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/shader-effects
