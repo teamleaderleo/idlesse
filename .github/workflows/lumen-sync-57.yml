@@ -25,7 +25,8 @@ jobs:
           if ! git merge --no-edit origin/main; then
             echo "Conflicts:"
             git diff --name-only --diff-filter=U
-            git status --short
+            echo "SceneLibrary conflict context:"
+            grep -n -C 60 -E '^(<<<<<<<|=======|>>>>>>>)' Sources/Harness/SceneLibraryController.swift || true
             exit 1
           fi
       - name: Remove branch-only sync helper and push
