@@ -442,9 +442,10 @@ final class DisplayAssignmentViewController: NSViewController {
 }
 
 /// Standalone compatibility shell used by the existing #52 menu/command path.
-/// Home embeds `destinationController` directly, preserving one visual Displays
-/// implementation across both windows.
+/// After Home bootstrap its old command forwards to Home's single Displays
+/// destination; the window remains only as a pre-bootstrap fallback.
 final class DisplayAssignmentController: NSWindowController {
+    static var homePresenter: (() -> Void)?
     let destinationController: DisplayAssignmentViewController
 
     init(wallpaper: WallpaperController) {
@@ -464,6 +465,10 @@ final class DisplayAssignmentController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func present() {
+        if let homePresenter = Self.homePresenter {
+            homePresenter()
+            return
+        }
         destinationController.activate()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
