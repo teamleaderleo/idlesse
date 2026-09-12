@@ -90,39 +90,14 @@ build_saver() {
   file "$SAVER/Contents/MacOS/Idlesse"
 }
 
-APP_SOURCES=(
-  "$ROOT/Sources/Runtime/SceneRenderer.swift"
-  "$ROOT/Sources/Runtime/SceneClock.swift"
-  "$ROOT/Sources/Runtime/AudioBandAnalyzer.swift"
-  "$ROOT/Sources/Runtime/SystemAudioInput.swift"
-  "$ROOT/Sources/Runtime/SceneWatcher.swift"
-  "$ROOT/Sources/Runtime/GradientRenderer.swift"
-  "$ROOT/Sources/Runtime/MetalSceneRenderer.swift"
-  "$ROOT/Sources/Wallpaper/WallpaperController.swift"
-  "$ROOT/Sources/Wallpaper/AmbientModesController.swift"
-  "$ROOT/Sources/Wallpaper/DesktopComfortController.swift"
-  "$ROOT/Sources/Wallpaper/WallpaperSmoke.swift"
-  "$ROOT/Sources/Harness/SceneTimelineView.swift"
-  "$ROOT/Sources/Harness/ScenePreviewHost.swift"
-  "$ROOT/Sources/Harness/SceneVideoExporter.swift"
-  "$ROOT/Sources/Harness/SceneParameterControls.swift"
-  "$ROOT/Sources/Harness/SceneLayerList.swift"
-  "$ROOT/Sources/Harness/SceneCanvasInteraction.swift"
-  "$ROOT/Sources/Harness/SceneEditorController.swift"
-  "$ROOT/Sources/Harness/SceneDocument.swift"
-  "$ROOT/Sources/Harness/MediaImport.swift"
-  "$ROOT/Sources/Harness/SceneLibraryStore.swift"
-  "$ROOT/Sources/Harness/LibraryGridView.swift"
-  "$ROOT/Sources/Harness/SceneLibraryController.swift"
-  "$ROOT/Sources/Harness/StudioInspector.swift"
-  "$ROOT/Sources/Harness/StudioWindowController.swift"
-  "$ROOT/Sources/Harness/Benchmark.swift"
-  "$ROOT/Sources/Harness/AudioSmoke.swift"
-  "$ROOT/Sources/Harness/SceneConformance.swift"
-  "$ROOT/Sources/Harness/DesktopQualification.swift"
-  "$ROOT/Sources/Harness/AppSettingsController.swift"
-  "$ROOT/Sources/Harness/main.swift"
-)
+# Keep the raw swiftc release/fallback path aligned with the SwiftPM app target:
+# every Swift source under Sources belongs to IdlesseApp except DesktopMenu,
+# which is compiled separately as an application extension below.
+APP_SOURCES=()
+while IFS= read -r source; do
+  APP_SOURCES+=( "$source" )
+done < <(find "$ROOT/Sources" -type f -name '*.swift' \
+  ! -path "$ROOT/Sources/DesktopMenu/*" -print | LC_ALL=C sort)
 
 APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver UniformTypeIdentifiers Carbon )
 
@@ -138,7 +113,7 @@ compile_app_full() {
     "${SWIFT_OPT[@]}" -module-name IdlesseApp )
   local f
   for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
-  xcrun swiftc "${args[@]}" "${SHARED_SOURCES[@]}" "${SAVER_SOURCES[@]}" "${APP_SOURCES[@]}" \
+  xcrun swiftc "${args[@]}" "${APP_SOURCES[@]}" \
     -o "$APP/Contents/MacOS/Idlesse"
 }
 
@@ -199,12 +174,12 @@ build_app() {
   cp "$appex_cache/$appex_hash" "$extension/Contents/MacOS/IdlesseDesktopMenu"
   cp "$ROOT/Sources/DesktopMenu/Info.plist" "$extension/Contents/Info.plist"
   codesign --force --sign - --entitlements "$ROOT/Sources/DesktopMenu/Entitlements.plist" "$extension" >/dev/null
-  codesign --force --sign - "$APP" >/dev/null
   local stamp_sha
   stamp_sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
   if ! git -C "$ROOT" diff --quiet 2>/dev/null; then stamp_sha="$stamp_sha-dirty"; fi
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$stamp_sha" \
     > "$APP/Contents/Resources/build-stamp.txt"
+  codesign --force --sign - "$APP" >/dev/null
 
   log "Development preview ready: $APP"
 }
