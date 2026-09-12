@@ -2,7 +2,7 @@ import Foundation
 
 /// A bounded index of references. Original media stays where the user put it.
 final class SceneLibraryStore {
-    static let catalogVersion = 2
+    static let catalogVersion = 3
     static let maxEntries = 128 // Compatibility alias: individually bookmarked entries.
     static let maxIndividualEntries = 128
     static let maxSourceEntries = 4096
@@ -191,11 +191,48 @@ final class SceneLibraryStore {
             return start < end ? minute >= start && minute < end : minute >= start || minute < end
         }
     }
+    struct SceneSelection: Codable, Equatable, Hashable, Sendable {
+        var sceneID: String
+        var variantID: UUID? = nil
+    }
     struct Collection: Codable, Equatable {
-        var id: String = UUID().uuidString
+        var id: String
         var name: String
-        var sceneIDs: [String] = []
+        var selections: [SceneSelection]
         var playback: Playback?
+        var sceneIDs: [String] {
+            get { selections.map(\.sceneID) }
+            set { selections = newValue.map { SceneSelection(sceneID: $0) } }
+        }
+        func selection(for sceneID: String) -> SceneSelection? {
+            selections.first { $0.sceneID == sceneID }
+        }
+        init(id: String = UUID().uuidString, name: String, sceneIDs: [String] = [],
+             selections: [SceneSelection]? = nil, playback: Playback? = nil) {
+            self.id = id
+            self.name = name
+            self.selections = selections ?? sceneIDs.map { SceneSelection(sceneID: $0) }
+            self.playback = playback
+        }
+        enum CodingKeys: String, CodingKey { case id, name, selections, sceneIDs, playback }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+            name = try values.decode(String.self, forKey: .name)
+            playback = try values.decodeIfPresent(Playback.self, forKey: .playback)
+            if let stored = try values.decodeIfPresent([SceneSelection].self, forKey: .selections) {
+                selections = stored
+            } else {
+                selections = try values.decodeIfPresent([String].self, forKey: .sceneIDs)?.map { SceneSelection(sceneID: $0) } ?? []
+            }
+        }
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(id, forKey: .id)
+            try values.encode(name, forKey: .name)
+            if !selections.isEmpty { try values.encode(selections, forKey: .selections) }
+            try values.encodeIfPresent(playback, forKey: .playback)
+        }
     }
     struct Catalog: Codable {
         var version: Int = SceneLibraryStore.catalogVersion
@@ -368,7 +405,7 @@ final class SceneLibraryStore {
         next.entries.removeAll { $0.id == id }
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
-        for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
+        for i in next.collections.indices { next.collections[i].selections.removeAll { $0.sceneID == id } }
         try save(next)
     }
     @discardableResult func createCollection(name: String) throws -> Collection {
@@ -390,11 +427,20 @@ final class SceneLibraryStore {
         try save(next)
     }
     func toggleMembership(sceneID: String, collectionID: String) throws {
+        try toggleMembership(selection: SceneSelection(sceneID: sceneID), collectionID: collectionID)
+    }
+    func toggleMembership(selection: SceneSelection, collectionID: String) throws {
         var next = catalog
         guard let index = next.collections.firstIndex(where: { $0.id == collectionID }) else { throw failure("Collection no longer exists.") }
-        if next.collections[index].sceneIDs.contains(sceneID) {
-            next.collections[index].sceneIDs.removeAll { $0 == sceneID }
-        } else { next.collections[index].sceneIDs.append(sceneID) }
+        if let existing = next.collections[index].selections.firstIndex(where: { $0.sceneID == selection.sceneID }) {
+            if next.collections[index].selections[existing] == selection {
+                next.collections[index].selections.remove(at: existing)
+            } else {
+                next.collections[index].selections[existing] = selection
+            }
+        } else {
+            next.collections[index].selections.append(selection)
+        }
         try save(next)
     }
     func moveCollection(_ id: String, by offset: Int) throws {
@@ -409,11 +455,11 @@ final class SceneLibraryStore {
     func moveScene(_ sceneID: String, in collectionID: String, by offset: Int) throws {
         var next = catalog
         guard let collection = next.collections.firstIndex(where: { $0.id == collectionID }),
-              let index = next.collections[collection].sceneIDs.firstIndex(of: sceneID),
+              let index = next.collections[collection].selections.firstIndex(where: { $0.sceneID == sceneID }),
               [-1, 1].contains(offset) else { throw failure("Select a scene in a collection.") }
         let destination = index + offset
-        guard next.collections[collection].sceneIDs.indices.contains(destination) else { return }
-        next.collections[collection].sceneIDs.swapAt(index, destination)
+        guard next.collections[collection].selections.indices.contains(destination) else { return }
+        next.collections[collection].selections.swapAt(index, destination)
         try save(next)
     }
     func setPlayback(_ id: String, _ playback: Playback) throws {
@@ -590,7 +636,7 @@ final class SceneLibraryStore {
         guard value.collections.count <= 32,
               Set(value.collections.map(\.id)).count == value.collections.count,
               Set(value.collections.map { $0.name.lowercased() }).count == value.collections.count,
-              value.collections.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.utf8.count <= 120 && $0.id.utf8.count <= 128 && $0.sceneIDs.count <= 256 && Set($0.sceneIDs).count == $0.sceneIDs.count && $0.sceneIDs.allSatisfy { $0.utf8.count <= 128 } })
+              value.collections.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.utf8.count <= 120 && $0.id.utf8.count <= 128 && $0.selections.count <= 256 && Set($0.selections.map(\.sceneID)).count == $0.selections.count && $0.selections.allSatisfy { !$0.sceneID.isEmpty && $0.sceneID.utf8.count <= 128 } })
         else { throw failure("Use unique collection names (1–120 bytes), with at most 32 collections and 256 scenes each.") }
     }
 

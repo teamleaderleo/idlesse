@@ -30,6 +30,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let gridScroll = NSScrollView()
     private let gridView = LibraryGridView()
     private let poster = NSImageView()
+    private let variantPicker = NSPopUpButton()
     private let sceneControlsScroll = NSScrollView()
     private let desktopActions = NSStackView()
     private let activeDesktopLabel = NSTextField(labelWithString: "● On Desktop")
@@ -61,13 +62,24 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var cacheOrder: [String] = []
     private var items: [Item] = []
     private var selected: Item? {
-        didSet { UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID") }
+        didSet {
+            if oldValue?.id != selected?.id { selectedVariantID = nil; variantPicker.isHidden = true }
+            UserDefaults.standard.set(selected?.id, forKey: "Idlesse.library.selectedID")
+        }
     }
+    private var selectedVariantID: UUID?
     struct DesktopState {
         let url: URL?
         let paused: Bool
         let canPause: Bool
         let scene: SceneDescriptor?
+        let variantID: UUID?
+        let modified: Bool
+        init(url: URL?, paused: Bool, canPause: Bool, scene: SceneDescriptor?,
+             variantID: UUID? = nil, modified: Bool = false) {
+            self.url = url; self.paused = paused; self.canPause = canPause; self.scene = scene
+            self.variantID = variantID; self.modified = modified
+        }
     }
     var desktopStateProvider: (() -> DesktopState)?
     var onToggleDesktopPause: (() -> Void)?
@@ -78,6 +90,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var desktopPaused = false
     private var desktopCanPause = false
     private var desktopScene: SceneDescriptor?
+    private var desktopVariantID: UUID?
+    private var desktopModified = false
     /// Launch-restore for the filter popup, matched by title and consumed by
     /// the first reload (a deleted collection falls back to All Wallpapers).
     private var pendingFilterTitle: String?
@@ -158,11 +172,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let opened = try open(item)
             try store.used(item.id)
             retainUseAccess(opened.access)
-            onUse(opened.url)
+            if let onUseVariant { onUseVariant(opened.url, collection.selection(for: item.id)?.variantID) }
+            else { onUse(opened.url) }
         } catch { detail.stringValue = "Rotation: " + error.localizedDescription }
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
+    var onUseVariant: ((URL, UUID?) -> Void)?
+    var onEditVariant: ((URL, Bool, UUID?) -> Void)?
     /// Hover-peek: transient desktop preview while hovering, revert on exit.
     var onPeek: ((URL) -> Void)?
     var onEndPeek: ((Bool) -> Void)?
@@ -254,6 +271,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         detail.textColor = .secondaryLabelColor
         favorite.target = self; favorite.action = #selector(toggleFavorite)
+        variantPicker.target = self; variantPicker.action = #selector(variantChanged)
+        variantPicker.setAccessibilityLabel("Scene variant")
+        variantPicker.isHidden = true
         apply.target = self; apply.action = #selector(useScene)
         edit.target = self; edit.action = #selector(editScene)
         clearSearchButton.target = self; clearSearchButton.action = #selector(clearSearch)
@@ -266,7 +286,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
         let heading = NSStackView(views: [titleLabel, NSView(), favorite])
         heading.orientation = .horizontal
-        let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
+        let primary = NSStackView(views: [variantPicker, apply, edit, more, clearSearchButton])
         primary.spacing = 10
         activeDesktopLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         activeDesktopLabel.textColor = .controlAccentColor
@@ -375,6 +395,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         desktopPaused = state.paused
         desktopCanPause = state.canPause
         desktopScene = state.scene
+        desktopVariantID = state.variantID
+        desktopModified = state.modified
         activeID = state.url.flatMap { itemID(for: $0) }
     }
 
@@ -391,6 +413,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private func updateDesktopControls(force: Bool = false) {
         let activeSelected = activeURL != nil && selected?.id == activeID
         desktopActions.isHidden = !activeSelected
+        if activeSelected {
+            let variantName = desktopVariantID.flatMap { id in desktopScene?.variants.first(where: { $0.id == id })?.name }
+            activeDesktopLabel.stringValue = "● On Desktop" + (variantName.map { " · " + $0 } ?? "") + (desktopModified ? " · Modified" : "")
+        }
         pauseDesktop.title = desktopPaused ? "Resume" : "Pause"
         pauseDesktop.isEnabled = activeSelected && desktopCanPause
         previousDesktop.isEnabled = activeSelected && items.count > 1
@@ -802,13 +828,42 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return OpenedItem(url: access.url, access: access)
     }
     @objc private func refreshPreview() {
-        if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
+        if let selected {
+            let prefix = selected.id + "|"
+            for key in cache.keys where key.hasPrefix(prefix) { cache.removeValue(forKey: key) }
+            cacheOrder.removeAll { $0.hasPrefix(prefix) }
+        }
         preview()
     }
+    private func variantCacheKey(itemID: String, variantID: UUID?) -> String {
+        itemID + "|" + (variantID?.uuidString ?? "default")
+    }
+    private func configureVariantPicker(scene: SceneDescriptor) {
+        variantPicker.removeAllItems()
+        variantPicker.addItem(withTitle: "Default")
+        for variant in scene.variants {
+            variantPicker.addItem(withTitle: variant.name)
+            variantPicker.lastItem?.representedObject = variant.id.uuidString
+        }
+        if let selectedVariantID, let index = scene.variants.firstIndex(where: { $0.id == selectedVariantID }) {
+            variantPicker.selectItem(at: index + 1)
+        } else {
+            selectedVariantID = nil
+            variantPicker.selectItem(at: 0)
+        }
+        variantPicker.isHidden = scene.variants.isEmpty
+    }
+    @objc private func variantChanged() {
+        if let raw = variantPicker.selectedItem?.representedObject as? String { selectedVariantID = UUID(uuidString: raw) }
+        else { selectedVariantID = nil }
+        preview()
+    }
+
     private func preview() {
         task?.cancel(); task = nil; generation += 1
         let token = generation
         poster.image = nil
+        if selected == nil { variantPicker.isHidden = true }
         favorite.isEnabled = selected != nil
         apply.isEnabled = selected != nil
         edit.isEnabled = selected != nil
@@ -850,25 +905,31 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let revision = try await Task.detached(priority: .utility) { try PosterRevision.read(url) }.value
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
-                if let cached = self.cache[selected.id], cached.revision == revision {
+                let scene = try await LocalSceneSource().resolve(url)
+                try Task.checkCancellation()
+                guard token == self.generation else { return }
+                self.configureVariantPicker(scene: scene)
+                let application = scene.applyingVariant(id: self.selectedVariantID)
+                self.selectedVariantID = application.selectedVariantID
+                let effectiveScene = application.scene
+                let cacheKey = self.variantCacheKey(itemID: selected.id, variantID: self.selectedVariantID)
+                if let cached = self.cache[cacheKey], cached.revision == revision {
                     self.poster.image = cached.image
                     self.detail.stringValue = cached.note
                     return
                 }
-                self.cache.removeValue(forKey: selected.id)
-                let scene = try await LocalSceneSource().resolve(url)
-                try Task.checkCancellation()
-                guard token == self.generation else { return }
+                self.cache.removeValue(forKey: cacheKey)
                 let image: NSImage
-                let previewTime = scene.metadata?.previewTime ?? 2
+                let previewTime = effectiveScene.metadata?.previewTime ?? 2
                 let sourceDetails = try await Self.sourceDetails(url)
-                let note = sourceDetails.isEmpty ? (scene.animated ? "Animated scene" : "Scene") : String(sourceDetails.dropFirst(3))
+                let baseNote = sourceDetails.isEmpty ? (effectiveScene.animated ? "Animated scene" : "Scene") : String(sourceDetails.dropFirst(3))
+                let note = baseNote + (self.selectedVariantID.flatMap { id in scene.variants.first(where: { $0.id == id })?.name }.map { " · " + $0 } ?? "")
                 let clock = SceneClock(now: { 0 })
-                try clock.configure(timeline: scene.timeline)
+                try clock.configure(timeline: effectiveScene.timeline)
                 try clock.seek(to: previewTime)
-                let renderer = try MetalSceneRenderer(playable: scene, bounds: NSRect(x: 0, y: 0, width: 1024, height: 576), scale: 1, clock: clock, onError: { _ in })
+                let renderer = try MetalSceneRenderer(playable: effectiveScene, bounds: NSRect(x: 0, y: 0, width: 1024, height: 576), scale: 1, clock: clock, onError: { _ in })
                 defer { renderer.releaseResources() }
-                try await renderer.prepareOfflineVideo(at: scene.timeline?.videosFollowScene == true ? clock.time : previewTime,
+                try await renderer.prepareOfflineVideo(at: effectiveScene.timeline?.videosFollowScene == true ? clock.time : previewTime,
                                                        size: CGSize(width: 1024, height: 576))
                 try Task.checkCancellation()
                 let bytes = try renderer.renderFrame(signals: .init(time: clock.time), width: 1024, height: 576, sampleVideo: false)
@@ -885,10 +946,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 guard after == revision else { throw SceneError.invalid("Scene changed while preparing its preview. Select it again to retry.") }
-                self.cacheOrder.removeAll { $0 == selected.id }
+                self.cacheOrder.removeAll { $0 == cacheKey }
                 while self.cacheOrder.count >= 4 { self.cache.removeValue(forKey: self.cacheOrder.removeFirst()) }
-                self.cacheOrder.append(selected.id)
-                self.cache[selected.id] = (image, note, revision)
+                self.cacheOrder.append(cacheKey)
+                self.cache[cacheKey] = (image, note, revision)
                 self.poster.image = image
                 self.detail.stringValue = note
             } catch {
@@ -1212,7 +1273,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return
         }
         if let id = item.representedObject as? String, let selected {
-            do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
+            do {
+                try store.toggleMembership(selection: .init(sceneID: selected.id, variantID: selectedVariantID), collectionID: id)
+                reload()
+            }
             catch { detail.stringValue = error.localizedDescription }
             return
         }
@@ -1330,11 +1394,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             try store.used(selected.id)
             if editing {
                 retainEditAccess(opened.access)
-                onEdit(opened.url, asCopy || selected.builtin != nil)
+                if let onEditVariant { onEditVariant(opened.url, asCopy || selected.builtin != nil, selectedVariantID) }
+                else { onEdit(opened.url, asCopy || selected.builtin != nil) }
             } else {
                 stopRotation()
                 retainUseAccess(opened.access)
-                onUse(opened.url)
+                if let onUseVariant { onUseVariant(opened.url, selectedVariantID) }
+                else { onUse(opened.url) }
                 if !embedded { window?.orderOut(nil) }
             }
         } catch { detail.stringValue = error.localizedDescription }

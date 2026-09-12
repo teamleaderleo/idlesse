@@ -25,17 +25,22 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                 }
                 self.scenePreview.openLibraryScene(url, asCopy: asCopy)
             })
+        library?.onUseVariant = { [weak self] url, variantID in
+            self?.wallpaper.select(url, variantID: variantID, automatic: true)
+        }
         library?.onPeek = { [weak self] url in self?.wallpaper.peek(url) }
         library?.onEndPeek = { [weak self] reverting in
             self?.wallpaper.endPeek(reverting: reverting)
             self?.modes.refresh()
         }
         library?.desktopStateProvider = { [weak self] in
-            guard let self else { return .init(url: nil, paused: false, canPause: false, scene: nil) }
+            guard let self else { return .init(url: nil, paused: false, canPause: false, scene: nil, variantID: nil, modified: false) }
             return .init(url: self.wallpaper.selectedURL,
                          paused: self.wallpaper.pausedByUser,
                          canPause: self.wallpaper.canPauseActiveScene,
-                         scene: self.wallpaper.activeScene)
+                         scene: self.wallpaper.activeScene,
+                         variantID: self.wallpaper.activeVariantID,
+                         modified: self.wallpaper.isActiveSceneModified)
         }
         library?.onToggleDesktopPause = { [weak self] in self?.wallpaper.togglePause() }
         library?.onCycleDesktop = { [weak self] delta in self?.stepWallpaper(delta: delta) }

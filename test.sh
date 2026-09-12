@@ -121,6 +121,17 @@ if needs_build "build/tests/ambient-sets" "${AMBIENT_SET_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 9. Named scene variants. Foundation-only coverage exercises package round trips,
+# sparse application, migration, stale-control handling and hard bounds.
+VARIANT_SRCS=(
+  Sources/Runtime/Scene.swift
+  Tests/VariantTests.swift
+)
+if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${VARIANT_SRCS[@]}" -o build/tests/variants &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -135,3 +146,4 @@ build/tests/comfort
 build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
+build/tests/variants

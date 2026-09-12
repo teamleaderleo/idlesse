@@ -172,6 +172,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var selectedURL: URL?
     private(set) var pausedByUser = false
     private var playable: SceneDescriptor?
+    private var sourceScene: SceneDescriptor?
+    private(set) var activeVariantID: UUID?
+    private(set) var unavailableVariantID: UUID?
+    private var runtimeControlValues: [String: SceneControlValue] = [:]
+    private var variantWarning: String?
     private var activeSharedVideoHub: SharedVideoHub?
     private var retiringSharedVideoHub: SharedVideoHub?
     // Only the interactive host persists state; smoke/qualification controllers stay isolated.
@@ -179,6 +184,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var resumeDefaults = UserDefaults.standard
     private static let resumeKey = "wallpaperResumeBookmark"
     private static let pauseKey = "wallpaperResumePaused"
+    private static let resumeVariantKey = "wallpaperResumeVariantID"
     private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
     private static let origBackdropPrefix = "wallpaperOrigBackdrop."
     private static let stillsDirName = "Idlesse/Desktop Backdrops"
@@ -233,7 +239,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             } else {
                 url = try URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
             }
-            select(url, automatic: true)
+            let variantID = resumeDefaults.string(forKey: Self.resumeVariantKey).flatMap(UUID.init(uuidString:))
+            select(url, variantID: variantID, automatic: true)
         } catch {
             lastReloadError = "The previous wallpaper is unavailable. Choose it again in Wallpapers."
             updateMenu()
@@ -291,6 +298,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             resumeDefaults.set(data, forKey: Self.resumeKey)
             resumeDefaults.set(pausedByUser, forKey: Self.pauseKey)
+            if let persistedVariantID = unavailableVariantID ?? activeVariantID {
+                resumeDefaults.set(persistedVariantID.uuidString, forKey: Self.resumeVariantKey)
+            } else {
+                resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
+            }
         } catch {
             // Never resume an older wallpaper after the latest selection could not be saved.
             resumeDefaults.removeObject(forKey: Self.resumeKey)
@@ -391,8 +403,19 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     weak var comfort: DesktopComfortController?
     private var dimmedForBedtime = false
 
+    var activeVariantName: String? {
+        activeVariantID.flatMap { id in sourceScene?.variants.first(where: { $0.id == id })?.name }
+    }
+    var isActiveSceneModified: Bool { !runtimeControlValues.isEmpty }
+    var activeDisplayName: String {
+        let title = sourceScene?.title ?? playable?.title ?? selectedURL?.deletingPathExtension().lastPathComponent ?? "No wallpaper selected"
+        var parts = [title]
+        if let activeVariantName { parts.append(activeVariantName) }
+        if isActiveSceneModified { parts.append("Modified") }
+        return parts.joined(separator: " · ")
+    }
     var statusDescription: String {
-        let title = playable?.title ?? selectedURL?.deletingPathExtension().lastPathComponent ?? "No wallpaper selected"
+        let title = activeDisplayName
         if isLoading { return "Loading… · " + title }
         guard isRunning else { return title }
         if !suspended, !shouldPause, !surfaces.isEmpty, surfaces.allSatisfy(\.isCovered) {
@@ -403,6 +426,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
     var isRunning: Bool { selectedURL != nil }
     var activeScene: SceneDescriptor? { playable }
+    var activeSourceScene: SceneDescriptor? { sourceScene }
     var canPauseActiveScene: Bool { isRunning && selectedIsAnimated }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
     /// Set by AmbientModesController while a scheduled scene is showing so the
@@ -546,25 +570,87 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onManualSelection: (() -> Void)?
     /// Fires after any successful (non-reload, non-transient) selection with the adopted URL.
     var onSelectionCommitted: ((URL) -> Void)?
+    var onSelectionCommittedVariant: ((URL, UUID?) -> Void)?
 
     // MARK: - Hover peek
 
-    private var prePeekURL: URL?
+    private var prePeekSelection: (url: URL, variantID: UUID?)?
     /// A peek is a transient preview: no resume-bookmark save, no day-scene
     /// adoption, no rotation interference. The previous scene is restored on exit.
-    var isPeeking: Bool { prePeekURL != nil }
+    var isPeeking: Bool { prePeekSelection != nil }
     func peek(_ url: URL) {
-        if prePeekURL == nil { prePeekURL = selectedURL }
+        if prePeekSelection == nil, let selectedURL {
+            prePeekSelection = (selectedURL, unavailableVariantID ?? activeVariantID)
+        }
         guard url != selectedURL else { return }
-        select(url, automatic: true, restoringPause: pausedByUser, transient: true)
+        select(url, variantID: nil, automatic: true, restoringPause: pausedByUser, transient: true)
     }
     func endPeek(reverting: Bool = true) {
-        guard let back = prePeekURL else { return }
-        prePeekURL = nil
-        guard reverting, back != selectedURL else { return }
-        select(back, automatic: true, restoringPause: pausedByUser, transient: true)
+        guard let back = prePeekSelection else { return }
+        prePeekSelection = nil
+        guard reverting, back.url != selectedURL || back.variantID != (unavailableVariantID ?? activeVariantID) else { return }
+        select(back.url, variantID: back.variantID, automatic: true, restoringPause: pausedByUser, transient: true)
     }
-    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil, transient: Bool = false) {
+    private struct EffectiveScene {
+        var scene: SceneDescriptor
+        var selectedVariantID: UUID?
+        var unavailableVariantID: UUID?
+        var runtimeValues: [String: SceneControlValue]
+    }
+    private func compose(source: SceneDescriptor, variantID: UUID?, runtimeValues: [String: SceneControlValue]) -> EffectiveScene {
+        let application = source.applyingVariant(id: variantID)
+        var scene = application.scene
+        var compatible: [String: SceneControlValue] = [:]
+        for (key, value) in runtimeValues {
+            guard let parameter = scene.parameters[key], let replacement = value.applying(to: parameter) else { continue }
+            scene.parameters[key] = replacement
+            compatible[key] = value
+        }
+        return EffectiveScene(scene: scene, selectedVariantID: application.selectedVariantID,
+            unavailableVariantID: variantID != nil && application.selectedVariantID == nil ? variantID : nil,
+            runtimeValues: compatible)
+    }
+    private func updateLiveScene(_ next: SceneDescriptor, rollingBackTo previous: SceneDescriptor?) throws {
+        _ = try next.evaluated()
+        for surface in surfaces {
+            guard surface.updateScene(next) else {
+                if let previous { surfaces.forEach { _ = $0.updateScene(previous) } }
+                throw SceneError.invalid("The scene controls could not be applied. The previous values were restored.")
+            }
+        }
+    }
+    private func applyVariantSelection(_ id: UUID?, persist: Bool) throws {
+        guard let sourceScene, let selectedURL, !isLoading else {
+            throw SceneError.invalid("Select an active scene before choosing a variant.")
+        }
+        let previous = playable
+        let effective = compose(source: sourceScene, variantID: id, runtimeValues: [:])
+        try updateLiveScene(effective.scene, rollingBackTo: previous)
+        playable = effective.scene
+        activeVariantID = effective.selectedVariantID
+        unavailableVariantID = effective.unavailableVariantID
+        runtimeControlValues = [:]
+        variantWarning = effective.unavailableVariantID == nil ? nil : "Saved variant is unavailable; using Default."
+        syncSystemBackdrop(scene: effective.scene, sourceURL: selectedURL, request: generation)
+        if persist { saveSelection() }
+        updateMenu()
+    }
+    func setActiveVariant(_ id: UUID?) throws { try applyVariantSelection(id, persist: true) }
+
+    func select(_ url: URL, variantID: UUID? = nil, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil, transient: Bool = false) {
+        if !reloading, !isLoading, let selectedURL, sourceScene != nil,
+           selectedURL.standardizedFileURL == url.standardizedFileURL {
+            if !automatic { onManualSelection?() }
+            do {
+                try applyVariantSelection(variantID, persist: !transient)
+                if !transient {
+                    onSelectionCommitted?(url)
+                    onSelectionCommittedVariant?(url, activeVariantID)
+                }
+                onStart?()
+            } catch { showError(error.localizedDescription) }
+            return
+        }
         if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
         generation += 1
@@ -586,7 +672,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
             }
             do {
-                let playable = try await self.source.resolve(url)
+                let sourceScene = try await self.source.resolve(url)
+                let requestedVariantID = reloading ? (variantID ?? self.unavailableVariantID ?? self.activeVariantID) : variantID
+                let retainedRuntime = reloading ? self.runtimeControlValues : [:]
+                let effective = self.compose(source: sourceScene, variantID: requestedVariantID, runtimeValues: retainedRuntime)
+                let playable = effective.scene
                 for node in playable.allNodes where node.kind == .video {
                     guard let assetURL = node.assetURL else { continue }
                     let asset = AVURLAsset(url: assetURL)
@@ -624,6 +714,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.selectedURL = url
                 self.scopeStarted = access
                 self.playable = playable
+                self.sourceScene = sourceScene
+                self.activeVariantID = effective.selectedVariantID
+                self.unavailableVariantID = effective.unavailableVariantID
+                self.runtimeControlValues = effective.runtimeValues
+                self.variantWarning = effective.unavailableVariantID == nil ? nil : "Saved variant is unavailable; using Default."
                 adopted = true
                 if !reloading { self.pausedByUser = restoringPause ?? false }
                 if !reuseClock {
@@ -639,7 +734,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.clock.setPaused(self.suspended || self.shouldPause)
                 self.lastReloadError = nil
                 self.revision += 1
-                self.watch(url: url, scene: playable)
+                self.watch(url: url, scene: sourceScene)
                 self.surfaces = replacement
                 self.activeSharedVideoHub = newHub
                 self.activeSharedVideoHub?.setPaused(self.shouldPause)
@@ -656,7 +751,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.syncSystemBackdrop(scene: playable, sourceURL: url, request: request)
                 if !transient { self.saveSelection() }
                 self.logState("select-done")
-                if !reloading && !transient { self.onSelectionCommitted?(url) }
+                if !reloading && !transient {
+                    self.onSelectionCommitted?(url)
+                    self.onSelectionCommittedVariant?(url, self.activeVariantID)
+                }
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
@@ -678,7 +776,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         guard url.pathExtension.lowercased() == "idlesse" else { return }
         watcher = SceneWatcher(package: url, assets: scene.assetNodes.flatMap { $0.assets }) { [weak self] in
             guard let self, self.selectedURL == url else { return }
-            self.select(url, reloading: true)
+            self.select(url, variantID: self.unavailableVariantID ?? self.activeVariantID, reloading: true)
         }
     }
 
@@ -943,6 +1041,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         if persistsSelection {
             resumeDefaults.removeObject(forKey: Self.resumeKey)
             resumeDefaults.removeObject(forKey: Self.pauseKey)
+            resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
         }
         onManualSelection?()
         let wasActive = isRunning || isLoading
@@ -964,6 +1063,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         scopeStarted = false
         selectedURL = nil
         playable = nil
+        sourceScene = nil
+        activeVariantID = nil
+        unavailableVariantID = nil
+        runtimeControlValues = [:]
+        variantWarning = nil
         isLoading = false
         pausedByUser = false
         logState("stop")
@@ -1163,7 +1267,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             (suspended ? "Waiting for your display" : (shouldPause && selectedIsAnimated ? "Scene paused" : "Wallpaper running"))
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
         if let lastReloadError { menu.addItem(withTitle: "Edit not applied: " + lastReloadError, action: nil, keyEquivalent: "") }
-        if let selectedURL { menu.addItem(withTitle: selectedURL.lastPathComponent, action: nil, keyEquivalent: "") }
+        if let variantWarning { menu.addItem(withTitle: variantWarning, action: nil, keyEquivalent: "") }
+        if selectedURL != nil { menu.addItem(withTitle: activeDisplayName, action: nil, keyEquivalent: "") }
         if let playable, !playable.parameters.isEmpty {
             let controls = addItem(menu, "Scene Controls…", #selector(editControls))
             controls.isEnabled = !isLoading
@@ -1261,21 +1366,24 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         updateMenu()
     }
     func applySceneParameters(_ parameters: [String: SceneParameter]) throws {
-        guard let original = playable, !isLoading,
-              Set(parameters.keys) == Set(original.parameters.keys),
-              parameters.values.allSatisfy(\.isValid) else {
+        guard let sourceScene, let original = playable, let selectedURL, !isLoading else {
             throw SceneError.invalid("The active scene controls changed. Select the wallpaper again and retry.")
         }
-        var next = original
-        next.parameters = parameters
-        _ = try next.evaluated()
-        for surface in surfaces {
-            guard surface.updateScene(next) else {
-                surfaces.forEach { _ = $0.updateScene(original) }
-                throw SceneError.invalid("The scene controls could not be applied. The previous values were restored.")
-            }
+        let base = sourceScene.applyingVariant(id: activeVariantID).scene
+        guard Set(parameters.keys) == Set(base.parameters.keys), parameters.values.allSatisfy(\.isValid) else {
+            throw SceneError.invalid("The active scene controls changed. Select the wallpaper again and retry.")
         }
-        playable = next
+        var runtime: [String: SceneControlValue] = [:]
+        for key in parameters.keys {
+            guard let proposed = parameters[key], let inherited = base.parameters[key] else { continue }
+            let value = SceneControlValue(proposed)
+            if value != SceneControlValue(inherited) { runtime[key] = value }
+        }
+        let effective = compose(source: sourceScene, variantID: activeVariantID, runtimeValues: runtime)
+        try updateLiveScene(effective.scene, rollingBackTo: original)
+        playable = effective.scene
+        runtimeControlValues = effective.runtimeValues
+        syncSystemBackdrop(scene: effective.scene, sourceURL: selectedURL, request: generation)
         updateMenu()
     }
 
