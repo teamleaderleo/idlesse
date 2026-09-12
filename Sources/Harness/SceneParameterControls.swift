@@ -20,15 +20,16 @@ final class SceneParameterControls: NSView {
         var y = bounds.height
         for (index, key) in keys.enumerated() {
             let parameter = parameters[key]!
+            let displayName = MetalShaderInput.displayName(parameter.name)
             y -= CGFloat(heights[index])
-            let title = NSTextField(labelWithString: parameter.name)
+            let title = NSTextField(labelWithString: displayName)
             title.frame = NSRect(x: 0, y: y + CGFloat(heights[index]) - 30, width: 250, height: 20)
             addSubview(title)
             if parameter.type != .number {
                 let control: NSControl
                 switch parameter.type {
                 case .boolean:
-                    let toggle = NSButton(checkboxWithTitle: parameter.name, target: nil, action: nil)
+                    let toggle = NSButton(checkboxWithTitle: displayName, target: nil, action: nil)
                     toggle.state = parameter.boolean ? .on : .off
                     control = toggle; title.isHidden = true
                 case .choice:
@@ -52,7 +53,7 @@ final class SceneParameterControls: NSView {
                 case .number: preconditionFailure()
                 }
                 control.frame = NSRect(x: 0, y: y + 4, width: 330, height: parameter.type == .string ? 72 : 26)
-                control.setAccessibilityLabel(parameter.name)
+                control.setAccessibilityLabel(displayName)
                 addSubview(control); typedControls[key] = control
                 continue
             }
@@ -63,7 +64,7 @@ final class SceneParameterControls: NSView {
                                   target: self, action: #selector(changed))
             slider.frame = NSRect(x: 0, y: y + 4, width: 330, height: 24)
             slider.tag = index; slider.isContinuous = true
-            slider.setAccessibilityLabel(parameter.name)
+            slider.setAccessibilityLabel(displayName)
             addSubview(slider); sliders[key] = slider
         }
     }
@@ -71,7 +72,9 @@ final class SceneParameterControls: NSView {
     @objc private func changed(_ sender: NSSlider) { labels[sender.tag]?.stringValue = String(format: "%.3f", sender.doubleValue) }
     static func create(window: NSWindow, node: SceneNode?, completion: @escaping (SceneParameter) -> Void) {
         let dialog = NSAlert(); dialog.messageText = "New Scene Control"
-        dialog.informativeText = "Numbers connect through Bind…. Other types can control the selected layer’s visibility, blend mode, text or fill."
+        dialog.informativeText = node?.kind == .shader
+            ? "Create an ordinary scene control. For a shader input, choose an unconnected control plus a slot 0–7 and identifier; the shader reads inputs.slotN."
+            : "Numbers connect through Bind…. Other types can control the selected layer’s visibility, blend mode, text or fill."
         dialog.addButton(withTitle: "Create"); dialog.addButton(withTitle: "Cancel")
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
         let type = NSPopUpButton(); type.addItems(withTitles: ["Number", "Toggle", "Color", "Choice", "Text"])
@@ -82,6 +85,14 @@ final class SceneParameterControls: NSView {
         for (name, field) in zip(["Name", "Default (toggle: true/false; color: #RRGGBB)", "Number minimum", "Number maximum", "Choice options (one per comma)"], fields) {
             stack.addArrangedSubview(NSTextField(labelWithString: name)); stack.addArrangedSubview(field)
             field.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        }
+        let shaderID = NSTextField(string: "")
+        let shaderSlot = NSTextField(string: "0")
+        if node?.kind == .shader {
+            stack.addArrangedSubview(NSTextField(labelWithString: "Shader input identifier (optional; letters/digits/underscore)"))
+            stack.addArrangedSubview(shaderID); shaderID.widthAnchor.constraint(equalToConstant: 360).isActive = true
+            stack.addArrangedSubview(NSTextField(labelWithString: "Shader slot (0–7)"))
+            stack.addArrangedSubview(shaderSlot); shaderSlot.widthAnchor.constraint(equalToConstant: 80).isActive = true
         }
         dialog.accessoryView = stack
         dialog.beginSheetModal(for: window) { response in
@@ -99,6 +110,19 @@ final class SceneParameterControls: NSView {
                 choices: fields[4].stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             default: parameter = .init(name: name, type: .string, text: value)
             }
+
+            let shaderIdentifier = shaderID.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !shaderIdentifier.isEmpty {
+                guard node?.kind == .shader, target.indexOfSelectedItem == 0, type.indexOfSelectedItem != 4,
+                      let slot = Int(shaderSlot.stringValue),
+                      let declared = try? MetalShaderInput.declaredName(name, slot: slot, id: shaderIdentifier) else {
+                    let error = NSAlert(); error.messageText = "Invalid shader input"
+                    error.informativeText = "Use an unconnected number, toggle, color or choice; slot 0–7; and a Metal-safe identifier."
+                    error.beginSheetModal(for: window); return
+                }
+                parameter.name = declared
+            }
+
             guard !name.isEmpty, name.count <= 80, parameter.isValid else {
                 let error = NSAlert(); error.messageText = "Invalid control"
                 error.informativeText = "Check the default, limits and choice options. Nothing was added."
@@ -119,7 +143,7 @@ final class SceneParameterControls: NSView {
     static func present(scene: SceneDescriptor, window: NSWindow?, completion: @escaping ([String: SceneParameter]) -> Void) {
         let alert = NSAlert()
         alert.messageText = "Scene Controls"
-        alert.informativeText = scene.parameters.isEmpty ? "This scene has no controls yet. Select a layer and use Bind… to create one." : "Adjust the controls, then Apply. Studio saves these values as scene defaults; desktop changes last until the scene is reloaded."
+        alert.informativeText = scene.parameters.isEmpty ? "This scene has no controls yet. Select a layer and use Bind… to create one." : "Adjust the controls, then Apply. Studio saves these values as scene defaults; shader inputs use this same control list."
         alert.addButton(withTitle: "Apply"); alert.addButton(withTitle: "Cancel")
         alert.buttons[0].isEnabled = !scene.parameters.isEmpty
         let controls = SceneParameterControls(parameters: scene.parameters)

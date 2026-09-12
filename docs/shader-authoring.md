@@ -24,9 +24,10 @@ A successful Apply is an ordinary Studio content edit: document Undo/Redo snapsh
 
 Revision 21 remains the container version. Saved shader scenes declare the `shaders` feature and round-trip source plus speed through ordinary `.idlesse` Save/Open. Shader limits (1–32768 UTF-8 bytes, speed 0.01–10), node budgets and renderer budgets stay unchanged.
 
-## Typed uniforms follow-up
+## Typed shader inputs
 
-Custom user uniforms are deliberately outside this pass. A future implementation should map shader inputs onto the existing typed scene-control model instead of adding a separate shader parameter system.
+Shaders can read up to eight fixed typed-input slots from `ShaderInputs` at fragment buffer 2. Studio authors those inputs as ordinary scene controls, so number, toggle, color and choice values stay in the existing `SceneDescriptor.parameters` model and Controls UI. Existing two-argument procedural shaders continue to work unchanged.
 
+See `docs/shader-inputs.md` for slot mapping, declaration limits and package behavior.
 
 Older wording that called these “GLSL shader layers” was inaccurate; Idlesse compiles Metal source at runtime.
