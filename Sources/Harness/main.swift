@@ -30,6 +30,20 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.wallpaper.endPeek(reverting: reverting)
             self?.modes.refresh()
         }
+        library?.desktopStateProvider = { [weak self] in
+            guard let self else { return .init(url: nil, paused: false, canPause: false, scene: nil) }
+            return .init(url: self.wallpaper.selectedURL,
+                         paused: self.wallpaper.pausedByUser,
+                         canPause: self.wallpaper.canPauseActiveScene,
+                         scene: self.wallpaper.activeScene)
+        }
+        library?.onToggleDesktopPause = { [weak self] in self?.wallpaper.togglePause() }
+        library?.onCycleDesktop = { [weak self] delta in self?.stepWallpaper(delta: delta) }
+        library?.onApplyDesktopParameters = { [weak self] parameters in
+            guard let self else { return }
+            try self.wallpaper.applySceneParameters(parameters)
+        }
+        library?.refreshDesktopState()
         }
         wallpaper.onManualSelection = { [weak self] in
             self?.library?.stopRotation()
@@ -114,6 +128,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
         wallpaper.onStop = { [weak self] in
             self?.library?.releaseActiveUseAccess()
+            self?.library?.refreshDesktopState()
             self?.showLibrary()
         }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
@@ -122,10 +137,14 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.onSelectionCommitted = { [weak self] url in
             self?.modes.adoptManualSelection(url)
             self?.noteRecentScene(url)
+            self?.library?.refreshDesktopState()
         }
         hotKeys.onNext = { [weak self] in self?.stepWallpaper(delta: 1) }
         hotKeys.onPrevious = { [weak self] in self?.stepWallpaper(delta: -1) }
-        hotKeys.onTogglePause = { [weak self] in self?.wallpaper.togglePause() }
+        hotKeys.onTogglePause = { [weak self] in
+            self?.wallpaper.togglePause()
+            self?.library?.refreshDesktopState()
+        }
         hotKeys.start()
         wallpaper.comfort = comfort
         comfort.onDimmingChanged = { [weak self] value in
