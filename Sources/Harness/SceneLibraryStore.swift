@@ -7,7 +7,7 @@ final class SceneLibraryStore {
     static let maxIndividualEntries = 128
     static let maxSourceEntries = 4096
     static let maxSources = 32
-    /// JSON remains a bounded compatibility/migration source until the SQLite catalog lands.
+    /// JSON is retained as a bounded migration/recovery snapshot after SQLite activates.
     static let maxIndexBytes = 4_194_304
     static let maxBookmarkBytes = 16_384
 
@@ -232,21 +232,40 @@ final class SceneLibraryStore {
         }
     }
 
+    private enum PersistenceMode { case json, sqlite, recoveryJSON }
+
     private(set) var catalog = Catalog()
+    private(set) var recoveryMessage: String?
     let file: URL
+    private var persistenceMode: PersistenceMode = .json
+
+    var usesSQLiteCatalog: Bool { persistenceMode == .sqlite }
+    var sqliteDatabaseURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).database }
+    var backendSelectorURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).selector }
 
     init(file: URL) throws {
         self.file = file
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
-        guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
-        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: file))
-        guard (1...Self.catalogVersion).contains(decoded.version) else {
-            throw failure("This Library index was written by a newer Idlesse version.")
+        if try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file) {
+            do {
+                let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
+                guard (1...Self.catalogVersion).contains(decoded.version) else {
+                    throw Self.libraryFailure("This Library catalog was written by a newer Idlesse version.")
+                }
+                try validateCatalog(decoded)
+                catalog = decoded
+                persistenceMode = .sqlite
+                return
+            } catch {
+                guard FileManager.default.fileExists(atPath: file.path) else { throw error }
+                let recovered = try loadJSONCatalog()
+                catalog = recovered
+                persistenceMode = .recoveryJSON
+                recoveryMessage = "The SQLite Library catalog failed verification. Idlesse opened the retained JSON recovery snapshot."
+                return
+            }
         }
-        try validateCatalog(decoded)
-        catalog = decoded
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        catalog = try loadJSONCatalog()
     }
 
     /// Compatibility resolver. Call `access(_:)` while reading source-backed media.
@@ -453,6 +472,28 @@ final class SceneLibraryStore {
         return catalog.collections.first { $0.playback?.contains(minute, weekday: parts.weekday ?? 1) == true }
     }
 
+    @discardableResult
+    func migrateToSQLiteIfNeeded() throws -> Bool {
+        guard persistenceMode != .sqlite else { return false }
+        if !FileManager.default.fileExists(atPath: file.path) {
+            try writeJSONSnapshot(catalog)
+        }
+        try SceneLibrarySQLiteCatalog.migrate(catalog, fromJSON: file)
+        persistenceMode = .sqlite
+        recoveryMessage = nil
+        return true
+    }
+
+    func debugExportData() throws -> Data {
+        try SceneLibrarySQLiteCatalog.deterministicDebugExport(catalog)
+    }
+
+    func exportDebugJSON(to url: URL) throws {
+        let data = try debugExportData()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
     static func validatedRelativePath(_ path: String) throws -> String {
         guard !path.isEmpty, path.utf8.count <= 4096, !path.hasPrefix("/"), !path.utf8.contains(0) else {
             throw libraryFailure("Source paths must be relative paths within the authorized folder.")
@@ -540,7 +581,7 @@ final class SceneLibraryStore {
         return target.hasPrefix(prefix) && target.count > prefix.count
     }
 
-    private func validateCatalog(_ value: Catalog) throws {
+    func validateCatalog(_ value: Catalog) throws {
         guard value.entries.count <= Self.maxIndividualEntries + Self.maxSourceEntries,
               value.entries.filter({ $0.bookmark != nil }).count <= Self.maxIndividualEntries,
               value.entries.filter({ $0.sourceID != nil }).count <= Self.maxSourceEntries,
@@ -624,15 +665,46 @@ final class SceneLibraryStore {
     /// Internal transactional hook used by reconciliation and the durable backend.
     func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
 
+    private func loadJSONCatalog() throws -> Catalog {
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+        guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
+        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: file))
+        guard (1...Self.catalogVersion).contains(decoded.version) else {
+            throw failure("This Library index was written by a newer Idlesse version.")
+        }
+        try validateCatalog(decoded)
+        return decoded
+    }
+
+    private func writeJSONSnapshot(_ value: Catalog) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(value)
+        guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file, options: .atomic)
+    }
+
     private func save(_ proposed: Catalog) throws {
         var next = proposed
         next.version = Self.catalogVersion
         try validateCatalog(next)
-        let data = try JSONEncoder().encode(next)
-        guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
-        catalog = next
+        switch persistenceMode {
+        case .sqlite:
+            try SceneLibrarySQLiteCatalog.writeSelectedCatalog(next, for: file)
+            catalog = next
+        case .json, .recoveryJSON:
+            try writeJSONSnapshot(next)
+            catalog = next
+            do {
+                try SceneLibrarySQLiteCatalog.migrate(next, fromJSON: file)
+                persistenceMode = .sqlite
+                recoveryMessage = nil
+            } catch {
+                recoveryMessage = "SQLite migration is deferred; the validated JSON catalog remains active. \(error.localizedDescription)"
+            }
+        }
     }
 
     private static func validMetadata(_ value: [String: String]?, maxPairs: Int) -> Bool {
