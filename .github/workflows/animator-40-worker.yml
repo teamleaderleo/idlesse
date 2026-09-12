@@ -42,19 +42,58 @@ jobs:
           tolerant = '''        if old not in text:\n            print(f"SKIP {path}: {label}")\n            continue\n        text = text.replace(old, new, 1)'''
           if strict not in script:
               raise SystemExit('patch helper anchor missing')
-          script = script.replace(strict, tolerant, 1)
-          Path('/tmp/animator40.py').write_text(script)
+          Path('/tmp/animator40.py').write_text(script.replace(strict, tolerant, 1))
           PY
           git reset --hard "$BASE"
           python3 /tmp/animator40.py
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('Sources/Wallpaper/WallpaperController.swift')
-          text = p.read_text()
-          old = 'metal.desktopFrame = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }'
-          if old not in text:
-              raise SystemExit('desktop span geometry line missing')
-          p.write_text(text.replace(old, 'metal.desktopFrame = DesktopPreviewGeometry.union(NSScreen.screens.map(\\.frame))', 1))
+
+          def replace_once(path, old, new, label):
+              p = Path(path); text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'{path}: correction anchor missing: {label}')
+              p.write_text(text.replace(old, new, 1))
+
+          wall = 'Sources/Wallpaper/WallpaperController.swift'
+          replace_once(wall,
+              'metal.desktopFrame = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }',
+              'metal.desktopFrame = DesktopPreviewGeometry.union(NSScreen.screens.map(\\.frame))',
+              'desktop span geometry')
+          replace_once(wall,
+              '''        observe(.default, SceneFrameRate.changed) { controller in\n            controller.surfaces.forEach { $0.updateFrameRate() }\n        }\n        observe(.default, DesktopComfortController.desktopVisibilityChanged) { controller in\n            controller.surfaces.forEach { controller.configureDesktopInteraction($0) }\n            controller.updateMenu()\n        }\n''',
+              '''        observe(.default, SceneFrameRate.changed) { controller in\n            controller.presentedSurfaces.forEach { $0.updateFrameRate() }\n        }\n        observe(.default, DesktopComfortController.desktopVisibilityChanged) { controller in\n            controller.presentedSurfaces.forEach { controller.configureDesktopInteraction($0) }\n            controller.updateMenu()\n        }\n''', 'observer surfaces')
+          replace_once(wall,
+              '''        observe(.default, Notification.Name.NSProcessInfoPowerStateDidChange) { controller in\n            controller.clock.setPaused(controller.suspended || controller.shouldPause)\n            controller.activeSharedVideoHub?.setPaused(controller.shouldPause)\n            controller.surfaces.forEach { $0.setPaused(controller.shouldPause) }\n            controller.surfaces.forEach { $0.updateFrameRate() }\n            controller.logState("power-change")\n            controller.updateMenu()\n        }\n''',
+              '''        observe(.default, Notification.Name.NSProcessInfoPowerStateDidChange) { controller in\n            controller.clock.setPaused(controller.isDesktopPreviewing || controller.suspended || controller.shouldPause)\n            controller.activeSharedVideoHub?.setPaused(controller.isDesktopPreviewing || controller.shouldPause)\n            controller.surfaces.forEach { $0.setPaused(controller.isDesktopPreviewing || controller.shouldPause) }\n            controller.desktopPreview?.setSystemPaused(controller.previewSystemPaused)\n            controller.presentedSurfaces.forEach { $0.updateFrameRate() }\n            controller.logState("power-change")\n            controller.updateMenu()\n        }\n''', 'power observer')
+          replace_once(wall,
+              '''        observe(.default, NSApplication.didChangeScreenParametersNotification) { controller in\n            controller.screenRefresh?.cancel()\n            let work = DispatchWorkItem { [weak controller] in controller?.rebuild() }\n            controller.screenRefresh = work\n            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)\n        }\n''',
+              '''        observe(.default, NSApplication.didChangeScreenParametersNotification) { controller in\n            controller.screenRefresh?.cancel()\n            let work = DispatchWorkItem { [weak controller] in\n                guard let controller else { return }\n                if controller.isDesktopPreviewing {\n                    controller.desktopPreviewNeedsCommittedRebuild = true\n                    guard controller.desktopPreview?.rebuildForScreens() == true else {\n                        controller.endDesktopPreview(error: "Studio desktop preview could not follow the new display layout.")\n                        return\n                    }\n                } else { controller.rebuild() }\n            }\n            controller.screenRefresh = work\n            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)\n        }\n''', 'screen observer')
+          replace_once(wall,
+              '''        for surface in surfaces {\n            let fraction = coverageMonitor.coverage(of: surface.window.frame,\n''',
+              '''        for surface in active {\n            let fraction = coverageMonitor.coverage(of: surface.window.frame,\n''', 'coverage loop')
+
+          lib = 'Sources/Harness/SceneLibraryController.swift'
+          replace_once(lib,
+              '''        let timer = Timer(timeInterval: TimeInterval(rotationMinutes * 60), repeats: true) { [weak self] _ in\n            guard let self else { return }\n''',
+              '''        let timer = Timer(timeInterval: TimeInterval(rotationMinutes * 60), repeats: true) { [weak self] _ in\n            guard let self, !self.automationSuspended else { return }\n''', 'rotation timer guard')
+
+          studio = 'Sources/Harness/StudioWindowController.swift'
+          replace_once(studio,
+              '''        ], motionSession: [pointerToggle, audioToggle, audioStatus], sceneActions: [\n            scenePlayback, sceneDetails, NSStackView(views: [saveButton, saveCopyButton]), exportButton, resetButton\n        ])\n''',
+              '''        ], motionSession: [pointerToggle, audioToggle, audioStatus], sceneActions: [\n            NSStackView(views: [desktopPreviewButton, desktopPreviewStatus]),\n            scenePlayback, sceneDetails, NSStackView(views: [saveButton, saveCopyButton]), exportButton, resetButton\n        ])\n''', 'scene actions preview')
+          replace_once(studio,
+              '''            canvasMotionPreview = next\n        } catch {\n''',
+              '''            canvasMotionPreview = next\n            scheduleDesktopPreviewUpdate(scene: next)\n        } catch {\n''', 'canvas live preview')
+          replace_once(studio,
+              '''    private func cancelCanvasMotion() {\n        if let base = canvasMotionBase { _ = renderer?.updateScene(base) }\n        canvasMotionBase = nil\n        canvasMotionPreview = nil\n        selectNode()\n    }\n''',
+              '''    private func cancelCanvasMotion() {\n        if let base = canvasMotionBase { _ = renderer?.updateScene(base) }\n        canvasMotionBase = nil\n        canvasMotionPreview = nil\n        scheduleDesktopPreviewUpdate(immediate: true)\n        selectNode()\n    }\n''', 'canvas cancel preview')
+          replace_once(studio,
+              '''                self.renderer?.refreshSceneTime()\n                self.updateTimeline()\n                self.detailLabel.stringValue = "Scene transport updated. Video following is configured in Playback…."\n''',
+              '''                self.renderer?.refreshSceneTime()\n                self.updateTimeline()\n                self.scheduleDesktopPreviewUpdate(immediate: true)\n                self.detailLabel.stringValue = "Scene transport updated. Video following is configured in Playback…."\n''', 'transport preview sync')
+          replace_once(studio,
+              '''        var previewEdit = editor.scene\n        previewEdit.nodes[0].opacity = 0.7\n        precondition(editor.applyEdit(previewEdit.nodes, selected: 0, name: "Preview Edit", controls: previewEdit))\n''',
+              '''        var previewNodes = editor.scene.nodes\n        previewNodes[0].opacity = 0.7\n        let previewEdit = editor.scene.replacingNodes(previewNodes)\n        precondition(editor.applyEdit(previewEdit.nodes, selected: 0, name: "Preview Edit", controls: previewEdit))\n''', 'studio preview smoke mutation')
           PY
           git diff --check
           ./test.sh
