@@ -72,8 +72,6 @@ private final class DisplayMapView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let frames = topology.normalizedFrames(in: bounds.size, padding: 22)
-        // Mirror rectangles overlap their master. Reverse order keeps both
-        // selectable while preserving the true mirrored geometry.
         selectedID = topology.displays.reversed().first {
             frames[$0.liveID]?.contains(point) == true
         }?.liveID
@@ -109,9 +107,9 @@ private final class DisplayMapView: NSView {
     }
 }
 
-/// Visual editor for #52's proven wallpaper-assignment runtime. It renders real
-/// AppKit display geometry, remembers arrangements and sends assignments through
-/// WallpaperController so SharedVideoHub/system-backdrop behavior stays shared.
+/// Visual editor for #52's wallpaper-assignment runtime. It renders real AppKit
+/// display geometry and sends all assignments through WallpaperController so
+/// SharedVideoHub/system-backdrop behavior remains shared.
 final class DisplayAssignmentController: NSWindowController {
     private struct PendingLibraryTarget {
         let liveID: UInt32
@@ -123,6 +121,7 @@ final class DisplayAssignmentController: NSWindowController {
     private let mode = NSSegmentedControl(labels: ["Same on All", "Per Display", "Desktop Span"],
                                           trackingMode: .selectOne, target: nil, action: nil)
     private let arrangement = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let rememberArrangement = NSButton(title: "Remember Setup", target: nil, action: nil)
     private let mapView = DisplayMapView(frame: .zero)
     private let detailTitle = NSTextField(labelWithString: "")
     private let detailText = NSTextField(wrappingLabelWithString: "")
@@ -134,6 +133,7 @@ final class DisplayAssignmentController: NSWindowController {
     private var selectedID: UInt32?
     private var pendingLibraryTarget: PendingLibraryTarget?
     private var reconcilingLibraryTarget = false
+    private var topologyRefreshWorkItem: DispatchWorkItem?
     private var observers: [NSObjectProtocol] = []
     private let arrangements = KnownDisplayArrangementsStore(defaults: .standard)
 
@@ -154,12 +154,15 @@ final class DisplayAssignmentController: NSWindowController {
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.pendingLibraryTarget = nil
-                self?.rebuild()
+                self?.scheduleTopologyRefresh()
             })
     }
 
     required init?(coder: NSCoder) { nil }
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    deinit {
+        topologyRefreshWorkItem?.cancel()
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
 
     /// #30 can embed this same destination after #52/#31 land; there is no
     /// second visual implementation to reconcile later.
@@ -185,11 +188,16 @@ final class DisplayAssignmentController: NSWindowController {
         mode.setContentHuggingPriority(.required, for: .horizontal)
         arrangement.setAccessibilityLabel("Known display arrangement")
         arrangement.setContentHuggingPriority(.required, for: .horizontal)
+        arrangement.isEnabled = false
+        rememberArrangement.target = self
+        rememberArrangement.action = #selector(rememberCurrentArrangement)
+        rememberArrangement.bezelStyle = .rounded
+        rememberArrangement.setContentHuggingPriority(.required, for: .horizontal)
         let spacer = NSView(frame: .zero)
-        let controls = NSStackView(views: [mode, spacer, arrangement])
+        let controls = NSStackView(views: [mode, spacer, arrangement, rememberArrangement])
         controls.orientation = .horizontal
         controls.alignment = .centerY
-        controls.spacing = 12
+        controls.spacing = 10
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         mapView.translatesAutoresizingMaskIntoConstraints = false
@@ -248,12 +256,24 @@ final class DisplayAssignmentController: NSWindowController {
         ])
     }
 
+    /// Dock transitions often emit several intermediate screen-parameter events.
+    /// Coalesce those for 300 ms before identity matching or assignment restore.
+    private func scheduleTopologyRefresh() {
+        topologyRefreshWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.topologyRefreshWorkItem = nil
+            self?.rebuild()
+        }
+        topologyRefreshWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
     private func rebuild() {
         guard let wallpaper else { return }
         topology = .current()
         wallpaper.reconcileDurableDisplayAssignments(topology: topology)
         plan = wallpaper.resolvedDisplayAssignmentPlan(topology: topology)
-        let current = arrangements.record(topology)
+        let current = arrangements.touchKnown(topology)
         reloadArrangements(current: current)
         mapView.topology = topology
         mapView.plan = plan
@@ -272,15 +292,30 @@ final class DisplayAssignmentController: NSWindowController {
         refreshDetail()
     }
 
-    private func reloadArrangements(current: DisplayArrangementProfile) {
+    private func reloadArrangements(current: DisplayArrangementProfile?) {
         arrangement.removeAllItems()
         let profiles = arrangements.profiles().sorted { $0.lastSeen > $1.lastSeen }
+        guard let current else {
+            arrangement.addItem(withTitle: "Unremembered Setup")
+            arrangement.selectItem(at: 0)
+            arrangement.toolTip = arrangements.bestMatch(for: topology).map {
+                "Closest remembered setup: \($0.name). Save only after this dock/display arrangement has settled."
+            } ?? "This settled display arrangement has not been saved."
+            rememberArrangement.isEnabled = !topology.displays.isEmpty
+            return
+        }
         for profile in profiles {
             arrangement.addItem(withTitle: profile.name + (profile.id == current.id ? " · Current" : ""))
         }
         arrangement.selectItem(at: max(0, profiles.firstIndex(where: { $0.id == current.id }) ?? 0))
-        arrangement.isEnabled = false
-        arrangement.toolTip = "Known docked and undocked arrangements are remembered automatically."
+        arrangement.toolTip = "Known docked and undocked arrangements are retained with bounded LRU history."
+        rememberArrangement.isEnabled = false
+    }
+
+    @objc private func rememberCurrentArrangement() {
+        guard !topology.displays.isEmpty else { return }
+        let profile = arrangements.saveCurrent(topology)
+        reloadArrangements(current: profile)
     }
 
     private func select(_ id: UInt32?) {
@@ -377,7 +412,6 @@ final class DisplayAssignmentController: NSWindowController {
             return
         }
         guard let wallpaper, let chosen = wallpaper.selectedURL else { rebuild(); return }
-        // A Library choice that resolves as Desktop Span owns the whole canvas.
         if wallpaper.desktopSpanActive {
             pendingLibraryTarget = nil
             rebuild()
