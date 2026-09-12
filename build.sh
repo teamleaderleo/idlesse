@@ -99,7 +99,7 @@ while IFS= read -r source; do
 done < <(find "$ROOT/Sources" -type f -name '*.swift' \
   ! -path "$ROOT/Sources/DesktopMenu/*" -print | LC_ALL=C sort)
 
-APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver UniformTypeIdentifiers Carbon )
+APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit AppIntents Photos ScreenCaptureKit ScreenSaver ServiceManagement UniformTypeIdentifiers Carbon )
 
 app_framework_args() {
   local f
@@ -174,6 +174,16 @@ build_app() {
   cp "$appex_cache/$appex_hash" "$extension/Contents/MacOS/IdlesseDesktopMenu"
   cp "$ROOT/Sources/DesktopMenu/Info.plist" "$extension/Contents/Info.plist"
   codesign --force --sign - --entitlements "$ROOT/Sources/DesktopMenu/Entitlements.plist" "$extension" >/dev/null
+
+  local login_item="$APP/Contents/Library/LoginItems/IdlesseLoginItem.app"
+  mkdir -p "$login_item/Contents/MacOS"
+  xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    -swift-version 5 "${SWIFT_OPT[@]}" "$ROOT/Tools/LoginItem/main.swift" \
+    -framework AppKit -o "$login_item/Contents/MacOS/IdlesseLoginItem"
+  cp "$ROOT/Tools/LoginItem/Info.plist" "$login_item/Contents/Info.plist"
+  chmod +x "$login_item/Contents/MacOS/IdlesseLoginItem"
+  codesign --force --sign - "$login_item" >/dev/null
+
   local stamp_sha
   stamp_sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
   if ! git -C "$ROOT" diff --quiet 2>/dev/null; then stamp_sha="$stamp_sha-dirty"; fi

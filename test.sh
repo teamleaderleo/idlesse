@@ -143,6 +143,18 @@ if needs_build "build/tests/automation" "${AUTOMATION_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 11. Shared automation executor. Mock every controller dependency so dispatch,
+# errors and state responses stay testable without launching AppKit.
+AUTOMATION_EXECUTOR_SRCS=(
+  Sources/Automation/AutomationCommand.swift
+  Sources/Automation/AutomationExecutor.swift
+  Tests/AutomationExecutorTests.swift
+)
+if needs_build "build/tests/automation-executor" "${AUTOMATION_EXECUTOR_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${AUTOMATION_EXECUTOR_SRCS[@]}" -o build/tests/automation-executor &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -159,3 +171,4 @@ build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
 build/tests/automation
+build/tests/automation-executor

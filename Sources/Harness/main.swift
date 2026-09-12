@@ -99,6 +99,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let automationWake = AutomationMailbox.hasPendingRequests
+        let quietArgument = CommandLine.arguments.contains("--automation-wake") || CommandLine.arguments.contains("--login-wake")
         NSApp.setActivationPolicy(.regular)
         if let stampURL = Bundle.main.url(forResource: "build-stamp", withExtension: "txt"),
            let stamp = try? String(contentsOf: stampURL).trimmingCharacters(in: .whitespacesAndNewlines),
@@ -193,12 +195,26 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.minSize = NSSize(width: 900, height: 360)
 
         wallpaper.restoreSelection()
-        if OnboardingController.needed && pendingSceneURL == nil {
-            showOnboarding()
-        } else {
-            showLibrary()
+        do {
+            let host = try AutomationAppHost(wallpaper: wallpaper, comfort: comfort, step: { [weak self] delta in
+                guard let self else { return }
+                try self.prepareLibrary()
+                self.library?.cycle(delta: delta)
+            })
+            host.install()
+        } catch {
+            NSLog("Idlesse automation unavailable: %@", error.localizedDescription)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        let pendingAutomationURL = pendingSceneURL?.scheme?.lowercased() == "idlesse" && pendingSceneURL?.host?.lowercased() == "automation"
+        let quietWake = automationWake || quietArgument || pendingAutomationURL
+        if !quietWake {
+            if OnboardingController.needed && pendingSceneURL == nil {
+                showOnboarding()
+            } else {
+                showLibrary()
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         do {
             let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -225,6 +241,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     private func route(_ url: URL) {
         guard url.scheme == "idlesse" else { wallpaper.select(url); return }
+        if url.host?.lowercased() == "automation" {
+            AutomationAppHost.current?.handleAutomationURL(url)
+            return
+        }
         switch url.host {
         case "wallpapers": showLibrary()
         case "screensaver":
@@ -650,6 +670,11 @@ if CommandLine.arguments.contains("--smoke-options") {
     checkButtons(content)
     print("Idlesse settings UI smoke test passed")
     exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--ctl") {
+    let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
+    exit(AutomationCLI.run(arguments: arguments))
 }
 
 let delegate = IdlesseAppDelegate()
