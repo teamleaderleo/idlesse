@@ -40,6 +40,19 @@ private struct AmbientSetTests {
             expect(resolution.state.wallpaper == .scene("one"), "winner override not applied")
         }
 
+        // Scene targets persist an explicit variant reference; legacy targets decode as Default.
+        do {
+            let midnight = UUID()
+            let target = AmbientWallpaperTarget.scene("undertow", variantID: midnight)
+            let decoded = try JSONDecoder().decode(AmbientWallpaperTarget.self, from: JSONEncoder().encode(target))
+            expect(decoded == target, "scene variant reference did not round-trip")
+            let legacy = Data(#"{"kind":"scene","id":"undertow"}"#.utf8)
+            let legacyTarget = try JSONDecoder().decode(AmbientWallpaperTarget.self, from: legacy)
+            expect(legacyTarget == .scene("undertow"), "legacy Ambient scene target did not decode as Default")
+            expect(!AmbientWallpaperTarget(kind: .collection, id: "c1", variantID: midnight).isValid,
+                   "collection target accepted a direct variant instead of its per-item selections")
+        }
+
         // Sparse overrides inherit the arrangement default.
         do {
             let set = AmbientSet(id: "reading", name: "Reading", activation: AmbientActivation(),

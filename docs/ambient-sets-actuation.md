@@ -44,3 +44,8 @@ These are actuation-only compatibility sentinels; the public Ambient Set target 
 ## UI seam
 
 The Home destination can consume `ambientSets`, `currentAmbientResolution`, `onAmbientResolutionChanged`, `activateAmbientSet(id:untilResumed:)`, and `resumeAutomaticAmbientSets()` without owning timers or reimplementing precedence.
+
+
+## Named scene variants
+
+A scene wallpaper target carries an optional requested variant UUID. Legacy targets without it decode as Default. The UUID is part of the target value and therefore survives resolution even while the referenced scene or variant is temporarily unavailable; collection targets continue to inherit each collection item's own scene+variant selection. Runtime application becomes a direct variant-aware wallpaper selection when the #32 host stack is reconciled with this branch.
