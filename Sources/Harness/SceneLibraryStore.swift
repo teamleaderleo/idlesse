@@ -7,10 +7,11 @@ final class SceneLibraryStore {
     static let maxIndividualEntries = 128
     static let maxSourceEntries = 4096
     static let maxSources = 32
-    static let maxIndexBytes = 1_048_576
+    /// JSON remains a bounded compatibility/migration source until the SQLite catalog lands.
+    static let maxIndexBytes = 4_194_304
     static let maxBookmarkBytes = 16_384
 
-    struct Entry: Codable, Equatable {
+    struct Entry: Codable, Equatable, Sendable {
         var id: String
         var title: String
         var bookmark: Data?
@@ -28,6 +29,8 @@ final class SceneLibraryStore {
         var fps: Double?
         var duration: Double?
         var provenance: [String: String]?
+        var availability: EntryAvailability = .present
+        var observation: ReconciliationObservation?
 
         init(id: String, title: String, bookmark: Data? = nil, catalogID: String? = nil,
              sourceID: String? = nil, relativeMediaPath: String? = nil,
@@ -35,7 +38,9 @@ final class SceneLibraryStore {
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
              fps: Double? = nil, duration: Double? = nil,
-             provenance: [String: String]? = nil) {
+             provenance: [String: String]? = nil,
+             availability: EntryAvailability = .present,
+             observation: ReconciliationObservation? = nil) {
             self.id = id
             self.title = title
             self.bookmark = bookmark
@@ -53,11 +58,14 @@ final class SceneLibraryStore {
             self.fps = fps
             self.duration = duration
             self.provenance = provenance
+            self.availability = availability
+            self.observation = observation
         }
 
         enum CodingKeys: String, CodingKey {
             case id, title, bookmark, catalogID, sourceID, relativeMediaPath, relativePosterPath
             case series, character, variant, tags, mediaType, width, height, fps, duration, provenance
+            case availability, observation
         }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,6 +86,8 @@ final class SceneLibraryStore {
             fps = try values.decodeIfPresent(Double.self, forKey: .fps)
             duration = try values.decodeIfPresent(Double.self, forKey: .duration)
             provenance = try values.decodeIfPresent([String: String].self, forKey: .provenance)
+            availability = try values.decodeIfPresent(EntryAvailability.self, forKey: .availability) ?? .present
+            observation = try values.decodeIfPresent(ReconciliationObservation.self, forKey: .observation)
         }
         func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
@@ -98,6 +108,8 @@ final class SceneLibraryStore {
             try values.encodeIfPresent(fps, forKey: .fps)
             try values.encodeIfPresent(duration, forKey: .duration)
             try values.encodeIfPresent(provenance, forKey: .provenance)
+            if availability != .present { try values.encode(availability, forKey: .availability) }
+            try values.encodeIfPresent(observation, forKey: .observation)
         }
     }
 
@@ -132,13 +144,15 @@ final class SceneLibraryStore {
         var fps: Double?
         var duration: Double?
         var provenance: [String: String]?
+        var observation: ReconciliationObservation?
 
         init(relativeMediaPath: String, title: String? = nil, catalogID: String? = nil,
              relativePosterPath: String? = nil, series: String? = nil,
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
              fps: Double? = nil, duration: Double? = nil,
-             provenance: [String: String]? = nil) {
+             provenance: [String: String]? = nil,
+             observation: ReconciliationObservation? = nil) {
             self.relativeMediaPath = relativeMediaPath
             self.title = title
             self.catalogID = catalogID
@@ -153,6 +167,7 @@ final class SceneLibraryStore {
             self.fps = fps
             self.duration = duration
             self.provenance = provenance
+            self.observation = observation
         }
     }
 
@@ -197,7 +212,7 @@ final class SceneLibraryStore {
         var sceneIDs: [String] = []
         var playback: Playback?
     }
-    struct Catalog: Codable {
+    struct Catalog: Codable, Equatable {
         var version: Int = SceneLibraryStore.catalogVersion
         var entries: [Entry] = []
         var sources: [SourceRoot] = []
@@ -238,6 +253,9 @@ final class SceneLibraryStore {
     func resolve(_ entry: Entry) throws -> URL { try access(entry).url }
 
     func access(_ entry: Entry) throws -> Access {
+        guard entry.availability == .present else {
+            throw failure("This Library item is missing from its Source. Rescan the Source to reconcile it.")
+        }
         if let bookmark = entry.bookmark {
             var stale = false
             let url = try URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI],
@@ -252,9 +270,15 @@ final class SceneLibraryStore {
     }
 
     func accessPoster(_ entry: Entry) throws -> Access? {
+        guard entry.availability == .present else { return nil }
         guard let sourceID = entry.sourceID, let relative = entry.relativePosterPath,
               let source = catalog.sources.first(where: { $0.id == sourceID }) else { return nil }
         return try access(relativePath: relative, source: source)
+    }
+
+    func accessSource(_ sourceID: String) throws -> Access {
+        guard let source = catalog.sources.first(where: { $0.id == sourceID }) else { throw failure("Source no longer exists.") }
+        return try accessSourceRoot(source)
     }
 
     @discardableResult func add(_ url: URL, title: String? = nil) throws -> Entry {
@@ -468,7 +492,8 @@ final class SceneLibraryStore {
                 relativePosterPath: poster, series: draft.series, character: draft.character,
                 variant: draft.variant, tags: draft.tags, mediaType: draft.mediaType,
                 width: draft.width, height: draft.height, fps: draft.fps,
-                duration: draft.duration, provenance: draft.provenance))
+                duration: draft.duration, provenance: draft.provenance,
+                availability: .present, observation: draft.observation))
         }
         guard existing.filter({ $0.sourceID != nil }).count + result.count <= Self.maxSourceEntries else {
             throw failure("The Library supports up to 4096 source-backed entries.")
@@ -546,12 +571,14 @@ final class SceneLibraryStore {
                   entry.tags.count <= 64 && entry.tags.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }),
                   Self.validMetadata(entry.provenance, maxPairs: 32),
                   Self.validDimension(entry.width), Self.validDimension(entry.height),
-                  Self.validRate(entry.fps), Self.validDuration(entry.duration)
+                  Self.validRate(entry.fps), Self.validDuration(entry.duration),
+                  Self.validObservation(entry.observation)
             else { throw failure("A Library entry exceeds its metadata limits.") }
 
             if let bookmark = entry.bookmark {
-                guard bookmark.count <= Self.maxBookmarkBytes,
-                      entry.sourceID == nil, entry.relativeMediaPath == nil, entry.relativePosterPath == nil else {
+                guard entry.availability == .present, bookmark.count <= Self.maxBookmarkBytes,
+                      entry.sourceID == nil, entry.relativeMediaPath == nil, entry.relativePosterPath == nil,
+                      entry.observation == nil else {
                     throw failure("A Library entry mixes individual and Source references.")
                 }
             } else {
@@ -594,6 +621,9 @@ final class SceneLibraryStore {
         else { throw failure("Use unique collection names (1–120 bytes), with at most 32 collections and 256 scenes each.") }
     }
 
+    /// Internal transactional hook used by reconciliation and the durable backend.
+    func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
+
     private func save(_ proposed: Catalog) throws {
         var next = proposed
         next.version = Self.catalogVersion
@@ -611,6 +641,14 @@ final class SceneLibraryStore {
             !$0.key.isEmpty && $0.key.utf8.count <= 128 && $0.value.utf8.count <= 2048
         }
     }
+    private static func validObservation(_ value: ReconciliationObservation?) -> Bool {
+        guard let value else { return true }
+        guard value.byteLength.map({ $0 >= 0 }) ?? true,
+              value.digestAlgorithm.map({ !$0.isEmpty && $0.utf8.count <= 32 }) ?? true,
+              value.digest.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
+              value.packageRevision.map({ !$0.isEmpty && $0.utf8.count <= 512 }) ?? true else { return false }
+        return (value.digestAlgorithm == nil) == (value.digest == nil)
+    }
     private static func validDimension(_ value: Int?) -> Bool { value.map { (1...131_072).contains($0) } ?? true }
     private static func validRate(_ value: Double?) -> Bool { value.map { $0.isFinite && $0 > 0 && $0 <= 1000 } ?? true }
     private static func validDuration(_ value: Double?) -> Bool { value.map { $0.isFinite && $0 >= 0 && $0 <= 604_800 } ?? true }
@@ -619,7 +657,7 @@ final class SceneLibraryStore {
         while result.utf8.count > bytes && !result.isEmpty { result.removeLast() }
         return result
     }
-    private static func libraryFailure(_ text: String) -> NSError {
+    static func libraryFailure(_ text: String) -> NSError {
         NSError(domain: "IdlesseLibrary", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
     private func failure(_ text: String) -> NSError { Self.libraryFailure(text) }
