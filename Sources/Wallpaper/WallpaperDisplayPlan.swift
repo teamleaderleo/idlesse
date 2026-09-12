@@ -1,59 +1,9 @@
 import Foundation
 
-private struct DisplayPlanCacheKey: Hashable {
-    var owner: ObjectIdentifier
-    var request: Int
-    var topologySignature: String
-    var mode: DisplayAssignmentMode
-}
-
-/// Small request-scoped cache shared by live-surface creation and system-backdrop
-/// rendering. It holds immutable resolved values only; it never retains a
-/// WallpaperController. Assignment-changing rebuilds explicitly invalidate the
-/// current request before resolving a fresh plan.
-private final class DisplayPlanCache {
-    static let shared = DisplayPlanCache()
-    private static let maxEntries = 16
-
-    private let lock = NSLock()
-    private var order: [DisplayPlanCacheKey] = []
-    private var values: [DisplayPlanCacheKey: ResolvedWallpaperAssignmentPlan] = [:]
-
-    func value(for key: DisplayPlanCacheKey,
-               create: () -> ResolvedWallpaperAssignmentPlan) -> ResolvedWallpaperAssignmentPlan {
-        lock.lock()
-        if let cached = values[key] {
-            order.removeAll { $0 == key }
-            order.append(key)
-            lock.unlock()
-            return cached
-        }
-        lock.unlock()
-
-        let resolved = create()
-
-        lock.lock()
-        values[key] = resolved
-        order.removeAll { $0 == key }
-        order.append(key)
-        while order.count > Self.maxEntries {
-            values.removeValue(forKey: order.removeFirst())
-        }
-        lock.unlock()
-        return resolved
-    }
-
-    func invalidate(owner: ObjectIdentifier, request: Int) {
-        lock.lock()
-        let stale = order.filter { $0.owner == owner && $0.request == request }
-        for key in stale { values.removeValue(forKey: key) }
-        order.removeAll { $0.owner == owner && $0.request == request }
-        lock.unlock()
-    }
-}
-
 extension WallpaperController {
-    /// Resolve the currently adopted selection.
+    /// Resolve the currently adopted selection into the visual/Ambient view of
+    /// #52's durable assignment store. Runtime playback and system backdrops keep
+    /// consuming the same `explicitDisplayURL(for:)` store seam directly.
     func resolvedDisplayAssignmentPlan(topology: DisplayTopology = .current()) -> ResolvedWallpaperAssignmentPlan {
         resolvedDisplayAssignmentPlan(
             topology: topology,
@@ -62,8 +12,8 @@ extension WallpaperController {
     }
 
     /// Resolve a candidate selection before `selectedURL`/`playable` are adopted.
-    /// The same value can therefore drive live surfaces and matching system
-    /// backdrop stills for one transaction.
+    /// DisplayTopology supplies durable identity and mirror-master grouping while
+    /// #52's assignment store remains the single persisted source of truth.
     func resolvedDisplayAssignmentPlan(topology: DisplayTopology,
                                        baseURL: URL?,
                                        desktopSpan: Bool) -> ResolvedWallpaperAssignmentPlan {
@@ -148,29 +98,6 @@ extension WallpaperController {
                                includingResourceValuesForKeys: nil, relativeTo: nil)) ??
             (try? url.bookmarkData(options: [],
                                    includingResourceValuesForKeys: nil, relativeTo: nil))
-    }
-
-    /// Immutable request snapshot shared by WallpaperController's two runtime
-    /// consumers. `baseURL` is intentionally nil here: both consumers need the
-    /// same explicit override decisions, while each already owns its default
-    /// scene/source fallback.
-    func sharedDisplayAssignmentPlan(request: Int, desktopSpan: Bool) -> ResolvedWallpaperAssignmentPlan {
-        let topology = DisplayTopology.current()
-        let mode: DisplayAssignmentMode = desktopSpan
-            ? .desktopSpan
-            : (sameWallpaperOnAllDisplays ? .sameOnAll : .perDisplay)
-        let key = DisplayPlanCacheKey(
-            owner: ObjectIdentifier(self),
-            request: request,
-            topologySignature: topology.signature,
-            mode: mode)
-        return DisplayPlanCache.shared.value(for: key) { [self] in
-            resolvedDisplayAssignmentPlan(topology: topology, baseURL: nil, desktopSpan: desktopSpan)
-        }
-    }
-
-    func invalidateSharedDisplayAssignmentPlan(request: Int) {
-        DisplayPlanCache.shared.invalidate(owner: ObjectIdentifier(self), request: request)
     }
 
     /// Attach #52's UUID/direct-CG migration keys to persisted hardware identity.
