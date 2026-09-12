@@ -16,4 +16,7 @@ rm -f "$ext/Contents/MacOS/NativeWallpaperProbe"
 codesign --force --sign - --options runtime --entitlements "$BUILD_DIR/probe-entitlements.plist" "$ext"
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
+# CLI checks can make Launch Services discover this build copy. Live tests use
+# an explicitly staged app; build-only runs must not add another provider.
+Experiments/NativeWallpaper/registration.sh unregister "$app"
 printf '%s\n' "$app"

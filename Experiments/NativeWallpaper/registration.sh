@@ -16,7 +16,22 @@ if [[ "$mode" == register ]]; then
   "$registrar" -f "$app"
   /usr/bin/pluginkit -a "$ext"
 else
-  /usr/bin/pluginkit -r "$ext"
-  "$registrar" -u "$app"
+  # A prior removal is normal. Still unregister the containing app so running
+  # a build-time CLI check cannot leave a second discovered provider behind.
+  if ! /usr/bin/pluginkit -r "$ext"; then
+    matches=$(/usr/bin/pluginkit -m -A -D -v -i dev.idlesse.nativeprobe.catalog)
+    if [[ "$matches" == *"$ext"* ]]; then
+      echo 'Probe extension remains registered; cleanup failed.' >&2
+      exit 1
+    fi
+  fi
+  if ! output=$("$registrar" -u "$app" 2>&1); then
+    # Launch Services returns application-not-found when this exact build copy
+    # was already removed. Other failures must still be reported.
+    if [[ "$output" != *"-10814"* ]]; then
+      printf '%s\n' "$output" >&2
+      exit 1
+    fi
+  fi
 fi
 /usr/bin/pluginkit -m -A -D -v -i dev.idlesse.nativeprobe.catalog

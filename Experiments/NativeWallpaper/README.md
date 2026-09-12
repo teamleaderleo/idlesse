@@ -103,3 +103,20 @@ The private framework and protocol require qualification per OS version. The
 catalog model reference is vendored under MIT in `Vendor/`, with its pinned
 revision and license. Discovery was informed by
 https://github.com/kageroumado/phosphene.
+
+## Attended test workflow
+
+Use the M27P6 27-inch monitor as the primary workspace and existing Idlesse media
+for product testing. Do not add new preview windows or move windows to other
+displays to work around UI automation failures.
+
+The follow-up native selection attempt hit the UI control service's
+`cannotClickOffscreenElement` / `windowNotFoundAtPosition` errors despite a visible
+tile. No acquire was observed. Do not move Settings between monitors, the iPad,
+or automation displays to work around this: leave the user's workspace alone and
+stop the UI test if the tool cannot target the visible tile.
+
+Build-time CLI checks may cause Launch Services to discover the generated app.
+The Xcode build now unregisters its exact products path afterward, keeping live
+registration an explicit staged-path action. Unregister is idempotent and still
+removes the containing app when the extension was already removed.
