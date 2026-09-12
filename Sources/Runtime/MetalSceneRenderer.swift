@@ -192,6 +192,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var node: SceneNode
         var texture: MTLTexture?
         var shaderPipeline: MTLRenderPipelineState?
+        var effectPipelines: [UUID: MTLRenderPipelineState] = [:]
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
         var maskTexture: MTLTexture?
@@ -345,6 +346,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         color.sourceAlphaBlendFactor = .one
         color.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         pipeline = try device.makeRenderPipelineState(descriptor: spec)
+        guard let effectVertex = library.makeFunction(name: "sceneQuad") else {
+            throw SceneError.invalid("Metal is unavailable on this Mac.")
+        }
         metal = MTKView(frame: bounds, device: device)
         metal.colorPixelFormat = .bgra8Unorm
         metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
@@ -366,6 +370,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         roots = playable.nodes
         for node in playable.allNodes {
             let input = Input(node)
+            let shaderInputs = try MetalShaderInput.inputs(nodeID: node.id, parameters: authored.parameters)
             switch node.content {
             case .text, .shape:
                 input.texture = try Self.upload(Self.rasterize(node, pixelLimit: SceneBudget.imagePixels(playable.nodes)), device: device)
@@ -411,8 +416,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 }
             case .gradient, .group, .particles: break
             case .shader(let shader):
-                let shaderInputs = try MetalShaderInput.inputs(nodeID: node.id, parameters: authored.parameters)
                 input.shaderPipeline = try Self.compileShader(shader, inputs: shaderInputs, device: device, library: library)
+            }
+            for effect in node.style.effects {
+                guard let id = effect.id, let shader = effect.shader else { continue }
+                input.effectPipelines[id] = try MetalShaderEffectCompiler.makePipeline(shader, inputs: shaderInputs,
+                                                                                       device: device, vertex: effectVertex)
             }
             for (url, isMask) in [(node.maskAsset, true), (node.sprite, false)] {
                 guard let url else { continue }
@@ -562,6 +571,25 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
+        func customEffectPass(source: MTLTexture, destination: MTLTexture, effect: SceneNode.Style.Effect,
+                              pipeline: MTLRenderPipelineState, shaderInputs: [MetalShaderInput]) -> Bool {
+            guard let shader = effect.shader,
+                  let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(destination)) else { return false }
+            var vertexU = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(1, 1, 1, 0),
+                                   viewport: SIMD4(sceneAspect, 0, 0, 0), style: SIMD4(0, 0, 1, 0))
+            var effectU = ShaderEffectUniforms(
+                viewport: SIMD4(Float(clock.time * shader.speed), Float(destination.width), Float(destination.height), Float(effect.amount)),
+                signals: SIMD4(Float(lastSignals.pointerX), Float(lastSignals.pointerY), Float(lastSignals.audio.level), 0))
+            var inputU = MetalShaderInputUniforms(shaderInputs)
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBytes(&vertexU, length: MemoryLayout<Uniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&effectU, length: MemoryLayout<ShaderEffectUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&inputU, length: MemoryLayout<MetalShaderInputUniforms>.stride, index: 2)
+            encoder.setFragmentTexture(source, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
+            return true
+        }
         func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor, root: Bool = false, isolated: Bool = false) -> Bool {
             for node in nodes where node.visible && node.kind == .group && !isolated {
                 guard let texture = groupTextures[node.id] else { return false }
@@ -585,6 +613,14 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 for effect in node.style.effects {
                     let available = scratch.filter { $0 !== current }
                     let amount = Float(effect.amount)
+                    if effect.shader != nil {
+                        guard let id = effect.id, let custom = byID[node.id]?.effectPipelines[id],
+                              let customInputs = try? MetalShaderInput.inputs(nodeID: node.id, parameters: sourceScene?.parameters ?? [:]),
+                              customEffectPass(source: current, destination: available[0], effect: effect,
+                                               pipeline: custom, shaderInputs: customInputs) else { return false }
+                        current = available[0]
+                        continue
+                    }
                     switch effect.type {
                     case .blur, .bloom:
                         if amount == 0 { continue }
@@ -735,6 +771,19 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                   oldInputs.map(\.id) == newInputs.map(\.id) else {
                 return false
             }
+        }
+        for node in scene.allNodes where node.style.effects.contains(where: { $0.shader != nil }) {
+            guard let oldNode = existing[node.id] else { return false }
+            let oldSources = Dictionary(uniqueKeysWithValues: oldNode.style.effects.compactMap { effect -> (UUID, String)? in
+                guard let id = effect.id, let shader = effect.shader else { return nil }; return (id, shader.source)
+            })
+            let newSources = Dictionary(uniqueKeysWithValues: node.style.effects.compactMap { effect -> (UUID, String)? in
+                guard let id = effect.id, let shader = effect.shader else { return nil }; return (id, shader.source)
+            })
+            guard oldSources == newSources,
+                  let oldInputs = try? MetalShaderInput.inputs(nodeID: node.id, parameters: previousParameters),
+                  let newInputs = try? MetalShaderInput.inputs(nodeID: node.id, parameters: authored.parameters),
+                  oldInputs.map(\.id) == newInputs.map(\.id) else { return false }
         }
         guard diagnostics.state != .disposed,
               let order = sceneResourceOrder(from: inputs.map { $0.node }, to: scene.allNodes) else { return false }
@@ -952,6 +1001,33 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             _ = try MetalShaderInput.replacingDeclarations(tooMany, nodeID: typedNode.id, parameters: [:])
             preconditionFailure("Shader input declaration count must be bounded")
         } catch { }
+
+        var effectNode = SceneNode(content: .shape(.init(primitive: .rectangle, fill: "#00FF00", width: 128, height: 128)))
+        let effectID = UUID()
+        effectNode.style.effects = [.init(id: effectID, type: .displacement, amount: 1,
+            shader: .init(source: """
+            fragment float4 effectMain(V in [[stage_in]], constant EffectU &u [[buffer(1)]], constant ShaderInputs &inputs [[buffer(2)]], texture2d<float> source [[texture(0)]]) {
+                constexpr sampler s(filter::linear, address::clamp_to_edge);
+                float4 p = source.sample(s, in.uv);
+                return mix(p, float4(p.b, p.r, p.g, p.a), u.viewport.w);
+            }
+            """, speed: 1))]
+        var effectScene = SceneDescriptor(title: "Custom effect", nodes: [effectNode])
+        let effectRenderer = try MetalSceneRenderer(playable: effectScene,
+            bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
+        let effectedPixels = try effectRenderer.renderProbe(dimension: 64)
+        effectScene = effectScene.replacingNodes([{
+            var node = effectNode; node.style.effects[0].amount = 0; return node
+        }()])
+        precondition(effectRenderer.updateScene(effectScene), "Custom shader effect amount edits should stay live")
+        let uneffectedPixels = try effectRenderer.renderProbe(dimension: 64)
+        precondition(effectedPixels != uneffectedPixels, "Custom shader effect amount must change rendered pixels")
+        var changedSource = effectScene.nodes[0]
+        changedSource.style.effects[0].shader?.source = MetalShaderEffectCompiler.defaultSource
+        precondition(!effectRenderer.updateScene(effectScene.replacingNodes([changedSource])),
+            "Custom shader effect source edits must request transactional renderer replacement")
+        precondition(effectRenderer.intermediateTextureBytes <= SceneBudget.intermediateTextureBytes)
+        effectRenderer.releaseResources()
 
         let shapeScene = SceneDescriptor(title: "Shape Test", nodes: [SceneNode(content: .shape(.init(primitive: .rectangle, fill: "#00FF00", width: 128, height: 128)))])
         let shape = try MetalSceneRenderer(playable: shapeScene, bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1, clock: SceneClock(now: { 0 }), onError: { _ in })
