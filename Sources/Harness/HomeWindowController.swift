@@ -62,6 +62,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let pauseButton = NSButton(frame: .zero)
     private let nextButton = NSButton(frame: .zero)
     private var nowPlayingPopover: NSPopover?
+    private var cachedThumbnailURL: URL?
+    private var cachedThumbnail: NSImage?
 
     var window: NSWindow { library.window! }
 
@@ -78,6 +80,9 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             self.indexURL = support.appendingPathComponent("Idlesse/Library/index.json")
         }
         super.init()
+        // main.swift installs the legacy Settings owner before AppSettings is
+        // created. Home becomes the sheet/panel owner as soon as it exists.
+        wallpaper.presentingWindow = { [weak library] in library?.window }
         installShell()
         installToolbar()
         buildDisplaysView()
@@ -490,7 +495,12 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let url = wallpaper.selectedURL
         let title = url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
         nowPlayingButton.title = title
-        nowPlayingButton.image = thumbnail(for: url) ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
+        let standardized = url?.standardizedFileURL
+        if standardized != cachedThumbnailURL {
+            cachedThumbnailURL = standardized
+            cachedThumbnail = thumbnail(for: url)
+        }
+        nowPlayingButton.image = cachedThumbnail ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
         pauseButton.image = NSImage(systemSymbolName: wallpaper.pausedByUser ? "play.fill" : "pause.fill",
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
         pauseButton.isEnabled = url != nil
