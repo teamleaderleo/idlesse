@@ -38,7 +38,13 @@ The default encoder captures the WebGL canvas directly through WebCodecs and mux
 
 The native host stops after 120 seconds without progress or 30 minutes total. Jobs sharing a workspace serialize encoding through `.media-encoder.lock`. `run.py --encoder frames` selects the older JPEG/FFmpeg path; `--frame-asset ID` selects it for a specific asset. The runner attempts that local fallback once after a WebCodecs failure, without repeating GPU restoration. Full VideoToolbox decode checks dimensions, cadence and every frame before publication.
 
-Camera recipes live in `cameras.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Recheck first/middle/last frames after modifying a recipe; saved video checkpoints deliberately do not regenerate just because renderer code changed.
+Camera recipes live in `cameras.json`, as `[zoom, cx, cy]` under the skeleton stem. A recipe is framed against bounds read from the *posed* skeleton, so it is only valid for the animation it was tuned on: reusing one across animations drops the model out of frame behind black bars. Where a stem needs more than one, give it an object instead of an array, mapping animation names to recipes with `default` covering the rest:
+
+```json
+"CH0179_home": {"default": [2.0, 0.93, 0.33], "Start_Idle_01": [2.3, 0.22, 0.27]}
+```
+
+The camera actually used is recorded per export in `.source.json` and `state.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Recheck first/middle/last frames after modifying a recipe; saved video checkpoints deliberately do not regenerate just because renderer code changed. `verify.py` exits non-zero when an export has dead edges wider than 2 sample pixels, which is what a mismatched recipe looks like; `--allow-bars` downgrades that to a warning.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 

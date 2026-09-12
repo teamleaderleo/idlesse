@@ -40,7 +40,10 @@ window.prepare = async (folder, stem, width, height, animation) => {
   // Per-lobby camera crop: authoring sheets can hold unused poses outside the live scene.
   const cameras={CH0222_home:[1.10,0.50,0.50],CH0233_home:[1.9,0.37,0.66],CH0230_home:[1.6,0.47,0.52],CH0335_home:[1.4,0.405,0.415],CH0071_home:[1.12,0.50,0.50],CH0282_home:[1.2,0.547,0.50],CH0198_home:[2.0,0.90,0.46],CH0167_home:[1.8,0.294,0.46],CH0100_home:[1.85,0.80,0.56]};
   Object.assign(cameras, cameraRecipes);
-  const camera=cameras[stem];
+  // Bounds above are read from the posed skeleton, so a recipe only frames the animation
+  // it was tuned on; an entry may map animation names to recipes, with default for the rest.
+  const recipe=cameras[stem];
+  const camera=Array.isArray(recipe)?recipe:recipe?.[animation]??recipe?.default??null;
   if(camera){
     const [zoom,cx,cy]=camera;
     model.position.set(width/2+(model.x-width*cx)*zoom,height/2+(model.y-height*cy)*zoom);
@@ -60,5 +63,5 @@ window.prepare = async (folder, stem, width, height, animation) => {
     if(fast==='draw'){app.renderer.gl.finish();return null;}
     return app.view.toDataURL(fast?'image/jpeg':'image/png',0.99).split(',')[1];
   };
-  return {backgroundAnimations:background?.skeleton.data.animations.map(a=>({name:a.name,duration:a.duration}))??[],slots:model.skeleton.slots.filter(s=>s.data.blendMode!==0).map(s=>({name:s.data.name,blend:s.data.blendMode,alpha:s.color.a,attachment:s.getAttachment()?.name})),bounds:{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},scale,animations:data.animations.map(a=>({name:a.name,duration:a.duration}))};
+  return {camera,backgroundAnimations:background?.skeleton.data.animations.map(a=>({name:a.name,duration:a.duration}))??[],slots:model.skeleton.slots.filter(s=>s.data.blendMode!==0).map(s=>({name:s.data.name,blend:s.data.blendMode,alpha:s.color.a,attachment:s.getAttachment()?.name})),bounds:{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},scale,animations:data.animations.map(a=>({name:a.name,duration:a.duration}))};
 };

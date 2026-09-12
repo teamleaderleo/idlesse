@@ -165,7 +165,7 @@ def main():
             shutil.move(temporary, final)
             receipt = {'title': title, 'path': str(final), 'sha256': digest(final), 'probe': result,
                 'attemptSeconds': round(time.monotonic() - start, 2), 'reusedEncodedVideo': reused, 'source': plan['source'],
-                'restoration': plan['model'], 'encoder': 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'],
+                'restoration': plan['model'], 'encoder': 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
                 'caveat': 'Upscaled texture detail; Spine-only rendering may omit Unity effects/physics. Visual QA required.'}
             save(final.with_suffix('.source.json'), receipt)
             state['items'][item['id']] = receipt; state.pop('current', None); save(state_path, state)
