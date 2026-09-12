@@ -270,7 +270,7 @@ extension SceneLibraryStore {
         let fallback = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         return Entry(id: UUID().uuidString,
                      title: boundedReconciliationTitle(draft.title ?? fallback),
-                     catalogID: draft.catalogID, sourceID: sourceID, relativeMediaPath: path,
+                     catalogID: draft.catalogID, groupID: draft.groupID, sourceID: sourceID, relativeMediaPath: path,
                      relativePosterPath: poster, series: draft.series, character: draft.character,
                      variant: draft.variant, tags: draft.tags, mediaType: draft.mediaType,
                      width: draft.width, height: draft.height, fps: draft.fps,
@@ -282,6 +282,7 @@ extension SceneLibraryStore {
         var entry = old
         entry.title = boundedReconciliationTitle(draft.title ?? URL(fileURLWithPath: draft.relativeMediaPath).deletingPathExtension().lastPathComponent)
         entry.catalogID = draft.catalogID
+        entry.groupID = draft.groupID
         entry.relativeMediaPath = try validatedRelativePath(draft.relativeMediaPath)
         entry.relativePosterPath = try draft.relativePosterPath.map(validatedRelativePath)
         entry.series = draft.series
@@ -308,7 +309,7 @@ extension SceneLibraryStore {
 
     private static func sourceMetadataChanged(old: Entry, incoming: SourceEntry) -> Bool {
         let incomingTitle = boundedReconciliationTitle(incoming.title ?? URL(fileURLWithPath: incoming.relativeMediaPath).deletingPathExtension().lastPathComponent)
-        return old.title != incomingTitle || old.catalogID != incoming.catalogID ||
+        return old.title != incomingTitle || old.catalogID != incoming.catalogID || old.groupID != incoming.groupID ||
             old.relativePosterPath != incoming.relativePosterPath || old.series != incoming.series ||
             old.character != incoming.character || old.variant != incoming.variant || old.tags != incoming.tags ||
             old.mediaType != incoming.mediaType || old.width != incoming.width || old.height != incoming.height ||

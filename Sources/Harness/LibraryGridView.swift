@@ -327,13 +327,17 @@ final class LibraryCardView: NSView {
             self.item = item
         }
         titleLabel.stringValue = SceneLibraryController.displayTitle(item.title)
-        let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
-        if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
-            badgeLabel.stringValue = "VIDEO"
-        } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
-            badgeLabel.stringValue = "INTERACTIVE SCENE"
+        if let stack = item.stack {
+            badgeLabel.stringValue = "\(stack.entryIDs.count) ITEMS · \(item.stackHint ?? "MIXED")"
         } else {
-            badgeLabel.stringValue = "IMAGE"
+            let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
+            if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
+                badgeLabel.stringValue = "VIDEO"
+            } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
+                badgeLabel.stringValue = "INTERACTIVE SCENE"
+            } else {
+                badgeLabel.stringValue = "IMAGE"
+            }
         }
         return changed
     }
