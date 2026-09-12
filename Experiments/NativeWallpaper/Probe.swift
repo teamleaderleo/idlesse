@@ -6,6 +6,27 @@ struct Probe {
     static func main() {
         let path = "/System/Library/PrivateFrameworks/WallpaperExtensionKit.framework/WallpaperExtensionKit"
         let loaded = dlopen(path, RTLD_LAZY) != nil
+        if let index = CommandLine.arguments.firstIndex(of: "--make-poster"), CommandLine.arguments.indices.contains(index + 1) {
+            let context = CGContext(data: nil, width: 640, height: 360, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.setFillColor(CGColor(red: 0.04, green: 0.07, blue: 0.16, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 640, height: 360))
+            context.setStrokeColor(CGColor(red: 0.4, green: 0.8, blue: 0.9, alpha: 1))
+            context.setLineWidth(8)
+            context.strokeEllipse(in: CGRect(x: 190, y: 50, width: 260, height: 260))
+            context.setFillColor(CGColor(red: 1, green: 0.68, blue: 0.42, alpha: 1))
+            context.fillEllipse(in: CGRect(x: 402, y: 160, width: 44, height: 44))
+            let bitmap = NSBitmapImageRep(cgImage: context.makeImage()!)
+            try! bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--catalog-check"), CommandLine.arguments.indices.contains(index + 1) {
+            do {
+                let result = try ProbeCatalog.boxed(poster: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                print("Catalog round-trip: \(type(of: result))")
+            } catch { fputs("Catalog check failed: \(error)\n", stderr); exit(1) }
+            return
+        }
         let names = ["WallpaperIDXPC", "WallpaperCreationRequestXPC", "WallpaperSettingsViewModelsXPC", "WallpaperRemoteContextXPC", "WallpaperSnapshotXPC"]
         let report: [String: Any] = [
             "os": ProcessInfo.processInfo.operatingSystemVersionString,

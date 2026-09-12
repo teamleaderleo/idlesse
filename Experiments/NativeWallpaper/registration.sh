@@ -19,4 +19,4 @@ else
   /usr/bin/pluginkit -r "$ext"
   "$registrar" -u "$app"
 fi
-/usr/bin/pluginkit -m -A -D -v -i dev.idlesse.nativeprobe.wallpaper
+/usr/bin/pluginkit -m -A -D -v -i dev.idlesse.nativeprobe.catalog
