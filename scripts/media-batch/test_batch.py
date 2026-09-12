@@ -20,10 +20,22 @@ class AtlasTests(unittest.TestCase):
                          'bounds: 2,4,6,8\noffsets: -4,6,16,18\n')
 
 class EdgeBarTests(unittest.TestCase):
-    def frame(self, box=None):
+    def frame(self, box=None, matte='black'):
+        """A frame of `matte` with a gradient 'artwork' pasted at `box`.
+
+        The artwork is deliberately non-uniform: real exports never have four
+        matching corners unless something really is matted.
+        """
         from PIL import Image
-        im = Image.new('RGB', (512, 288), 'black')
-        if box: im.paste(Image.new('RGB', (box[2] - box[0], box[3] - box[1]), (180, 90, 70)), box[:2])
+        im = Image.new('RGB', (512, 288), matte)
+        if box:
+            w, h = box[2] - box[0], box[3] - box[1]
+            art = Image.new('RGB', (w, h))
+            px = art.load()
+            for y in range(h):
+                for x in range(w):
+                    px[x, y] = (40 + (200 * x) // max(w - 1, 1), 90, 200 - (150 * y) // max(h - 1, 1))
+            im.paste(art, box[:2])
         return im
     def test_full_bleed_frame_has_no_dead_edges(self):
         self.assertEqual(verify.bars(self.frame((0, 0, 512, 288))), {'top': 0, 'bottom': 0, 'left': 0, 'right': 0})
@@ -31,5 +43,9 @@ class EdgeBarTests(unittest.TestCase):
         self.assertEqual(verify.bars(self.frame((0, 106, 333, 288))), {'top': 106, 'bottom': 0, 'left': 0, 'right': 179})
     def test_wholly_black_frame_reports_full_span(self):
         self.assertEqual(verify.bars(self.frame()), {'top': 288, 'bottom': 288, 'left': 512, 'right': 512})
+    def test_renderer_void_is_caught_like_letterboxing(self):
+        # Azur spine background 0x18202b: not black, so a darkness test misses it.
+        edges = verify.bars(self.frame((120, 60, 400, 230), matte=(24, 32, 43)))
+        self.assertEqual(edges, {'top': 60, 'bottom': 58, 'left': 120, 'right': 112})
 
 if __name__ == '__main__': unittest.main()

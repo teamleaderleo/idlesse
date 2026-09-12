@@ -3,14 +3,30 @@
 import argparse,json,subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
-def bars(im):
-    """Dead edges, in sample pixels. A camera recipe tuned on the wrong animation
-    frames the model off-centre and leaves these behind."""
-    px=im.load();w,h=im.size;lit=lambda x,y:sum(px[x,y])>=24
-    rows=[y for y in range(h) if any(lit(x,y) for x in range(w))]
-    cols=[x for x in range(w) if any(lit(x,y) for y in range(h))]
-    if not rows or not cols:return {'top':h,'bottom':h,'left':w,'right':w}
-    return {'top':rows[0],'bottom':h-1-rows[-1],'left':cols[0],'right':w-1-cols[-1]}
+def bars(im,tolerance=12):
+    """Uniform matte around the art, in sample pixels, measured inward from each edge.
+
+    Two framing failures look identical here. A camera recipe tuned on the wrong
+    animation pushes the model off-centre and leaves black letterboxing; a model
+    fitted by whole-skeleton bounds (transparent effect padding included) strands
+    the character in the renderer's background colour. Both are a flat border, so
+    the matte colour is read from the corners rather than assumed to be black.
+
+    Corners that disagree mean the art reaches every edge: nothing to report.
+    """
+    px=im.load();w,h=im.size
+    near=lambda a,b:sum(abs(p-q) for p,q in zip(a,b))<=tolerance
+    def depth(line,limit):
+        """How many consecutive lines from an edge are one flat colour."""
+        matte=line(0)[0]
+        if not all(near(p,matte) for p in line(0)):return 0
+        n=0
+        while n<limit and all(near(p,matte) for p in line(n)):n+=1
+        return n
+    row=lambda y:[px[x,y] for x in range(w)]
+    col=lambda x:[px[x,y] for y in range(h)]
+    return {'top':depth(lambda n:row(n),h),'bottom':depth(lambda n:row(h-1-n),h),
+            'left':depth(lambda n:col(n),w),'right':depth(lambda n:col(w-1-n),w)}
 
 def main():
   p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--job-name',default='batch-2026-09-10')
