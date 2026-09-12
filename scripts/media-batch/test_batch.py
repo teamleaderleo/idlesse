@@ -47,5 +47,23 @@ class EdgeBarTests(unittest.TestCase):
         # Azur spine background 0x18202b: not black, so a darkness test misses it.
         edges = verify.bars(self.frame((120, 60, 400, 230), matte=(24, 32, 43)))
         self.assertEqual(edges, {'top': 60, 'bottom': 58, 'left': 120, 'right': 112})
+    def test_matte_down_part_of_an_edge_is_caught(self):
+        # Nagisa: black for the top of the left edge only, so no column is
+        # wholly matte. Requiring one passed this as clean.
+        im = self.frame((0, 0, 512, 288))
+        im.paste((0, 0, 0), (0, 0, 9, 110))
+        self.assertEqual(verify.bars(im)['left'], 9)
+    def test_angled_wedge_reports_its_deepest_point(self):
+        im = self.frame((0, 0, 512, 288))
+        px = im.load()
+        for y in range(288):
+            for x in range(max(0, 40 - y // 4)):
+                px[511 - x, y] = (0, 0, 0)
+        self.assertEqual(verify.bars(im)['right'], 40)
+    def test_scattered_dark_art_at_the_edge_is_not_matte(self):
+        # An outline or dark hair touching the frame for a few lines.
+        im = self.frame((0, 0, 512, 288))
+        im.paste((0, 0, 0), (0, 140, 30, 150))
+        self.assertEqual(verify.bars(im)['left'], 0)
 
 if __name__ == '__main__': unittest.main()
