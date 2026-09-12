@@ -1,0 +1,33 @@
+name: Palette 32 ambient variants
+
+on:
+  push:
+    branches:
+      - palette/32-ambient-variant-selection
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: palette/32-ambient-variant-selection
+          fetch-depth: 0
+      - name: Apply patch
+        run: |
+          python3 Tools/palette32_ambient_patch.py
+          git diff --check
+      - name: Run tests
+        run: ./test.sh
+      - name: Commit and push
+        run: |
+          git config user.name "Palette"
+          git config user.email "actions@users.noreply.github.com"
+          rm -f Tools/palette32_ambient_patch.py .github/workflows/palette-32-ambient-variants.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Persist Ambient scene variants"
+          git push origin HEAD:palette/32-ambient-variant-selection
