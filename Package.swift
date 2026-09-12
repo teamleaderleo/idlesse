@@ -33,6 +33,7 @@ let package = Package(
                 .linkedFramework("ScreenSaver"),
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("Carbon"),
+                .linkedLibrary("sqlite3"),
             ]
         ),
     ]
