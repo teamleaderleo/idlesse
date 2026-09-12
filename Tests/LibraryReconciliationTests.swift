@@ -8,11 +8,13 @@ struct LibraryReconciliationChecks {
         try digestAndProbableMoveRules()
         try ambiguityStaysUnresolved()
         try identityConflictsNeverFallThrough()
+        try largeCatalogPureDiff()
         try cancellationLeavesBytesUntouched()
         try staleReviewLeavesCurrentCatalogUntouched()
         try relinkAndReconcileStaySeparate()
         try digestBudgetSkipsLargeFiles()
-        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, identity conflicts, cancellation, stale-review atomicity, relink separation and bounded hashing")
+        try digestSkipsEscapingSymlink()
+        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, identity conflicts, 4k pure diff, cancellation, stale-review atomicity, relink separation, bounded hashing and symlink containment")
     }
 
     private static func entry(_ id: String, path: String, catalogID: String? = nil,
@@ -140,6 +142,20 @@ struct LibraryReconciliationChecks {
         precondition(diff.missingEntryIDs == ["old"] && diff.addedScannedIndices == [0])
     }
 
+    private static func largeCatalogPureDiff() throws {
+        let count = SceneLibraryStore.maxSourceEntries
+        let existing = (0..<count).map { index in
+            entry("entry-\(index)", path: "catalog/\(index).mp4", catalogID: "catalog-\(index)")
+        }
+        let scanned = (0..<count).map { index in
+            draft("catalog/\(index).mp4", catalogID: "catalog-\(index)")
+        }
+        let diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: existing, scanned: scanned)
+        precondition(diff.matches.count == count)
+        precondition(diff.summary.unchanged == count)
+        precondition(diff.addedScannedIndices.isEmpty && diff.missingEntryIDs.isEmpty && diff.probableMoves.isEmpty)
+    }
+
     private static func cancellationLeavesBytesUntouched() throws {
         let (store, dir) = try seedStore(entries: [entry("a", path: "A.mp4", bytes: 1)])
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -198,5 +214,19 @@ struct LibraryReconciliationChecks {
             budget: .init(maximumFiles: 2, maximumTotalBytes: 32, maximumFileBytes: 32))
         precondition(observations[0]?.hasDigest == true)
         precondition(observations[1] == nil)
+    }
+
+    private static func digestSkipsEscapingSymlink() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-digest-link-\(UUID().uuidString)")
+        let root = dir.appendingPathComponent("source")
+        let outside = dir.appendingPathComponent("outside.bin")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(repeating: 9, count: 16).write(to: outside)
+        let link = root.appendingPathComponent("escape.bin")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let observations = try SceneLibraryStore.boundedDigests(root: root, drafts: [draft("escape.bin")], indices: [0],
+            budget: .init(maximumFiles: 1, maximumTotalBytes: 32, maximumFileBytes: 32))
+        precondition(observations.isEmpty, "Digest reconciliation followed a symlink outside the Source root")
     }
 }
