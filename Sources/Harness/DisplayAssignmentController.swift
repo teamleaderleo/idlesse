@@ -115,8 +115,15 @@ final class DisplayAssignmentController: NSWindowController {
         same.isEnabled = !wallpaper.desktopSpanActive
         same.toolTip = wallpaper.desktopSpanActive
             ? "Desktop Span temporarily uses all displays while preserving your individual assignments."
-            : "Use one scene on every connected display."
+            : "Use one scene on every connected display. Turn this off to choose wallpapers per display."
         stack.addArrangedSubview(same)
+        if !wallpaper.desktopSpanActive {
+            stack.addArrangedSubview(wrappingLabel(
+                wallpaper.sameWallpaperOnAllDisplays
+                    ? "Turn this off to choose a different Library wallpaper for each display."
+                    : "Each display can follow the default wallpaper or use its own Library wallpaper.",
+                secondary: true))
+        }
 
         let shared = row(title: wallpaper.sameWallpaperOnAllDisplays ? "Shared wallpaper" : "Default wallpaper",
                          subtitle: wallpaper.selectedURL.map(displayName) ?? "No wallpaper selected",
@@ -126,23 +133,22 @@ final class DisplayAssignmentController: NSWindowController {
                                           enabled: true))
         stack.addArrangedSubview(shared)
 
-        let heading = label("Connected Displays", size: 13, weight: .semibold)
-        stack.addArrangedSubview(heading)
-        for screen in NSScreen.screens {
-            let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
-            let explicit = wallpaper.explicitDisplayURL(for: displayID)
-            let effective = wallpaper.desktopSpanActive || wallpaper.sameWallpaperOnAllDisplays
-                ? wallpaper.selectedURL : (explicit ?? wallpaper.selectedURL)
-            let saved = (wallpaper.desktopSpanActive || wallpaper.sameWallpaperOnAllDisplays) ? explicit : nil
-            var subtitle = displayDescription(screen, displayID: displayID)
-            subtitle += "\n" + (effective.map { "Using “\(displayName($0))”" } ?? "No wallpaper selected")
-            if let saved { subtitle += " · Saved individual: “\(displayName(saved))”" }
-            let canAssign = !wallpaper.desktopSpanActive && !wallpaper.sameWallpaperOnAllDisplays
-            let popup = makePopup(displayID: displayID,
-                                  current: explicit.map(displayName) ?? "Follow default wallpaper",
-                                  includeFollowShared: true,
-                                  enabled: canAssign)
-            stack.addArrangedSubview(row(title: screen.localizedName, subtitle: subtitle, popup: popup))
+        let showIndividualDisplays = !wallpaper.desktopSpanActive && !wallpaper.sameWallpaperOnAllDisplays
+        if showIndividualDisplays {
+            let heading = label("Connected Displays", size: 13, weight: .semibold)
+            stack.addArrangedSubview(heading)
+            for screen in NSScreen.screens {
+                let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+                let explicit = wallpaper.explicitDisplayURL(for: displayID)
+                let effective = explicit ?? wallpaper.selectedURL
+                var subtitle = displayDescription(screen, displayID: displayID)
+                subtitle += "\n" + (effective.map { "Using “\(displayName($0))”" } ?? "No wallpaper selected")
+                let popup = makePopup(displayID: displayID,
+                                      current: explicit.map(displayName) ?? "Follow default wallpaper",
+                                      includeFollowShared: true,
+                                      enabled: true)
+                stack.addArrangedSubview(row(title: screen.localizedName, subtitle: subtitle, popup: popup))
+            }
         }
 
         if choices.isEmpty {
@@ -236,7 +242,7 @@ final class DisplayAssignmentController: NSWindowController {
         box.borderWidth = 1
         box.contentViewMargins = NSSize(width: 14, height: 12)
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.widthAnchor.constraint(greaterThanOrEqualToConstant: 600).isActive = true
+        box.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         let text = NSStackView()
         text.orientation = .vertical
@@ -250,9 +256,18 @@ final class DisplayAssignmentController: NSWindowController {
         line.alignment = .centerY
         line.spacing = 16
         line.distribution = .fill
+        line.translatesAutoresizingMaskIntoConstraints = false
         text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        popup.widthAnchor.constraint(greaterThanOrEqualToConstant: 205).isActive = true
-        box.contentView = line
+        popup.widthAnchor.constraint(equalToConstant: 230).isActive = true
+
+        guard let content = box.contentView else { return box }
+        content.addSubview(line)
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            line.topAnchor.constraint(equalTo: content.topAnchor),
+            line.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
         return box
     }
 
