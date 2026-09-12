@@ -79,6 +79,7 @@ fi
 
 # 5. Comfort
 COMFORT_SRCS=(
+  Sources/Wallpaper/AmbientSet.swift
   Sources/Wallpaper/DesktopComfortController.swift
   Tests/ComfortTests.swift
 )
@@ -97,8 +98,7 @@ if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# 7. Library gallery virtualization. Compile only the production layout planner
-# from LibraryGridView so 1k/4k coverage stays synthetic and never decodes media.
+# 7. Library gallery virtualization
 LIBRARY_GRID_SRCS=(
   Sources/Harness/LibraryGridView.swift
   Tests/LibraryGridVirtualizationTests.swift
@@ -108,8 +108,7 @@ if needs_build "build/tests/library-grid" "${LIBRARY_GRID_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# 8. Ambient Sets core. Foundation-only synthetic coverage keeps scheduling,
-# priority, hold-expiry and migration decisions independent from AppKit/UI state.
+# 8. Ambient Sets resolver/persistence
 AMBIENT_SET_SRCS=(
   Sources/Wallpaper/AmbientSet.swift
   Sources/Wallpaper/AmbientSetStore.swift
@@ -121,8 +120,7 @@ if needs_build "build/tests/ambient-sets" "${AMBIENT_SET_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# 9. Named scene variants. Foundation-only coverage exercises package round trips,
-# sparse application, migration, stale-control handling and hard bounds.
+# 9. Named scene variants
 VARIANT_SRCS=(
   Sources/Runtime/Scene.swift
   Tests/VariantTests.swift
@@ -132,12 +130,54 @@ if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
   pids+=($!)
 fi
 
-# Await any parallel background compilations
+# 10. Wallpaper display/coverage policy
+WALLPAPER_POLICY_SRCS=(
+  Sources/Wallpaper/CoverageRestPolicy.swift
+  Sources/Wallpaper/CoverageMonitor.swift
+  Sources/Wallpaper/DisplayAssignmentStore.swift
+  Tests/WallpaperPolicyTests.swift
+)
+if needs_build "build/tests/wallpaper-policy" "${WALLPAPER_POLICY_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${WALLPAPER_POLICY_SRCS[@]}" -framework AppKit -o build/tests/wallpaper-policy &
+  pids+=($!)
+fi
+
+# 11. Synthetic display topology/identity reconnect coverage
+DISPLAY_TOPOLOGY_SRCS=(
+  Sources/Wallpaper/DisplayTopology.swift
+  Sources/Wallpaper/DisplayAssignmentStore.swift
+  Tests/DisplayTopologyTests.swift
+)
+if needs_build "build/tests/display-topology" "${DISPLAY_TOPOLOGY_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${DISPLAY_TOPOLOGY_SRCS[@]}" -framework AppKit -o build/tests/display-topology &
+  pids+=($!)
+fi
+
+# 12. Ambient actuation/cutover integration policy. Uses the production display
+# mode value and Library catalog, while every test remains synthetic/offscreen.
+AMBIENT_ACTUATION_SRCS=(
+  Sources/Wallpaper/AmbientSet.swift
+  Sources/Wallpaper/AmbientSetStore.swift
+  Sources/Wallpaper/AmbientLegacyAdapter.swift
+  Sources/Wallpaper/AmbientSetActuationPolicy.swift
+  Sources/Wallpaper/AmbientLegacyMigrationPlan.swift
+  Sources/Wallpaper/PersistedWallpaperAssignmentPlan.swift
+  Sources/Wallpaper/DisplayTopology.swift
+  Sources/Harness/SceneLibraryStore.swift
+  Sources/Wallpaper/AmbientLegacyScheduleTransaction.swift
+  Tests/AmbientSetActuationTests.swift
+)
+if needs_build "build/tests/ambient-set-actuation" "${AMBIENT_ACTUATION_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${AMBIENT_ACTUATION_SRCS[@]}" -framework AppKit -o build/tests/ambient-set-actuation &
+  pids+=($!)
+fi
+
+# Await parallel compiles.
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
 done
 
-# Run test suites
+# Executable suites.
 build/tests/decoder
 build/tests/scenes
 build/tests/recovery
@@ -147,3 +187,12 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/wallpaper-policy
+build/tests/display-topology
+build/tests/ambient-set-actuation
+
+# Cross-controller ownership contracts.
+python3 Tests/HomeShellContractTests.py
+python3 Tests/AmbientHomeContractTests.py
+python3 Tests/DisplayPlanContractTests.py
+python3 Tests/ProductIntegrationContractTests.py
