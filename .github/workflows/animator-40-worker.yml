@@ -34,10 +34,23 @@ jobs:
           body = []
           for line in lines[start:end]:
               body.append(line[10:] if line.startswith('          ') else line)
-          Path('/tmp/animator40.py').write_text('\n'.join(body) + '\n')
+          script = '\n'.join(body) + '\n'
+          first = script.index("('desktop span geometry',")
+          second = script.index("('surface hide',", first)
+          script = script[:first] + script[second:]
+          Path('/tmp/animator40.py').write_text(script)
           PY
           git reset --hard "$BASE"
           python3 /tmp/animator40.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Sources/Wallpaper/WallpaperController.swift')
+          text = p.read_text()
+          old = 'metal.desktopFrame = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }'
+          if old not in text:
+              raise SystemExit('desktop span geometry line missing')
+          p.write_text(text.replace(old, 'metal.desktopFrame = DesktopPreviewGeometry.union(NSScreen.screens.map(\\.frame))', 1))
+          PY
           git diff --check
           ./test.sh
           ./build.sh
