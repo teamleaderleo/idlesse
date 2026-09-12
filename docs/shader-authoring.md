@@ -30,4 +30,10 @@ Shaders can read up to eight fixed typed-input slots from `ShaderInputs` at frag
 
 See `docs/shader-inputs.md` for slot mapping, declaration limits and package behavior.
 
+## Custom shader effects
+
+The ordered Effects editor also supports a bounded **Custom Shader** effect. Its `effectMain` fragment samples one existing rendered layer/group texture at `texture(0)`, receives the same `ShaderInputs` block, and writes one destination in the existing effect scratch pool. The first format is single-pass and keeps standalone procedural shader nodes independent.
+
+See `docs/shader-effects.md` for the effect ABI, source/speed and count limits, transactional update behavior, package feature gate, and measured 1080p GPU/memory cost.
+
 Older wording that called these “GLSL shader layers” was inaccurate; Idlesse compiles Metal source at runtime.
