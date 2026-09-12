@@ -30,6 +30,21 @@ for token in [
 ]:
     assert token in home, token
 
+# #31 can inject its reusable visual destination without giving Home another
+# window's contentView. Until that dependency lands, the Phase-1 display summary
+# remains a compatible fallback.
+for token in [
+    "displaysDestinationController: NSViewController? = nil",
+    "activateDisplaysDestination: (() -> Void)? = nil",
+    "activateDisplaysDestination?()",
+    "if let destinationController = displaysDestinationController",
+    "let destination = destinationController.view",
+    "displayDestination.view.superview === home.displaysView",
+    "precondition(displayActivated)",
+]:
+    assert token in home, token
+assert "contentView = destination" not in home
+
 # Settings stays preferences-only; display targeting and desktop visibility are
 # Home concerns now.
 settings_init = settings.split("private func installContent", 1)[1]
