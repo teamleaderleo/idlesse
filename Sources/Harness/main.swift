@@ -28,6 +28,14 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         library?.onUseVariant = { [weak self] url, variantID in
             self?.wallpaper.select(url, variantID: variantID, automatic: true)
         }
+        library?.onEditVariant = { [weak self] url, asCopy, variantID in
+            guard let self else { return }
+            self.scenePreview.onClose = { [weak self] in
+                self?.library?.releaseActiveEditAccess()
+                self?.showLibrary()
+            }
+            self.scenePreview.openLibraryScene(url, asCopy: asCopy, variantID: variantID)
+        }
         library?.onPeek = { [weak self] url in self?.wallpaper.peek(url) }
         library?.onEndPeek = { [weak self] reverting in
             self?.wallpaper.endPeek(reverting: reverting)
@@ -101,7 +109,13 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
     private var pendingSceneURL: URL?
-    private lazy var scenePreview = StudioWindowController { [weak self] url in self?.wallpaper.select(url) }
+    private lazy var scenePreview: StudioWindowController = {
+        let controller = StudioWindowController { [weak self] url in self?.wallpaper.select(url) }
+        controller.onApplyVariant = { [weak self] url, variantID in
+            self?.wallpaper.select(url, variantID: variantID)
+        }
+        return controller
+    }()
     @objc private func showScenePreview() {
         saverView?.stopAnimation()
         window?.orderOut(nil)

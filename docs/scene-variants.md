@@ -36,3 +36,10 @@ Library grid thumbnails continue to represent canonical Default. Variant-specifi
 Library selected-detail previews may choose an authored variant, while ordinary grid/list thumbnails stay on Default. Collections persist `SceneSelection(sceneID, variantID)`; legacy `sceneIDs` decode as Default.
 
 Wallpaper playback keeps three layers separate: the resolved package scene, the selected authored variant, and session-only control changes. Switching a variant clears the temporary control layer and updates live surfaces in place, preserving scene time and media phase. The selected variant UUID is saved beside the wallpaper bookmark, while ad-hoc control edits remain session-only. The menu/status title appends the variant name and `Modified` when temporary controls differ from that variant. System backdrop stills are regenerated from the same effective scene.
+
+
+## Studio authoring
+
+Scene Controls contains a synthetic **Default** entry plus authored named variants. Creating, renaming, duplicating and deleting variants is staged inside the sheet; Apply records one document Undo step and Cancel restores the original in-place preview. Each control shows Default, Inherited or Override, and overridden controls expose **Use Default**. Named variants persist only values that differ from Default.
+
+Studio keeps the selected variant as editor session state. Switching variants updates the current renderer in place, so scene time and playing media keep their phase. Library Edit carries the selected variant into Studio, and **Use on Desktop** carries it back to wallpaper selection.

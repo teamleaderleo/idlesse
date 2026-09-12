@@ -229,6 +229,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let host = ScenePreviewHost()
     private var renderer: SceneRenderer? { get { host.renderer } set { host.renderer = newValue } }
     private var scene: SceneDescriptor { get { document.scene } set { document.scene = newValue } }
+    private var selectedVariantID: UUID?
     private var selectedURL: URL? { get { document.sourceURL } set { document.sourceURL = newValue } }
     private var scopedURL: URL? { get { document.scopedURL } set { document.scopedURL = newValue } }
     private var watcher: SceneWatcher?
@@ -241,6 +242,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var clock: SceneClock { host.clock }
     private let apply: (URL) -> Void
+    var onApplyVariant: ((URL, UUID?) -> Void)?
     var onClose: (() -> Void)?
 
     init(apply: @escaping (URL) -> Void) {
@@ -286,7 +288,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             let selection = self.nodePicker.indexOfSelectedItem
             let renderer = self.renderer
             self.scene = target.scene
-            let updated = self.renderer?.updateScene(target.scene) ?? false
+            let restoreID = self.selectedVariantID.flatMap { id in target.scene.variants.contains(where: { $0.id == id }) ? id : nil }
+            let effective = target.scene.applyingVariant(id: restoreID).scene
+            let updated = self.renderer?.updateScene(effective) ?? false
             if !updated { self.rebuild() }
             if (updated || self.renderer !== renderer), previous.timeline != target.scene.timeline {
                 try? self.clock.configure(timeline: target.scene.timeline)
@@ -301,6 +305,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             guard let self else { return }
             self.cancelLoading()
             self.watcher = nil
+            if let id = self.selectedVariantID, !target.scene.variants.contains(where: { $0.id == id }) { self.selectedVariantID = nil }
             self.updateInspector()
             self.nodePicker.selectItem(at: target.selected)
             self.selectNode()
@@ -421,7 +426,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             var nodes = self.scene.nodes
             guard let id = self.editor.selectedNode?.id else { return }
             _ = SceneTree.edit(id, in: &nodes) { siblings, index in siblings[index].transform = transform }
-            _ = self.renderer?.updateScene(self.scene.replacingNodes(nodes))
+            let preview = self.scene.replacingNodes(nodes).applyingVariant(id: self.selectedVariantID).scene
+            _ = self.renderer?.updateScene(preview)
         }
         dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
         dragOverlay.onNudge = { [weak self] x, y in self?.editor.nudge(x: x, y: y) }
@@ -603,7 +609,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         do {
             let bounds = NSRect(origin: .zero, size: canvas.bounds.insetBy(dx: 40, dy: 40).size)
             guard bounds.width > 0, bounds.height > 0 else { return }
-            next = try host.prepare(scene: scene, bounds: bounds, scale: window.backingScaleFactor,
+            let effective = scene.applyingVariant(id: selectedVariantID).scene
+            next = try host.prepare(scene: effective, bounds: bounds, scale: window.backingScaleFactor,
                                     metal: engine.indexOfSelectedItem == 1, onError: onError)
         } catch {
             detailLabel.stringValue = error.localizedDescription
@@ -630,6 +637,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         updatePlayback()
     }
     private func updateInspector() {
+        if let id = selectedVariantID, !scene.variants.contains(where: { $0.id == id }) { selectedVariantID = nil }
         if !scene.usesAudio { clock.audioEnabled = false }
         audioToggle.isEnabled = scene.usesAudio && !saving
         audioToggle.state = clock.audioEnabled ? .on : .off
@@ -667,7 +675,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         removeNodeButton.isEnabled = !saving && siblings.count > 1
         reorderButton.isEnabled = !saving && siblings.count > 1
         nameField.stringValue = node.displayName
-        var previewNodes = (try? scene.evaluated().nodes) ?? scene.nodes
+        let effectiveScene = scene.applyingVariant(id: selectedVariantID).scene
+        var previewNodes = (try? effectiveScene.evaluated().nodes) ?? effectiveScene.nodes
         for binding in scene.bindings where [.x, .y, .scale, .rotation].contains(binding.target.property) {
             _ = SceneTree.edit(binding.target.nodeID, in: &previewNodes) { nodes, index in nodes[index].locked = true }
         }
@@ -712,8 +721,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let previous = scene
         let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
-        scene = (controls ?? scene).replacingNodes(nodes)
-        let updated = renderer?.updateScene(scene) ?? false
+        var authoring = SceneVariantAuthoringState(scene: (controls ?? scene).replacingNodes(nodes), selectedID: selectedVariantID)
+        authoring.pruneRemovedControls()
+        scene = authoring.scene
+        let effective = scene.applyingVariant(id: selectedVariantID).scene
+        let updated = renderer?.updateScene(effective) ?? false
         if !updated { rebuild() }
         guard updated || renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
         if previous.timeline != scene.timeline {
@@ -758,23 +770,42 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     @objc private func editControls() {
         guard !saving else { return }
-        let original = scene.parameters
-        SceneParameterControls.present(scene: scene, window: window) { [weak self] values in
-            guard let self, self.scene.parameters == original, values != original else { return }
-            var next = self.scene
-            next.parameters = values
-            _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Controls", controls: next)
-        }
+        let originalVariantID = selectedVariantID
+        let sheet = SceneVariantControlsSheet(scene: scene, selectedID: selectedVariantID, window: window,
+            preview: { [weak self] draft, variantID in
+                guard let self else { return false }
+                let effective = draft.applyingVariant(id: variantID).scene
+                return self.renderer?.updateScene(effective) ?? false
+            }, completion: { [weak self] next, variantID in
+                guard let self else { return }
+                let changed = next.parameters != self.scene.parameters || next.variants != self.scene.variants
+                let previousID = self.selectedVariantID
+                self.selectedVariantID = variantID
+                if changed {
+                    if !self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Scene Variants", controls: next) {
+                        self.selectedVariantID = previousID
+                        _ = self.renderer?.updateScene(self.scene.applyingVariant(id: previousID).scene)
+                    }
+                } else {
+                    _ = self.renderer?.updateScene(self.scene.applyingVariant(id: variantID).scene)
+                }
+            }, cancel: { [weak self] in
+                guard let self else { return }
+                _ = self.renderer?.updateScene(self.scene.applyingVariant(id: originalVariantID).scene)
+            })
+        sheet.present()
     }
     @objc private func toggleAudio() {
         guard scene.usesAudio, !saving else { return }
         clock.audioEnabled = audioToggle.state == .on
-        if renderer?.updateScene(scene) != true { rebuild() }
+        let effective = scene.applyingVariant(id: selectedVariantID).scene
+        if renderer?.updateScene(effective) != true { rebuild() }
         updatePlayback()
     }
     @objc private func togglePointer() {
         clock.pointerEnabled = pointerToggle.state == .on
-        if renderer?.updateScene(scene) != true { rebuild() }
+        let effective = scene.applyingVariant(id: selectedVariantID).scene
+        if renderer?.updateScene(effective) != true { rebuild() }
         updatePlayback()
     }
     @objc private func editKeyframes() {
@@ -1443,6 +1474,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let selected = nodePicker.indexOfSelectedItem
         let previousRenderer = renderer
         scene = savedScene
+        if let id = selectedVariantID, !scene.variants.contains(where: { $0.id == id }) { selectedVariantID = nil }
         rebuild()
         guard renderer !== previousRenderer else {
             scene = previous
@@ -1526,7 +1558,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 try await document.save(to: url, replacing: revision)
                 guard let self else { return }
                 self.saving = false
-                self.load(url)
+                self.load(url, variantID: self.selectedVariantID)
             } catch {
                 self?.saving = false
                 self?.updateInspector()
@@ -1569,7 +1601,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
 
     private func beginExport(to url: URL, width: Int, fps: Int, duration: Double) {
-        let snapshot = scene
+        let snapshot = scene.applyingVariant(id: selectedVariantID).scene
         saving = true; watcher = nil
         let wasPaused = paused
         paused = true; updatePlayback(); updateInspector()
@@ -1776,7 +1808,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     @objc private func useOnDesktop() {
         guard !draft, !saving, let selectedURL else { return }
         window.close()
-        apply(selectedURL)
+        if let onApplyVariant { onApplyVariant(selectedURL, selectedVariantID) }
+        else { apply(selectedURL) }
     }
     @objc private func showAudioSample() {
         guard mayDiscard() else { return }
@@ -1807,6 +1840,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         document.revision = nil
         window.representedURL = nil
         applyButton.isEnabled = false
+        selectedVariantID = nil
         scene = SceneDescriptor(title: "Aurora", nodes: [SceneNode(content: .gradient)])
         try? clock.configure(timeline: nil)
         rebuild()
@@ -1823,16 +1857,16 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         panel.canChooseFiles = true
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            self?.load(url)
+            self?.load(url, variantID: self?.selectedVariantID)
         }
     }
     private func cancelLoading() { generation += 1; loadTask?.cancel(); loadTask = nil }
-    func openLibraryScene(_ url: URL, asCopy: Bool) {
+    func openLibraryScene(_ url: URL, asCopy: Bool, variantID: UUID? = nil) {
         show()
         guard mayDiscard() else { return }
-        load(url, asCopy: asCopy)
+        load(url, asCopy: asCopy, variantID: variantID)
     }
-    private func load(_ url: URL, asCopy: Bool = false) {
+    private func load(_ url: URL, asCopy: Bool = false, variantID: UUID? = nil) {
         cancelLoading()
         let request = generation
         detailLabel.stringValue = "Opening \(url.lastPathComponent)…"
@@ -1845,13 +1879,25 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
                 let next = contents.scene
                 guard let self, request == self.generation else { return }
                 let previous = self.scene
+                let previousVariantID = self.selectedVariantID
                 let previousRenderer = self.renderer
                 let previousPointer = self.clock.pointerEnabled
                 let previousAudio = self.clock.audioEnabled
                 if self.selectedURL != url { self.clock.pointerEnabled = false; self.clock.audioEnabled = false }
                 self.scene = next
+                let application = next.applyingVariant(id: variantID)
+                self.selectedVariantID = application.selectedVariantID
                 self.rebuild()
-                guard self.renderer !== previousRenderer else { self.scene = previous; self.clock.pointerEnabled = previousPointer; self.clock.audioEnabled = previousAudio; return }
+                guard self.renderer !== previousRenderer else {
+                    self.scene = previous
+                    self.selectedVariantID = previousVariantID
+                    self.clock.pointerEnabled = previousPointer
+                    self.clock.audioEnabled = previousAudio
+                    return
+                }
+                if variantID != nil && application.selectedVariantID == nil {
+                    self.detailLabel.stringValue = "Requested variant is unavailable - editing Default"
+                }
                 if self.selectedURL != url || previous.timeline != next.timeline {
                     try self.clock.configure(timeline: next.timeline)
                     self.renderer?.refreshSceneTime()
