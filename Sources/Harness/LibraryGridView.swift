@@ -116,13 +116,6 @@ final class LibraryGridView: NSView {
         }
     }
 
-    /// Hit-tests directly from layout geometry, so hover-peek works even though
-    /// only a small window of cards exists at any moment.
-    func item(at point: NSPoint) -> LibraryItem? {
-        guard let index = layoutPlan?.itemIndex(at: point), items.indices.contains(index) else { return nil }
-        return items[index]
-    }
-
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         attachScrollObserverIfNeeded()

@@ -258,7 +258,7 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
     private var expectingCommit: URL?
 
     func refresh() {
-        guard !evaluating, !wallpaper.isLoading, !wallpaper.isPeeking else { return }
+        guard !evaluating, !wallpaper.isLoading else { return }
         evaluating = true
         defer { evaluating = false }
         guard wallpaper.isRunning, let current = wallpaper.selectedURL else {
