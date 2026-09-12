@@ -44,7 +44,29 @@ Camera recipes live in `cameras.json`, as `[zoom, cx, cy]` under the skeleton st
 "CH0179_home": {"default": [2.0, 0.93, 0.33], "Start_Idle_01": [2.3, 0.22, 0.27]}
 ```
 
-The camera actually used is recorded per export in `.source.json` and `state.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Recheck first/middle/last frames after modifying a recipe; saved video checkpoints deliberately do not regenerate just because renderer code changed. `verify.py` exits non-zero when an export has dead edges wider than 2 sample pixels, which is what a mismatched recipe looks like; `--allow-bars` downgrades that to a warning.
+The camera actually used is recorded per export in `.source.json` and `state.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Saved video checkpoints deliberately do not regenerate just because renderer code changed. `verify.py` exits non-zero when an export has dead edges wider than 2 sample pixels; `--allow-bars` downgrades that to a warning. It reads the matte colour from each edge rather than assuming black, so it catches a renderer background left visible around the art as well as letterboxing.
+
+### Calibrating a camera
+
+Do not hand-edit a recipe and pay for an export to find out whether it worked. `calibrate.py` renders against a workspace and reports the matte:
+
+```sh
+# what the current recipe does
+python3 scripts/media-batch/calibrate.py --workspace build/ba-export-study \
+  --asset assets-ai-batch/<id> --stem <Stem> --animation Idle_01
+
+# find one that covers the frame, starting from whatever is configured
+python3 scripts/media-batch/calibrate.py --workspace build/ba-export-study \
+  --asset assets-ai-batch/<id> --stem <Stem> --animation Idle_01 --solve
+
+# compare framings by eye before committing to one
+python3 scripts/media-batch/calibrate.py --workspace build/azur-spine \
+  --asset models/<id> --stem <id> --animation normal --sweep 1.6 2.2 2.8
+```
+
+It works against any workspace holding a `render` binary and a `cameras.json`, so the same command serves the lobby and both Azur adapters. It writes preview PNGs and restores the workspace's `cameras.json` afterwards: copy the recipe you chose into the tracked file yourself.
+
+Two things it is deliberately strict about. It measures several frames spread across the loop and reports the **worst**, because characters sway and a recipe that covers the frame at `t=0` can leave a gap a second later — that is exactly how barred exports have passed review. And zero matte only means the frame is covered, never that the crop is good; where the character sits in frame is a judgement call, so look at the preview.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 

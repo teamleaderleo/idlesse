@@ -26,6 +26,8 @@ The Library is the front door. Choose a scene, use it on your desktop, or open S
 
 [Beta readiness and packaging](docs/beta-readiness.md) tracks the remaining release gates. Local builds are not notarized public releases.
 
+Building a wallpaper from game assets is a separate operator pipeline from the app's own Library import: see [the wallpaper pipeline](docs/wallpaper-pipeline.md) for which renderer a source needs, how to calibrate a camera before paying for an export, and the checks that catch a misframed result.
+
 See the [Developer Log: Multi-Monitor Optimization & Feature Toggles (10 Sep 2026)](docs/dev-log-2026-09-10.md) for architectural notes on the 90% memory reduction (1.6 GB → 173 MB), dual-display shared video engine, and feature toggles.
 
 ## Current status
