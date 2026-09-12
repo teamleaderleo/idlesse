@@ -1,8 +1,10 @@
 # Native wallpaper catalog probe
 
 Separate, non-shipping ExtensionKit experiment. Apple’s Wallpaper settings can
-load its **Idlesse Lab → Synthetic Orbit** catalog. Rendering is not implemented:
-do not select the tile. The probe reads no Library or personal media assets.
+load its **Idlesse Lab → Synthetic Orbit** catalog. A synthetic remote-layer
+renderer and snapshots are implemented and locally tested. Actual host rendering
+is not yet visually verified; select it only during an attended, restorable test.
+The probe reads no Library or personal media assets.
 
 ## Build and test
 
@@ -14,7 +16,7 @@ glaeda-apple --profile native-probe-xcode warm
 ```
 
 The managed products directory contains `Idlesse Native Probe.app` and
-`runtime-inspection.json`. The companion generates a synthetic 640×360 poster and
+`runtime-inspection.json`, `catalog-check.txt`, and `surface-check.txt`. The companion generates a synthetic 640×360 poster and
 checks secure catalog serialization against the installed framework. Xcode builds
 the extension using its `com.apple.product-type.extensionkit-extension` product
 and `_NSExtensionMain` entry point. Both bundles are ad-hoc signed and verified;
@@ -62,12 +64,38 @@ macOS 26.6.2 (25G83), SDK 26.5, arm64:
 
 The caller check fails closed. The XPC interface permits only the catalog,
 download-status, and acquire methods with narrow decoding class allowlists.
-Acquire deliberately replies with a not-implemented error.
+Lifecycle calls now create, resize/update, snapshot, and invalidate surfaces.
+The surface store is serial and shared across short-lived connections. Repeated
+acquire of the same UUID reuses its context. Four surfaces maximum; destination
+geometry is bounded to 8192 pixels per edge and 34 million pixels, and snapshots
+are capped at 1920 on their longest edge. A Core Animation orbit avoids a CPU
+frame timer; inactive host activity pauses the scene. No media decoder is used.
+
+The private context/snapshot wrappers are isolated in `Surface.swift`. They require
+macOS 26, named ivars, and the observed exact instance sizes; changed layouts fail
+closed. This is experimental ABI coupling, not a supported public framework API.
+
+## Surface follow-up on 2026-09-12
+
+The managed build runs a local surface check covering:
+
+- Secure remote-context archive/decode round-trip and repeated-acquire reuse.
+- Explicit invalidation and rejection of snapshots for released IDs.
+- Four-surface capacity, invalid geometry rejection, snapshot dimensions/size,
+  and an opaque BGRA background pixel.
+- Repeated snapshot construction/release (100 iterations) and pause/resume time.
+
+These checks create unhosted contexts, not desktop windows or wallpaper assignments.
+The updated catalog was visible in Settings, but the Mac locked before selection.
+No native surface acquire/snapshot has been claimed as visually verified. Test
+registration was removed without selecting a different wallpaper.
 
 ## Next gate
 
-Implement synthetic remote surface acquire/update/invalidate and snapshots. Test
-one display with a restorable prior assignment before connecting the real Library.
+Unlock the test desktop, register the staged probe, and select Synthetic Orbit
+on one display. Verify motion, snapshots, updates, and invalidate logs, then restore
+the recorded prior assignment through normal settings before unregistering. Do
+this before connecting the real Library.
 Then qualify lock, sleep, hotplug, and assignment synchronization. Keep this
 experiment independent of the shipping wallpaper renderer.
 

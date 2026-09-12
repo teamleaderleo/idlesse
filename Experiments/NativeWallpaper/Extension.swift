@@ -8,6 +8,14 @@ import os
     func provideSettings(_ types: Any?, reply: @escaping (Any?, NSError?) -> Void)
     @objc(acquireWithId:request:reply:)
     func acquire(_ id: Any?, request: Any?, reply: @escaping (Any?, NSError?) -> Void)
+    @objc(updateWithId:request:reply:)
+    func update(_ id: Any?, request: Any?, reply: @escaping (NSError?) -> Void)
+    @objc(invalidateWithId:reply:)
+    func invalidate(_ id: Any?, reply: @escaping (NSError?) -> Void)
+    @objc(snapshotWithId:reply:)
+    func snapshot(_ id: Any?, reply: @escaping (Any?, NSError?) -> Void)
+    @objc(selectedChoicesDidChangeFor:reply:)
+    func selected(_ id: Any?, reply: @escaping (NSError?) -> Void)
     @objc(isChoiceDownloadedWith:reply:)
     func downloaded(_ id: Any?, reply: @escaping (Bool, NSError?) -> Void)
 }
@@ -40,7 +48,7 @@ struct ProbeConfiguration: AppExtensionConfiguration {
         }
         let interface = NSXPCInterface(with: ProbeWallpaperProtocol.self)
         let classSet = NSMutableSet(array: [NSString.self, NSNumber.self, NSData.self, NSArray.self, NSDictionary.self, NSURL.self, NSError.self])
-        for name in ["WallpaperContentTypeSetXPC", "WallpaperSettingsViewModelsXPC", "WallpaperIDXPC", "WallpaperCreationRequestXPC", "WallpaperChoiceIDXPC"] {
+        for name in ["WallpaperContentTypeSetXPC", "WallpaperSettingsViewModelsXPC", "WallpaperIDXPC", "WallpaperCreationRequestXPC", "WallpaperChoiceIDXPC", "WallpaperUpdateRequestXPC", "WallpaperRemoteContextXPC", "WallpaperSnapshotXPC"] {
             guard let type = NSClassFromString(name) else { extensionLog("Required XPC class missing: \(name)"); return false }
             classSet.add(type)
         }
@@ -49,6 +57,12 @@ struct ProbeConfiguration: AppExtensionConfiguration {
         interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.provideSettings(_:reply:)), argumentIndex: 0, ofReply: true)
         for index in 0...1 { interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.acquire(_:request:reply:)), argumentIndex: index, ofReply: false) }
         interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.downloaded(_:reply:)), argumentIndex: 0, ofReply: false)
+        interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.acquire(_:request:reply:)), argumentIndex: 0, ofReply: true)
+        for index in 0...1 { interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.update(_:request:reply:)), argumentIndex: index, ofReply: false) }
+        for selector in [#selector(ProbeWallpaperProtocol.invalidate(_:reply:)), #selector(ProbeWallpaperProtocol.snapshot(_:reply:)), #selector(ProbeWallpaperProtocol.selected(_:reply:))] {
+            interface.setClasses(classes, for: selector, argumentIndex: 0, ofReply: false)
+        }
+        interface.setClasses(classes, for: #selector(ProbeWallpaperProtocol.snapshot(_:reply:)), argumentIndex: 0, ofReply: true)
         connection.exportedInterface = interface
         connection.exportedObject = ProbeHandler()
         connection.resume()
@@ -66,8 +80,40 @@ final class ProbeHandler: NSObject, ProbeWallpaperProtocol {
         } catch { extensionLog("Catalog failed: \(error)"); reply(nil, error as NSError) }
     }
     func acquire(_ id: Any?, request: Any?, reply: @escaping (Any?, NSError?) -> Void) {
-        extensionLog("Acquire rejected: rendering is not implemented in this catalog probe")
-        reply(nil, NSError(domain: "IdlesseProbe", code: 4, userInfo: [NSLocalizedDescriptionKey: "Catalog probe only; renderer not yet implemented."]))
+        perform(id, reply: reply) { key in
+            guard let request else { throw probeError("Missing creation request") }
+            return try ProbeSurfaceStore.shared.acquire(id: key, geometry: ProbeGeometry(request))
+        }
+    }
+    func update(_ id: Any?, request: Any?, reply: @escaping (NSError?) -> Void) {
+        perform(id, reply: { _, error in reply(error) }) { key in
+            guard let request else { throw probeError("Missing update request") }
+            try ProbeSurfaceStore.shared.update(id: key, request: request); return nil
+        }
+    }
+    func invalidate(_ id: Any?, reply: @escaping (NSError?) -> Void) {
+        perform(id, reply: { _, error in reply(error) }) { key in
+            ProbeSurfaceStore.shared.invalidate(id: key); return nil
+        }
+    }
+    func snapshot(_ id: Any?, reply: @escaping (Any?, NSError?) -> Void) {
+        perform(id, reply: reply) { key in
+            let snapshot = try ProbeSurfaceStore.shared.snapshot(id: key)
+            extensionLog("Serving synthetic IOSurface snapshot")
+            return snapshot
+        }
+    }
+    func selected(_ id: Any?, reply: @escaping (NSError?) -> Void) { reply(nil) }
+    private func perform(_ id: Any?, reply: @escaping (Any?, NSError?) -> Void,
+                         body: @escaping (UUID) throws -> AnyObject?) {
+        guard let id, let key = probeUUID(id) else {
+            extensionLog("Request rejected: missing surface UUID")
+            reply(nil, probeError("Missing surface UUID")); return
+        }
+        ProbeSurfaceStore.shared.queue.async {
+            do { reply(try body(key), nil) }
+            catch { extensionLog("Surface request failed: \(error)"); reply(nil, error as NSError) }
+        }
     }
     func downloaded(_ id: Any?, reply: @escaping (Bool, NSError?) -> Void) { reply(true, nil) }
 }
