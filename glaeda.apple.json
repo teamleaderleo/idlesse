@@ -30,6 +30,16 @@
         "BUILD_DIR": "{products}",
         "IDLESSE_MODULE_CACHE_PATH": "{module_cache}"
       }
+    },
+    "native-probe-xcode": {
+      "engine": "script",
+      "executable": "Experiments/NativeWallpaper/build-xcode.sh",
+      "arguments": [],
+      "environment": {
+        "BUILD_DIR": "{products}",
+        "IDLESSE_MODULE_CACHE_PATH": "{module_cache}",
+        "IDLESSE_SWIFT_SCRATCH_PATH": "{scratch}"
+      }
     }
   },
   "preparations": {
