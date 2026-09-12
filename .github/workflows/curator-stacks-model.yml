@@ -1,0 +1,30 @@
+name: Curator Stack Model
+
+on:
+  push:
+    branches: [curator/library-stacks-36-exec]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply stack model patch
+        run: python3 .github/curator_stacks_model_patch.py
+      - name: Run focused and existing tests
+        run: bash test.sh
+      - name: Compile app
+        run: swift build --product IdlesseApp
+      - name: Commit generated implementation
+        run: |
+          git config user.name '📚 Curator'
+          git config user.email 'curator@users.noreply.github.com'
+          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryStacks.swift Tests/LibraryStackTests.swift docs/library-stacks.md build.sh test.sh
+          git commit -m 'Add durable Library stack model (#36)' -m 'Extend stable entries with explicit Source group identity and ordered user stacks, persist them through Quarry SQLite, and add deterministic representative/search coverage.' -m '📚 Curator'
+          git push origin HEAD:curator/library-stacks-36-exec
