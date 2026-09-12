@@ -146,7 +146,7 @@ private struct AmbientSetActuationTests {
                 }
                 fail("injected schedule write failure was swallowed")
             } catch InjectedFailure.write { }
-            expect(try Data(contentsOf: file) == original, "failed cutover modified the Library index")
+            expect((try? Data(contentsOf: file)) == original, "failed cutover modified the Library index")
         }
 
         print("AmbientSetActuationTests passed")
