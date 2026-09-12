@@ -15,10 +15,29 @@ Open Library from the preview window or Wallpaper menu (Command-L).
   A Source scan visits at most 20,000 filesystem items and the Library accepts at most
   4,096 source-backed entries total. Scanning ends when the add operation ends; there
   is no background rescan service or folder polling.
+- Sources… → Rescan <name>… scans descendants beneath the currently authorized Source
+  root, computes a pure reconciliation diff, and presents a review before changing the
+  catalog. New, missing, changed, confirmed moved/restored, unchanged, and review-only
+  probable moves are summarized separately. Canceling the scan or review leaves the
+  current catalog untouched. Apply validates the complete candidate catalog and writes
+  it once atomically. Source media remains external and unchanged.
+- Reconciliation preserves `Entry.id` when identity survives. Matching order is unique
+  Source `catalogID`, exact relative path, then unique content digest evidence already
+  present or computed for a small targeted candidate set. Cheap size/type/title/media
+  observations can propose probable moves for review; they never transfer identity by
+  themselves. Conflicting non-empty catalog IDs at the same path are replacements.
+  Ambiguous duplicate and many-to-one cases remain separate until a user confirms an
+  unambiguous probable move.
+- Missing Source entries are retained as tombstones with their stable ID, last known
+  locator, favorite/recent state, and ordered collection membership. Normal Library
+  browsing and playback skip them. A later rescan can restore the same ID. Tombstones
+  remain inside the bounded catalog until explicitly removed or migrated to the durable
+  catalog store.
 - Sources… → Relink <name>… replaces only that Source's folder bookmark. Stable Source
   and entry IDs, relative paths, favorites, recents, collections, schedules, and saved
   ordering remain intact. This is the recovery path after moving or renaming a root
-  folder when its bookmark can no longer resolve it.
+  folder when its bookmark can no longer resolve it. Relink changes the root locator;
+  Rescan reconciles descendants beneath a healthy root.
 - Sources… → Remove <name>… removes the Source and its entries from the Library index.
   Favorites, recent records, and collection membership for those removed entries are
   cleaned from the index. Source media and poster files remain untouched.
@@ -35,10 +54,10 @@ Open Library from the preview window or Wallpaper menu (Command-L).
 ## Library 2 index
 
 The Library index remains native Foundation JSON under
-`Application Support/Idlesse/Library/index.json`; there is no database dependency.
+`Application Support/Idlesse/Library/index.json`; there is no database dependency yet.
 Library 2 writes catalog `version: 2` and keeps these top-level groups:
 
-- `entries`: wallpaper references and metadata.
+- `entries`: wallpaper references, Source observations, and availability state.
 - `sources`: Source roots, each with a stable ID, user-facing name, one folder bookmark,
   and optional string catalog metadata.
 - `favorites`, `recent`, and `collections`: the existing user state.
@@ -46,7 +65,11 @@ Library 2 writes catalog `version: 2` and keeps these top-level groups:
 An entry uses one of two location forms. An individual import has a security-scoped
 `bookmark`. A source-backed entry has `sourceID` plus `relativeMediaPath` and can also
 carry `catalogID`, `relativePosterPath`, `series`, `character`, `variant`, `tags`,
-`mediaType`, `width`, `height`, `fps`, `duration`, and string provenance fields.
+`mediaType`, `width`, `height`, `fps`, `duration`, string provenance fields,
+`availability` (`present`/`missing`), and reconciliation observations. Observations are
+bounded file byte length, modification timestamp, optional digest+algorithm, and a
+bounded package revision for `.idlesse` directories. Size/mtime/package observations
+identify change candidates; durable identity comes from the reconciliation rules above.
 Optional fields are omitted from JSON when empty so large catalogs stay compact.
 
 Pre-Library-2 indexes have no `version` or `sources` key and contain entries with a
@@ -57,18 +80,21 @@ are carried forward. A failed decode, semantic validation failure, future catalo
 version, oversized index, or failed save leaves the original index bytes in place and
 reports the error instead of replacing the file.
 
-Existing safety bounds remain in force: the JSON index is capped at 1 MiB; security
-bookmarks at 16 KiB; individual imports at 128; Sources at 32; favorites and recent
-state at 256; collections at 32 with 256 distinct scene references each. Source-backed
-entries have a separate 4,096-entry bound. Recent state is kept to its newest 256
-records as larger Source catalogs are used. The 1 MiB file cap can become the tighter
-limit when entries contain rich metadata.
+Existing safety bounds remain in force: the JSON compatibility index is capped at 4 MiB;
+security bookmarks at 16 KiB; individual imports at 128; Sources at 32; favorites and
+recent state at 256; collections at 32 with 256 distinct scene references each.
+Source-backed entries, including retained missing tombstones, have a separate 4,096-entry
+bound. Recent state is kept to its newest 256 records as larger Source catalogs are used.
+The 4 MiB cap is a bounded bridge for rich catalogs while the SQLite migration lands;
+it is not intended to grow repeatedly.
 
 Relative media and poster paths must be non-empty relative paths with no absolute
 prefix, empty component, `.` component, or `..` component. Resolution appends the
 validated path to the authorized root and checks containment again after resolving
 symlinks, so a symlink cannot redirect a catalog entry outside the granted folder.
-A missing Source stays in the index and reports a Relink Source… recovery message.
+A missing Source root stays in the index and reports a Relink Source… recovery message.
+A missing descendant stays as a reconciliation tombstone and reports Rescan Source
+recovery when directly resolved.
 
 Security-scoped access has an explicit owner. `SceneLibraryStore.Access` starts access
 on the individual file bookmark or Source root bookmark and closes it when the access
@@ -77,6 +103,12 @@ access object for the duration of each read. A source-backed wallpaper or Studio
 keeps a Source access object alive beyond URL resolution so asynchronous consumers can
 read descendants under the folder grant. The host can release those retained grants
 when that wallpaper or Studio source is replaced.
+
+Reconciliation hashing has a hard candidate budget. The default helper examines at most
+32 targeted unmatched regular files, at most 8 MiB per file and 64 MiB total, and uses a
+whole-file SHA-256 only inside those bounds. Large videos are skipped instead of sampled
+and promoted to identity evidence. Ordinary rescans therefore depend on catalog IDs,
+paths, and cheap observations rather than hashing a large media collection.
 
 Library storage versioning is independent of `.idlesse` scene revisions. This migration
 does not change revision 21 scene format.
@@ -141,13 +173,15 @@ Cloud-backed individual media or Source descendants may need to download when ex
 selected for preview.
 
 Validation covers individual-bookmark round trips, version-1 decoding and lazy migration,
-mixed individual and source-backed catalogs, moved/missing/relinked roots, traversal and
-symlink escape rejection, metadata round trips, favorite/recent/collection preservation,
-source removal without media deletion, retained legacy limits, source limits, corrupt and
-future-version index preservation, generated Metal posters, favorite filtering, empty
-searches, and bundled-scene routing to a Studio draft. The offscreen UI capture exercises
-layout but cannot fully reproduce macOS glass-control appearance; live UI validation
-remains separate from those tests.
+mixed individual and source-backed catalogs, moved/missing/relinked roots, reconciliation
+additions/removals/moves/replacements, ambiguity and review-only relinks, stable-ID state
+retention, cancellation/atomic apply, bounded digest work, traversal and symlink escape
+rejection, metadata round trips, favorite/recent/collection preservation, source removal
+without media deletion, retained legacy limits, source limits, corrupt and future-version
+index preservation, generated Metal posters, favorite filtering, empty searches, and
+bundled-scene routing to a Studio draft. The offscreen UI capture exercises layout but
+cannot fully reproduce macOS glass-control appearance; live UI validation remains
+separate from those tests.
 
 ## Wallpaper transitions and shared canvases
 
