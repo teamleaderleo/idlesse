@@ -38,8 +38,13 @@ replace(wall, '''            self.select(url, variantID: self.activeVariantID, r
 lib = "Sources/Harness/SceneLibraryController.swift"
 replace(lib, '''        let variantID: UUID?
         let modified: Bool
-''', '''        let variantID: UUID? = nil
-        let modified: Bool = false
+''', '''        let variantID: UUID?
+        let modified: Bool
+        init(url: URL?, paused: Bool, canPause: Bool, scene: SceneDescriptor?,
+             variantID: UUID? = nil, modified: Bool = false) {
+            self.url = url; self.paused = paused; self.canPause = canPause; self.scene = scene
+            self.variantID = variantID; self.modified = modified
+        }
 ''')
 
 docs = Path("docs/scene-variants.md")
