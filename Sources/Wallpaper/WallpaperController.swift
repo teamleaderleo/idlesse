@@ -298,8 +298,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             resumeDefaults.set(data, forKey: Self.resumeKey)
             resumeDefaults.set(pausedByUser, forKey: Self.pauseKey)
-            if let activeVariantID { resumeDefaults.set(activeVariantID.uuidString, forKey: Self.resumeVariantKey) }
-            else { resumeDefaults.removeObject(forKey: Self.resumeVariantKey) }
+            if let persistedVariantID = unavailableVariantID ?? activeVariantID {
+                resumeDefaults.set(persistedVariantID.uuidString, forKey: Self.resumeVariantKey)
+            } else {
+                resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
+            }
         } catch {
             // Never resume an older wallpaper after the latest selection could not be saved.
             resumeDefaults.removeObject(forKey: Self.resumeKey)
@@ -576,14 +579,16 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// adoption, no rotation interference. The previous scene is restored on exit.
     var isPeeking: Bool { prePeekSelection != nil }
     func peek(_ url: URL) {
-        if prePeekSelection == nil, let selectedURL { prePeekSelection = (selectedURL, activeVariantID) }
+        if prePeekSelection == nil, let selectedURL {
+            prePeekSelection = (selectedURL, unavailableVariantID ?? activeVariantID)
+        }
         guard url != selectedURL else { return }
         select(url, variantID: nil, automatic: true, restoringPause: pausedByUser, transient: true)
     }
     func endPeek(reverting: Bool = true) {
         guard let back = prePeekSelection else { return }
         prePeekSelection = nil
-        guard reverting, back.url != selectedURL || back.variantID != activeVariantID else { return }
+        guard reverting, back.url != selectedURL || back.variantID != (unavailableVariantID ?? activeVariantID) else { return }
         select(back.url, variantID: back.variantID, automatic: true, restoringPause: pausedByUser, transient: true)
     }
     private struct EffectiveScene {
@@ -668,7 +673,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             do {
                 let sourceScene = try await self.source.resolve(url)
-                let requestedVariantID = reloading ? (variantID ?? self.activeVariantID) : variantID
+                let requestedVariantID = reloading ? (variantID ?? self.unavailableVariantID ?? self.activeVariantID) : variantID
                 let retainedRuntime = reloading ? self.runtimeControlValues : [:]
                 let effective = self.compose(source: sourceScene, variantID: requestedVariantID, runtimeValues: retainedRuntime)
                 let playable = effective.scene
@@ -771,7 +776,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         guard url.pathExtension.lowercased() == "idlesse" else { return }
         watcher = SceneWatcher(package: url, assets: scene.assetNodes.flatMap { $0.assets }) { [weak self] in
             guard let self, self.selectedURL == url else { return }
-            self.select(url, variantID: self.activeVariantID, reloading: true)
+            self.select(url, variantID: self.unavailableVariantID ?? self.activeVariantID, reloading: true)
         }
     }
 
