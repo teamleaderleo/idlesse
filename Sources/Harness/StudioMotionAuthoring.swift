@@ -37,6 +37,14 @@ enum StudioMotionAuthoring {
         return .controlled(binding.parameter)
     }
 
+    static func typedControlKey(for target: SceneControlTarget, in scene: SceneDescriptor) -> String? {
+        scene.parameters.first(where: { $0.value.targets.contains(target) })?.key
+    }
+
+    static func typedOwnership(of target: SceneControlTarget, in scene: SceneDescriptor) -> StudioMotionOwnership {
+        typedControlKey(for: target, in: scene).map(StudioMotionOwnership.controlled) ?? .staticValue
+    }
+
     static func keyIndex(in track: SceneKeyframeTrack, at time: Double) -> Int? {
         guard let index = track.keys.indices.min(by: {
             abs(track.keys[$0].time - time) < abs(track.keys[$1].time - time)
@@ -153,6 +161,43 @@ enum StudioMotionAuthoring {
         return next
     }
 
+    static func makeStatic(_ target: SceneControlTarget, in scene: SceneDescriptor) throws -> SceneDescriptor {
+        guard typedControlKey(for: target, in: scene) != nil else { return scene }
+        let evaluated = try scene.evaluated()
+        guard let presented = evaluated.allNodes.first(where: { $0.id == target.nodeID }) else {
+            throw SceneError.invalid("The controlled property is missing.")
+        }
+        var nodes = scene.nodes
+        guard SceneTree.edit(target.nodeID, in: &nodes, { siblings, index in
+            switch target.property {
+            case .visible:
+                siblings[index].visible = presented.visible
+            case .blend:
+                siblings[index].blend = presented.blend
+            case .text:
+                if var value = siblings[index].typography, let source = presented.typography {
+                    value.text = source.text
+                    siblings[index].content = .text(value)
+                }
+            case .fill:
+                if var value = siblings[index].typography, let source = presented.typography {
+                    value.fill = source.fill
+                    siblings[index].content = .text(value)
+                } else if var value = siblings[index].shape, let source = presented.shape {
+                    value.fill = source.fill
+                    siblings[index].content = .shape(value)
+                }
+            }
+        }) else {
+            throw SceneError.invalid("The controlled property is missing.")
+        }
+        var next = scene
+        for key in next.parameters.keys { next.parameters[key]?.targets.removeAll { $0 == target } }
+        next = next.replacingNodes(nodes)
+        _ = try next.evaluated()
+        return next
+    }
+
     static func bind(_ target: ScenePropertyAddress, to signal: SceneParameterBinding.Signal,
                      in scene: SceneDescriptor) throws -> SceneDescriptor {
         var next = scene
@@ -182,6 +227,45 @@ enum StudioMotionAuthoring {
         }
         _ = try next.evaluated()
         return next
+    }
+
+    static func bind(_ target: SceneControlTarget, toParameter key: String,
+                     in scene: SceneDescriptor) throws -> SceneDescriptor {
+        guard let parameter = scene.parameters[key], try typedParameter(parameter, supports: target, in: scene.nodes) else {
+            throw SceneError.invalid("Choose a compatible scene control.")
+        }
+        var next = scene
+        for existing in next.parameters.keys { next.parameters[existing]?.targets.removeAll { $0 == target } }
+        next.parameters[key]?.targets.append(target)
+        _ = try next.evaluated()
+        return next
+    }
+
+    static func newControl(for target: SceneControlTarget, name: String,
+                           in scene: SceneDescriptor) throws -> SceneParameter {
+        guard let node = scene.allNodes.first(where: { $0.id == target.nodeID }) else {
+            throw SceneError.invalid("The property is missing.")
+        }
+        var parameter: SceneParameter
+        switch target.property {
+        case .visible:
+            parameter = .init(name: name, type: .boolean, boolean: node.visible)
+        case .blend:
+            parameter = .init(name: name, type: .choice, text: (node.blend ?? .normal).rawValue,
+                              choices: ["normal", "add", "multiply", "screen"])
+        case .text:
+            guard let text = node.typography?.text else { throw SceneError.invalid("Text controls need a text layer.") }
+            parameter = .init(name: name, type: .string, text: text)
+        case .fill:
+            if let fill = node.typography?.fill ?? node.shape?.fill {
+                parameter = .init(name: name, type: .color, text: fill)
+            } else {
+                throw SceneError.invalid("Fill controls need a text or shape layer.")
+            }
+        }
+        parameter.targets = [target]
+        guard parameter.isValid else { throw SceneError.invalid("The new control default is invalid.") }
+        return parameter
     }
 
     static func updateMapping(_ target: ScenePropertyAddress, scale: Double, offset: Double,
@@ -256,6 +340,18 @@ enum StudioMotionAuthoring {
             throw SceneError.invalid("The key source is outside its supported range.")
         }
         return source
+    }
+
+    private static func typedParameter(_ parameter: SceneParameter, supports target: SceneControlTarget,
+                                       in nodes: [SceneNode]) throws -> Bool {
+        guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == target.nodeID }) else { return false }
+        switch target.property {
+        case .visible: return parameter.type == .boolean
+        case .blend:
+            return parameter.type == .choice && parameter.choices.allSatisfy { SceneNode.Blend(rawValue: $0) != nil }
+        case .text: return parameter.type == .string && node.typography != nil
+        case .fill: return parameter.type == .color && (node.typography != nil || node.shape != nil)
+        }
     }
 
     private static func upsert(_ value: Double, at time: Double, in track: inout SceneKeyframeTrack) {
