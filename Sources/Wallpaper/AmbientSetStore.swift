@@ -47,16 +47,15 @@ final class AmbientSetStore {
     func replaceAll(_ sets: [AmbientSet]) throws {
         var hold = catalog.manualHold
         if case .set(let heldID) = hold?.intent, !sets.contains(where: { $0.id == heldID }) { hold = nil }
-        try Self.validate(sets, manualHold: hold)
-        catalog.sets = sets
-        catalog.manualHold = hold
-        try persist()
+        let next = AmbientSetCatalog(sets: sets, manualHold: hold)
+        try Self.validate(next.sets, manualHold: next.manualHold)
+        try persist(next)
     }
 
     func setManualHold(_ hold: AmbientManualHold?) throws {
-        try Self.validate(catalog.sets, manualHold: hold)
-        catalog.manualHold = hold
-        try persist()
+        let next = AmbientSetCatalog(sets: catalog.sets, manualHold: hold)
+        try Self.validate(next.sets, manualHold: next.manualHold)
+        try persist(next)
     }
 
     func append(_ set: AmbientSet) throws {
@@ -68,11 +67,9 @@ final class AmbientSetStore {
     func remove(id: String) throws {
         var hold = catalog.manualHold
         if case .set(let heldID) = hold?.intent, heldID == id { hold = nil }
-        let updated = catalog.sets.filter { $0.id != id }
-        try Self.validate(updated, manualHold: hold)
-        catalog.sets = updated
-        catalog.manualHold = hold
-        try persist()
+        let next = AmbientSetCatalog(sets: catalog.sets.filter { $0.id != id }, manualHold: hold)
+        try Self.validate(next.sets, manualHold: next.manualHold)
+        try persist(next)
     }
 
     func move(id: String, to index: Int) throws {
@@ -83,14 +80,15 @@ final class AmbientSetStore {
         try replaceAll(updated)
     }
 
-    private func persist() throws {
-        let directory = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    private func persist(_ next: AmbientSetCatalog) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(catalog)
+        let data = try encoder.encode(next)
         guard data.count <= Self.maxCatalogBytes else { throw AmbientSetStoreError.catalogTooLarge }
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
+        catalog = next
     }
 
     static func validate(_ sets: [AmbientSet], manualHold: AmbientManualHold? = nil) throws {
@@ -100,6 +98,11 @@ final class AmbientSetStore {
             guard set.isValid else { throw AmbientSetStoreError.invalidSet(set.id) }
             guard ids.insert(set.id).inserted else { throw AmbientSetStoreError.duplicateID(set.id) }
         }
-        if let manualHold, !manualHold.isValid { throw AmbientSetStoreError.invalidManualHold }
+        if let manualHold {
+            guard manualHold.isValid else { throw AmbientSetStoreError.invalidManualHold }
+            if case .set(let heldID) = manualHold.intent, !ids.contains(heldID) {
+                throw AmbientSetStoreError.invalidManualHold
+            }
+        }
     }
 }
