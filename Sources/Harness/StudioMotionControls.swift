@@ -15,6 +15,13 @@ enum StudioMotionCommand {
     case advancedKeyframes
 }
 
+enum StudioTypedMotionCommand {
+    case select
+    case makeStatic
+    case bindControl(String)
+    case createControl
+}
+
 /// Compact per-property Motion affordance. The popover edits the existing binding/keyframe model;
 /// it owns no document state and delegates every mutation to StudioWindowController.
 final class StudioPropertyMotionButton: NSButton {
@@ -100,9 +107,9 @@ final class StudioPropertyMotionButton: NSButton {
         ] {
             let action = StudioMotionMenuAction { [weak self] in self?.onCommand?(target, .bindSignal(item.1)) }
             retainedActions.append(action)
-            let item = NSMenuItem(title: item.0, action: #selector(StudioMotionMenuAction.perform(_:)), keyEquivalent: "")
-            item.target = action
-            drivers.menu?.addItem(item)
+            let menuItem = NSMenuItem(title: item.0, action: #selector(StudioMotionMenuAction.perform(_:)), keyEquivalent: "")
+            menuItem.target = action
+            drivers.menu?.addItem(menuItem)
         }
         drivers.isEnabled = enabledForEditing
         stack.addArrangedSubview(drivers)
@@ -228,6 +235,118 @@ final class StudioPropertyMotionButton: NSButton {
         box.boxType = .separator
         box.widthAnchor.constraint(equalToConstant: 240).isActive = true
         return box
+    }
+}
+
+final class StudioTypedMotionButton: NSButton {
+    private var scene = SceneDescriptor(title: "Motion", nodes: [SceneNode(content: .gradient)])
+    private var propertyTarget: SceneControlTarget?
+    private var enabledForEditing = false
+    private var retainedActions: [NSObject] = []
+    private var presentedPopover: NSPopover?
+    var onCommand: ((SceneControlTarget, StudioTypedMotionCommand) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        bezelStyle = .texturedRounded
+        isBordered = false
+        imagePosition = .imageOnly
+        target = self
+        action = #selector(openEditor)
+        widthAnchor.constraint(equalToConstant: 22).isActive = true
+        heightAnchor.constraint(equalToConstant: 22).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(target: SceneControlTarget, scene: SceneDescriptor, enabled: Bool) {
+        propertyTarget = target
+        self.scene = scene
+        enabledForEditing = enabled
+        let owner = StudioMotionAuthoring.typedOwnership(of: target, in: scene)
+        image = NSImage(systemSymbolName: owner == .staticValue ? "circle" : "slider.horizontal.3",
+                        accessibilityDescription: owner.title)
+        toolTip = "Motion · \(owner.title)"
+        setAccessibilityLabel("Motion · \(owner.title)")
+        isEnabled = true
+    }
+
+    @objc private func openEditor() {
+        guard let target = propertyTarget else { return }
+        retainedActions.removeAll()
+        presentedPopover?.close()
+        onCommand?(target, .select)
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 7
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        let title = NSTextField(labelWithString: typedLabel(target.property))
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let owner = StudioMotionAuthoring.typedOwnership(of: target, in: scene)
+        let status = NSTextField(labelWithString: owner.title)
+        status.font = .systemFont(ofSize: 11, weight: .medium)
+        status.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(status)
+        stack.addArrangedSubview(commandButton("Static", command: .makeStatic))
+
+        let control = NSPopUpButton(frame: .zero, pullsDown: true)
+        control.addItem(withTitle: "Control…")
+        let compatible = scene.parameters.filter { pair in
+            switch target.property {
+            case .visible: return pair.value.type == .boolean
+            case .blend: return pair.value.type == .choice && pair.value.choices.allSatisfy { SceneNode.Blend(rawValue: $0) != nil }
+            case .text: return pair.value.type == .string
+            case .fill: return pair.value.type == .color
+            }
+        }.sorted { $0.value.name < $1.value.name }
+        for pair in compatible {
+            let action = StudioMotionMenuAction { [weak self] in self?.onCommand?(target, .bindControl(pair.key)) }
+            retainedActions.append(action)
+            let item = NSMenuItem(title: pair.value.name, action: #selector(StudioMotionMenuAction.perform(_:)), keyEquivalent: "")
+            item.target = action
+            control.menu?.addItem(item)
+        }
+        if !compatible.isEmpty { control.menu?.addItem(.separator()) }
+        let createAction = StudioMotionMenuAction { [weak self] in self?.onCommand?(target, .createControl) }
+        retainedActions.append(createAction)
+        let create = NSMenuItem(title: "New Control…", action: #selector(StudioMotionMenuAction.perform(_:)), keyEquivalent: "")
+        create.target = createAction
+        control.menu?.addItem(create)
+        control.isEnabled = enabledForEditing
+        stack.addArrangedSubview(control)
+        stack.frame = NSRect(x: 0, y: 0, width: 250, height: 130)
+        let controller = NSViewController()
+        controller.view = stack
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        presentedPopover = popover
+        popover.show(relativeTo: bounds, of: self, preferredEdge: .maxX)
+    }
+
+    private func commandButton(_ title: String, command: StudioTypedMotionCommand) -> NSButton {
+        let button = NSButton(title: title, target: nil, action: nil)
+        let action = StudioMotionAction { [weak self] in
+            guard let self, let target = self.propertyTarget else { return }
+            self.onCommand?(target, command)
+        }
+        retainedActions.append(action)
+        button.target = action
+        button.action = #selector(StudioMotionAction.perform)
+        button.isEnabled = enabledForEditing
+        return button
+    }
+
+    private func typedLabel(_ property: SceneControlTarget.Property) -> String {
+        switch property {
+        case .visible: return "Visibility"
+        case .blend: return "Blend"
+        case .text: return "Text"
+        case .fill: return "Fill"
+        }
     }
 }
 
