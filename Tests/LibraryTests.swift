@@ -342,6 +342,23 @@ import Foundation
         let oversizedSize = (try FileManager.default.attributesOfItem(atPath: corruptFile.path)[.size] as? NSNumber)?.intValue
         precondition(oversizedSize == SceneLibraryStore.maxIndexBytes + 1)
 
-        print("Library checks passed: v1 migration, mixed bookmarks/sources, relink, path containment, metadata, state preservation, bounds, and corrupt-index preservation")
+        // Media-kind classification drives type filters and grid badges.
+        // Metadata-only entries classify without touching the filesystem;
+        // unresolvable bookmarks stay .other and match no type filter.
+        func kind(_ entry: SceneLibraryStore.Entry) -> SceneLibraryStore.MediaKind {
+            SceneLibraryStore.mediaKind(of: entry, in: store)
+        }
+        let vid = SceneLibraryStore.Entry(id: "v", title: "v", relativeMediaPath: "a/b.MP4")
+        precondition(kind(vid) == .video)
+        let typed = SceneLibraryStore.Entry(id: "t", title: "t", mediaType: "video")
+        precondition(kind(typed) == .video)
+        let scene = SceneLibraryStore.Entry(id: "s", title: "s", relativeMediaPath: "pkg.idlesse")
+        precondition(kind(scene) == .scene)
+        let still = SceneLibraryStore.Entry(id: "i", title: "i", relativeMediaPath: "a/IMG_1.Heic")
+        precondition(kind(still) == .image)
+        let broken = SceneLibraryStore.Entry(id: "b", title: "b", bookmark: Data([9, 9, 9]))
+        precondition(kind(broken) == .other)
+
+        print("Library checks passed: v1 migration, mixed bookmarks/sources, relink, path containment, metadata, state preservation, bounds, media kinds and corrupt-index preservation")
     }
 }
