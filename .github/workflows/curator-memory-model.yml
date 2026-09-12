@@ -1,0 +1,37 @@
+name: Curator Library Memory
+
+on:
+  push:
+    branches: [curator/library-memory-25-exec]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply memory model patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/curator_memory_model_patch.py')
+          s = p.read_text().replace('try statement.bindNull(at: 2)', 'try statement.bind(Optional<Double>.none, at: 2)')
+          p.write_text(s)
+          PY
+          python3 .github/curator_memory_model_patch.py
+      - name: Run existing and focused tests
+        run: bash test.sh
+      - name: Compile app
+        run: swift build --product IdlesseApp
+      - name: Commit generated implementation
+        run: |
+          git config user.name '📚 Curator'
+          git config user.email 'curator@users.noreply.github.com'
+          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryMemory.swift Tests/LibraryMemoryTests.swift docs/library-memory.md test.sh
+          git commit -m 'Add Library memory and Smart Collections (#25)' -m 'Persist ratings and play counts, add bounded Smart Collection predicates, conservative duplicate detection, and seeded weighted/surprise selection in the Quarry catalog.' -m '📚 Curator'
+          git push origin HEAD:curator/library-memory-25-exec
