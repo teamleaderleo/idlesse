@@ -717,6 +717,7 @@ struct LocalSceneSource: SceneSource {
             let emitter: SceneNode.Emitter?
             let typography: SceneNode.Typography?
             let shape: SceneNode.Shape?
+            let shader: SceneNode.Shader?
             let type: SceneDescriptor.Kind
             let asset: String?
             let visible: Bool?
@@ -828,6 +829,11 @@ struct LocalSceneSource: SceneSource {
                 } else if node.type == .shape, let shape = node.shape {
                     try shape.validate(); content = .shape(shape)
                 } else { throw SceneError.invalid("Text or shape content is missing.") }
+            } else if node.type == .shader {
+                guard manifest.version == SceneFormat.revision, node.asset == nil, node.children == nil, let shader = node.shader else {
+                    throw SceneError.invalid("Shader nodes require revision 21 shader source and no asset or children.")
+                }
+                try shader.validate(); content = .shader(shader)
             } else if node.type == .gradient {
                 guard node.children == nil, manifest.version >= 2, node.asset == nil else { throw SceneError.invalid("Gradient nodes require v2 and no asset.") }
                 content = .gradient
@@ -841,7 +847,9 @@ struct LocalSceneSource: SceneSource {
                 content = node.type == .video ? .video(asset) : .image(asset)
             }
             guard node.type == .particles || node.emitter == nil else { throw SceneError.invalid("Only particle nodes accept an emitter.") }
-            guard node.type == .text || node.typography == nil, node.type == .shape || node.shape == nil else { throw SceneError.invalid("Content fields must match the node type.") }
+            guard node.type == .text || node.typography == nil,
+                  node.type == .shape || node.shape == nil,
+                  node.type == .shader || node.shader == nil else { throw SceneError.invalid("Content fields must match the node type.") }
             guard node.style == nil || manifest.version >= 4 else { throw SceneError.invalid("Masks and color effects require scene version 4.") }
             guard (node.style?.vignette ?? 0) == 0 || manifest.version >= 5 else { throw SceneError.invalid("Vignette requires scene version 5.") }
             guard manifest.version >= 18 || !(node.style?.effects.contains { $0.type == .displacement } ?? false) else {
@@ -1063,6 +1071,7 @@ enum ScenePackageWriter {
             if let emitter = node.emitter { json["emitter"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(emitter)) }
             if let text = node.typography { json["typography"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(text)) }
             if let shape = node.shape { json["shape"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(shape)) }
+            if let shader = node.shader { json["shader"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(shader)) }
             if node.style != .plain {
                 json["style"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(node.style))
             }
@@ -1161,7 +1170,8 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
     for node in new {
         guard let index = old.firstIndex(where: { $0.id == node.id }),
               old[index].kind == node.kind, old[index].assets == node.assets,
-              old[index].typography == node.typography, old[index].shape == node.shape else { return nil }
+              old[index].typography == node.typography, old[index].shape == node.shape,
+              old[index].shader?.source == node.shader?.source else { return nil }
         if node.kind == .group, sceneResourceOrder(from: old[index].children, to: node.children) == nil { return nil }
         order.append(index)
     }

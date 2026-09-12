@@ -311,7 +311,11 @@ final class StudioLayerInspector: NSScrollView {
         case .particles(let emitter):
             views = emitterViews(node: node, emitter: emitter, editable: editable)
         case .shader(let shader):
-            views = [info("Shader", value: "\(shader.source.utf8.count) chars · ×\(shader.speed)", tooltip: "Metal fragment snippet; edit the source in the scene JSON.")]
+            views = [StudioShaderEditorView(shader: shader, editable: editable) { [weak self] updated in
+                guard let self, var next = self.currentNode, next.id == node.id else { return }
+                next.content = .shader(updated)
+                self.onCommitNode?(next, "Edit Shader")
+            }]
         }
         contentSection.setViews(views)
     }

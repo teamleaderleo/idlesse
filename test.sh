@@ -97,6 +97,27 @@ if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 7. Shader scene persistence/resource invalidation
+SHADER_SCENE_SRCS=(
+  Sources/Runtime/Scene.swift
+  Tests/ShaderSceneTests.swift
+)
+if needs_build "build/tests/shader-scene" "${SHADER_SCENE_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${SHADER_SCENE_SRCS[@]}" -o build/tests/shader-scene &
+  pids+=($!)
+fi
+
+# 8. Shader Studio compiler diagnostics
+SHADER_STUDIO_SRCS=(
+  Sources/Runtime/Scene.swift
+  Sources/Harness/StudioShaderEditor.swift
+  Tests/ShaderStudioTests.swift
+)
+if needs_build "build/tests/shader-studio" "${SHADER_STUDIO_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${SHADER_STUDIO_SRCS[@]}" -framework AppKit -framework Metal -o build/tests/shader-studio &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -109,3 +130,5 @@ build/tests/recovery
 build/tests/audio
 build/tests/comfort
 build/tests/library
+build/tests/shader-scene
+build/tests/shader-studio
