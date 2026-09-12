@@ -1,0 +1,30 @@
+name: Lumen branch patch 57
+
+on:
+  push:
+    branches:
+      - lumen/issue-57-inline-library-controls
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lumen/issue-57-inline-library-controls
+          fetch-depth: 0
+      - name: Apply focused source patch
+        run: python3 Tools/lumen_patch_57.py
+      - name: Commit focused implementation
+        run: |
+          rm Tools/lumen_patch_57.py .github/workflows/lumen-patch-57.yml
+          git config user.name "Lumen"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Add inline active wallpaper controls"
+          git push origin HEAD:lumen/issue-57-inline-library-controls
