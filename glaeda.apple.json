@@ -4,7 +4,9 @@
     "app": {
       "engine": "script",
       "executable": "build.sh",
-      "arguments": ["app"],
+      "arguments": [
+        "app"
+      ],
       "environment": {
         "CONFIG": "debug",
         "ARCHS": "arm64",
@@ -19,6 +21,11 @@
       "engine": "swiftpm",
       "configuration": "debug",
       "product": "IdlesseApp"
+    }
+  },
+  "preparations": {
+    "app": {
+      "engine": "swiftpm"
     }
   }
 }
