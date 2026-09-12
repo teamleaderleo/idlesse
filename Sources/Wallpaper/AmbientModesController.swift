@@ -44,8 +44,11 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
         get { defaults.bool(forKey: "modes.followSun") }
         set { defaults.set(newValue, forKey: "modes.followSun"); refresh() }
     }
+    /// Opt-in only: the system location prompt must never appear unless the
+    /// user explicitly checks "Use my location". Fresh installs fall back to
+    /// the manual coordinates until then.
     var useMyLocation: Bool {
-        get { defaults.object(forKey: "modes.useMyLocation") == nil ? true : defaults.bool(forKey: "modes.useMyLocation") }
+        get { defaults.object(forKey: "modes.useMyLocation") == nil ? false : defaults.bool(forKey: "modes.useMyLocation") }
         set { defaults.set(newValue, forKey: "modes.useMyLocation"); requestLocationFix(); refresh() }
     }
     var manualLatitude: Double {
