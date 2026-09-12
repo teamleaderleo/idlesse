@@ -1,0 +1,30 @@
+name: Curator Stack Gallery
+
+on:
+  push:
+    branches: [curator/library-stacks-36-exec]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply stack gallery patch
+        run: python3 .github/curator_stacks_ui_patch.py
+      - name: Run Library and catalog tests
+        run: bash test.sh
+      - name: Compile app
+        run: swift build --product IdlesseApp
+      - name: Commit generated implementation
+        run: |
+          git config user.name '📚 Curator'
+          git config user.email 'curator@users.noreply.github.com'
+          git add Sources/Harness/SceneLibraryController.swift Sources/Harness/LibraryGridView.swift Tests/LibraryStackTests.swift docs/library-stacks.md
+          git commit -m 'Add stack-aware Library browsing (#36)' -m 'Compact explicit groups into representative cards, preserve flat browsing, choose matching search representatives, open focused children, and author user stacks from existing metadata.' -m '📚 Curator'
+          git push origin HEAD:curator/library-stacks-36-exec
