@@ -108,6 +108,19 @@ if needs_build "build/tests/library-grid" "${LIBRARY_GRID_SRCS[@]}"; then
   pids+=($!)
 fi
 
+# 8. Ambient Sets core. Foundation-only synthetic coverage keeps scheduling,
+# priority, hold-expiry and migration decisions independent from AppKit/UI state.
+AMBIENT_SET_SRCS=(
+  Sources/Wallpaper/AmbientSet.swift
+  Sources/Wallpaper/AmbientSetStore.swift
+  Sources/Wallpaper/AmbientLegacyAdapter.swift
+  Tests/AmbientSetTests.swift
+)
+if needs_build "build/tests/ambient-sets" "${AMBIENT_SET_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${AMBIENT_SET_SRCS[@]}" -o build/tests/ambient-sets &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -121,3 +134,4 @@ build/tests/audio
 build/tests/comfort
 build/tests/library
 build/tests/library-grid
+build/tests/ambient-sets
