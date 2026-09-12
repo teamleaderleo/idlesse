@@ -244,7 +244,7 @@ struct SceneComponent: Codable, Sendable {
         for (key, parameter) in parameters {
             var cloned = parameter
             cloned.name = String("\(root.displayName) · \(parameter.name)".prefix(80))
-            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: $0.property) }
+            cloned.targets = parameter.targets.map { .init(nodeID: nodes[$0.nodeID]!, property: target.property) }
             next.parameters[keys[key]!] = cloned
         }
         for binding in bindings {
@@ -283,12 +283,13 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
 enum SceneFormat {
     static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants"]
+    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants", "shader-effects"]
     static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
         if scene.allNodes.contains(where: { $0.kind == .particles }) { result.insert("particles") }
         if scene.allNodes.contains(where: { $0.style != .plain }) { result.insert("effects") }
+        if scene.allNodes.contains(where: { $0.style.effects.contains { $0.shader != nil } }) { result.insert("shader-effects") }
         if scene.allNodes.contains(where: { $0.needsComposition || $0.sprite != nil }) { result.insert("composition") }
         if scene.canvas == .desktopSpan { result.insert("desktop-span") }
         if !scene.bindings.isEmpty || scene.timeline != nil { result.insert("motion") }
@@ -729,7 +730,9 @@ struct SceneNode: Codable, Sendable {
             var id: UUID? = UUID()
             var type: Kind
             var amount: Double
+            var shader: Shader? = nil
             var range: ClosedRange<Double> {
+                if shader != nil { return 0...1 }
                 switch type {
                 case .displacement: return 0...0.1
                 case .blur: return 0...24
@@ -801,7 +804,7 @@ struct SceneNode: Codable, Sendable {
     var shader: Shader? { if case .shader(let shader) = content { return shader }; return nil }
     var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
     var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
-    var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
+    var hasAnimatedEffects: Bool { style.effects.contains { $0.shader != nil || ($0.type == .displacement && $0.amount > 0) } }
     var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles, .shader].contains(kind))) }
     func duplicated() -> SceneNode {
         let identities = Dictionary(uniqueKeysWithValues: descendants.map { ($0.id, UUID()) })
@@ -1006,6 +1009,9 @@ struct LocalSceneSource: SceneSource {
             guard manifest.version >= 18 || !(node.style?.effects.contains { $0.type == .displacement } ?? false) else {
                 throw SceneError.invalid("Displacement requires scene version 18.")
             }
+            guard manifest.version == SceneFormat.revision || !(node.style?.effects.contains { $0.shader != nil } ?? false) else {
+                throw SceneError.invalid("Custom shader effects require revision 21.")
+            }
             guard (node.style?.effects.isEmpty ?? true) || manifest.version >= 15 else { throw SceneError.invalid("Ordered effects require scene version 15.") }
             guard manifest.version < 6 || node.id != nil else { throw SceneError.invalid("Every v6 node needs a UUID id.") }
             var decodedStyle = node.style ?? .plain
@@ -1099,7 +1105,8 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
     func label(in nodes: [SceneNode]) -> String {
         guard let effectID, let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }),
               let index = node.style.effects.firstIndex(where: { $0.id == effectID }) else { return property.rawValue }
-        return "Effect \(index + 1) · \(node.style.effects[index].type.rawValue) amount"
+        let effect = node.style.effects[index]
+        return "Effect \(index + 1) · \(effect.shader == nil ? effect.type.rawValue : "custom shader") amount"
     }
     func range(in nodes: [SceneNode]) throws -> ClosedRange<Double> {
         guard (property == .effectAmount) == (effectID != nil) else { throw SceneError.invalid("Effect amount requires an effect ID, and other properties cannot use one.") }
@@ -1343,6 +1350,7 @@ enum SceneBudget {
     static let maxVideos = 2
     static let maxGradients = 4
     static let maxShaders = 4
+    static let maxShaderEffects = 4
     static let decodedImagePixels = 32_000_000
     static func validate(_ roots: [SceneNode]) throws {
         func walk(_ nodes: [SceneNode], depth: Int) throws -> [SceneNode] {
@@ -1353,8 +1361,17 @@ enum SceneBudget {
                 try node.typography?.validate()
                 try node.shape?.validate()
                 try node.shader?.validate()
-                guard node.style.effects.count <= 8, node.style.effects.allSatisfy({ $0.amount.isFinite && $0.range.contains($0.amount) }) else {
-                    throw SceneError.invalid("Use at most eight effects per layer, with amounts inside each effect's range.")
+                guard node.style.effects.count <= 8 else {
+                    throw SceneError.invalid("Use at most eight effects per layer.")
+                }
+                for effect in node.style.effects {
+                    guard effect.amount.isFinite, effect.range.contains(effect.amount) else {
+                        throw SceneError.invalid("Effect amounts must stay inside their supported ranges.")
+                    }
+                    try effect.shader?.validate()
+                }
+                guard node.kind != .shader || !node.style.effects.contains(where: { $0.shader != nil }) else {
+                    throw SceneError.invalid("Custom shader effects sample rendered layer or group textures; standalone shader nodes remain procedural sources.")
                 }
                 guard node.style.exposure.isFinite, (-2...2).contains(node.style.exposure),
                       node.style.saturation.isFinite, (0...2).contains(node.style.saturation),
@@ -1387,6 +1404,9 @@ enum SceneBudget {
         }
         for node in nodes { try checkReferences(node) }
         guard nodes.filter({ $0.kind == .particles }).count <= 4 else { throw SceneError.invalid("A scene supports at most four particle emitters.") }
+        guard nodes.flatMap({ $0.style.effects }).filter({ $0.shader != nil }).count <= maxShaderEffects else {
+            throw SceneError.invalid("A scene supports at most four custom shader effects.")
+        }
         let effectIDs = nodes.flatMap { $0.style.effects }.compactMap(\.id)
         guard effectIDs.count == nodes.reduce(0, { $0 + $1.style.effects.count }), Set(effectIDs).count == effectIDs.count else {
             throw SceneError.invalid("Effect identities must exist and be unique across the scene.")
