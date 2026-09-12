@@ -44,6 +44,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let comfort: DesktopComfortController
     private let indexURL: URL
     private let libraryView: NSView
+    /// Optional visual Displays destination supplied by #31. Home owns this
+    /// controller directly; its view has never belonged to another window.
+    private let displaysDestinationController: NSViewController?
+    private let activateDisplaysDestination: (() -> Void)?
     private let sidebar = NSTableView()
     private let contentHost = NSView(frame: .zero)
     private let displaysView = NSView(frame: .zero)
@@ -68,11 +72,14 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     var window: NSWindow { library.window! }
 
     init(library: SceneLibraryController, wallpaper: WallpaperController, comfort: DesktopComfortController,
-         indexURL: URL? = nil) {
+         indexURL: URL? = nil, displaysDestinationController: NSViewController? = nil,
+         activateDisplaysDestination: (() -> Void)? = nil) {
         self.library = library
         self.wallpaper = wallpaper
         self.comfort = comfort
         self.libraryView = library.window!.contentView!
+        self.displaysDestinationController = displaysDestinationController
+        self.activateDisplaysDestination = activateDisplaysDestination
         if let indexURL {
             self.indexURL = indexURL
         } else {
@@ -276,6 +283,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func showDisplays() {
         currentRow = .displays
+        activateDisplaysDestination?()
         libraryView.isHidden = true
         displaysView.isHidden = false
         refreshDisplaysSummary()
@@ -324,7 +332,28 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         return nil
     }
 
-    // MARK: - Displays migration surface
+    // MARK: - Displays destination
+
+    private func configureDesktopControls() {
+        sameDisplaysButton.target = self
+        sameDisplaysButton.action = #selector(changeSameDisplays)
+        filesButton.target = self
+        filesButton.action = #selector(toggleFiles)
+        widgetsButton.target = self
+        widgetsButton.action = #selector(toggleWidgets)
+    }
+
+    private func desktopControlsRow() -> NSStackView {
+        let desktopTitle = NSTextField(labelWithString: "Desktop")
+        desktopTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        let spacer = NSView(frame: .zero)
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [desktopTitle, spacer, filesButton, widgetsButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 14
+        return row
+    }
 
     private func buildDisplaysView() {
         displaysView.translatesAutoresizingMaskIntoConstraints = false
@@ -336,6 +365,33 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             displaysView.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
         ])
         displaysView.isHidden = true
+        configureDesktopControls()
+
+        if let destinationController = displaysDestinationController {
+            let destination = destinationController.view
+            destination.translatesAutoresizingMaskIntoConstraints = false
+            let desktop = desktopControlsRow()
+            desktop.translatesAutoresizingMaskIntoConstraints = false
+            let separator = NSBox()
+            separator.boxType = .separator
+            separator.translatesAutoresizingMaskIntoConstraints = false
+            displaysView.addSubview(destination)
+            displaysView.addSubview(separator)
+            displaysView.addSubview(desktop)
+            NSLayoutConstraint.activate([
+                destination.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor),
+                destination.trailingAnchor.constraint(equalTo: displaysView.trailingAnchor),
+                destination.topAnchor.constraint(equalTo: displaysView.topAnchor),
+                destination.bottomAnchor.constraint(equalTo: separator.topAnchor),
+                separator.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor),
+                separator.trailingAnchor.constraint(equalTo: displaysView.trailingAnchor),
+                desktop.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor, constant: 26),
+                desktop.trailingAnchor.constraint(equalTo: displaysView.trailingAnchor, constant: -26),
+                desktop.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 10),
+                desktop.bottomAnchor.constraint(equalTo: displaysView.bottomAnchor, constant: -12),
+            ])
+            return
+        }
 
         let title = NSTextField(labelWithString: "Displays")
         title.font = .systemFont(ofSize: 26, weight: .semibold)
@@ -344,18 +400,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         intro.textColor = .secondaryLabelColor
         displaySummary.textColor = .secondaryLabelColor
 
-        sameDisplaysButton.target = self
-        sameDisplaysButton.action = #selector(changeSameDisplays)
-        filesButton.target = self
-        filesButton.action = #selector(toggleFiles)
-        widgetsButton.target = self
-        widgetsButton.action = #selector(toggleWidgets)
-
-        let desktopTitle = NSTextField(labelWithString: "Desktop")
-        desktopTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        let desktopControls = NSStackView(views: [filesButton, widgetsButton])
-        desktopControls.spacing = 18
-        let stack = NSStackView(views: [title, intro, sameDisplaysButton, displaySummary, desktopTitle, desktopControls])
+        let desktopControls = desktopControlsRow()
+        let stack = NSStackView(views: [title, intro, sameDisplaysButton, displaySummary, desktopControls])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
@@ -363,6 +409,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         displaysView.addSubview(stack)
         intro.widthAnchor.constraint(lessThanOrEqualToConstant: 620).isActive = true
         displaySummary.widthAnchor.constraint(lessThanOrEqualToConstant: 620).isActive = true
+        desktopControls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor, constant: 36),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: displaysView.trailingAnchor, constant: -36),
@@ -543,14 +590,22 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let wallpaper = WallpaperController()
         wallpaper.presentsWindows = false
         let comfort = DesktopComfortController()
-        let home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort, indexURL: index)
+        let displayDestination = NSViewController()
+        displayDestination.view = NSView(frame: .zero)
+        var displayActivated = false
+        let home = HomeWindowController(
+            library: library, wallpaper: wallpaper, comfort: comfort, indexURL: index,
+            displaysDestinationController: displayDestination,
+            activateDisplaysDestination: { displayActivated = true })
         precondition(home.window.contentViewController is NSSplitViewController)
         precondition(home.rows.contains(.library) && home.rows.contains(.displays))
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
+        precondition(displayDestination.view.superview === home.displaysView)
         home.showLibraryScope(.favorites)
         precondition(home.currentRow == .favorites && !home.libraryView.isHidden)
         home.showDisplays()
+        precondition(displayActivated)
         precondition(home.currentRow == .displays && !home.displaysView.isHidden && home.libraryView.isHidden)
         home.showLibraryScope(.library)
         precondition(home.currentRow == .library && !home.libraryView.isHidden)
