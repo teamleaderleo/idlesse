@@ -21,6 +21,15 @@
       "engine": "swiftpm",
       "configuration": "debug",
       "product": "IdlesseApp"
+    },
+    "native-probe": {
+      "engine": "script",
+      "executable": "Experiments/NativeWallpaper/build.sh",
+      "arguments": [],
+      "environment": {
+        "BUILD_DIR": "{products}",
+        "IDLESSE_MODULE_CACHE_PATH": "{module_cache}"
+      }
     }
   },
   "preparations": {
