@@ -62,19 +62,43 @@ window.prepare=async(folder,stem,width,height,animation='idle')=>{
   const data=await(await fetch(`${folder}/${file}`)).json();
   const idleParams=new Set(motionMeta.Curves.filter(c=>c.Target==='Parameter').map(c=>c.Id));
   const curves=data.Curves.filter(c=>c.Target==='Parameter'&&!idleParams.has(c.Id)).map(c=>({id:c.Id,seg:c.Segments}));
+  // Some ambient curves are authored to nearly loop: Jean Bart's lantern sway ends
+  // about 0.01 from where it starts, which shows as a one-pixel twitch of her and
+  // the lanterns at every seam. Fold that drift out across the cycle. Only drift
+  // under 5% of the curve's own range counts: phase parameters that deliberately
+  // advance a whole cycle (Perseus's water runs 0 to 3) must keep advancing.
+  for(const c of curves){
+   const d=data.Meta.Duration,start=curveAt(c.seg,0),end=curveAt(c.seg,d);
+   let lo=Infinity,hi=-Infinity;for(let k=0;k<=128;k++){const v=curveAt(c.seg,d*k/128);lo=Math.min(lo,v);hi=Math.max(hi,v);}
+   c.drift=Math.abs(end-start)<=.05*(hi-lo)?end-start:0;
+  }
   if(curves.length)ambient={group:ambientGroup,curves,duration:data.Meta.Duration,
-   rate:data.Meta.Duration/motionMeta.Meta.Duration,skipped:data.Curves.filter(c=>c.Target==='Parameter'&&idleParams.has(c.Id)).map(c=>c.Id)};
+   skipped:data.Curves.filter(c=>c.Target==='Parameter'&&idleParams.has(c.Id)).map(c=>c.Id)};
  }
- for(let i=0;i<Math.round(motionMeta.Meta.Duration*60)*3;i++){model.update(1000/60);app.renderer.render(app.stage);}
- last=0;
+ // One ambient cycle per idle loop is only right when the two are close. Jean
+ // Bart's snow is authored over 36s against a 5.9s idle, and squeezing it into one
+ // loop ran it six times too fast. Repeat the idle as many times as keeps the
+ // ambient nearest its authored speed instead. export.py derives the same count
+ // before encoding, since it needs the frame total, and checks this one agrees.
+ const idleLoops=ambient?Math.max(1,Math.round(ambient.duration/motionMeta.Meta.Duration)):1;
+ if(ambient)ambient.rate=ambient.duration/(idleLoops*motionMeta.Meta.Duration);
  // The idle motion owns the model's own parameters; these belong to nobody else,
  // so they are written straight onto the core model after each update and before
- // the draw. Retimed by `rate` so one ambient cycle spans one idle loop.
+ // the draw. Retimed by `rate` so one ambient cycle spans the whole export.
  const applyAmbient=time=>{
   if(!ambient)return;
   const core=model.internalModel.coreModel,at=(time*ambient.rate)%ambient.duration;
-  for(const c of ambient.curves)core.setParameterValueById(c.id,curveAt(c.seg,at));
+  for(const c of ambient.curves)core.setParameterValueById(c.id,curveAt(c.seg,at)-c.drift*at/ambient.duration);
  };
+ // Settle physics before frame 0, with the ambient motion playing. Warming up on
+ // the idle alone left physics in a state the loop never returns to: the first
+ // ambient write snapped Vanguard (Masquerade) by a 10-level step between frames
+ // 0 and 1, and every ambient export's seam ran several times a normal frame
+ // step. Warm up over three whole export periods, so the state at frame 0 is the
+ // state the last frame hands back to.
+ const period=Math.round(idleLoops*motionMeta.Meta.Duration*60);
+ for(let i=0,warm=period*3;i<warm;i++){model.update(1000/60);applyAmbient(((i+1)%period)/60);app.renderer.render(app.stage);}
+ last=0;
  window.frame=(time,fast=false)=>{
   if(time<last)throw Error('Live2D export requires monotonic time');
   for(let t=last;t<time-1e-7;t+=1/60){model.update(Math.min(1/60,time-t)*1000);applyAmbient(Math.min(t+1/60,time));app.renderer.render(app.stage);}
@@ -82,6 +106,6 @@ window.prepare=async(folder,stem,width,height,animation='idle')=>{
   if(fast==='draw'){app.renderer.gl.finish();return null;}
   return app.view.toDataURL(fast?'image/jpeg':'image/png',.99).split(',')[1];
  };
- return {animations:[{name:animation,duration:motionMeta.Meta.Duration}],width:model.internalModel.width,height:model.internalModel.height,pixelsPerUnit:model.internalModel.pixelsPerUnit,physics:!!model.internalModel.physics,
-  ambient:ambient&&{group:ambient.group,parameters:ambient.curves.length,authoredDuration:ambient.duration,retimedBy:Number(ambient.rate.toFixed(4)),skippedSharedParameters:ambient.skipped}};
+ return {animations:[{name:animation,duration:motionMeta.Meta.Duration}],width:model.internalModel.width,height:model.internalModel.height,pixelsPerUnit:model.internalModel.pixelsPerUnit,physics:!!model.internalModel.physics,idleLoops,
+  ambient:ambient&&{group:ambient.group,parameters:ambient.curves.length,driftCorrected:ambient.curves.filter(c=>c.drift).length,authoredDuration:ambient.duration,retimedBy:Number(ambient.rate.toFixed(4)),skippedSharedParameters:ambient.skipped}};
 };
