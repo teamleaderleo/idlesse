@@ -45,20 +45,67 @@ struct SceneFocus: Codable, Sendable, Equatable {
     /// harmless authoring slip, and refusing to draw a wallpaper over it is worse.
     var clamped: SceneFocus { SceneFocus(x: min(max(x, 0), 1), y: min(max(y, 0), 1)) }
 
-    /// Where to put `content` so it covers `bounds` with this point kept in view.
+    /// Where to put `content` so it covers `bounds` with this point kept in view,
+    /// and with any declared `bleed` margin kept off screen.
     ///
-    /// Same cover scale AVFoundation's fill picks; only the offset differs. Layer
-    /// geometry runs bottom-up while a focus is quoted from the top, hence the
-    /// flip on y. Degenerate sizes fall back to the bounds, which renders as the
-    /// centred fill rather than as nothing.
-    func filledFrame(content: CGSize, in bounds: CGRect) -> CGRect {
+    /// Without bleed this is AVFoundation's own cover scale and only the offset
+    /// differs. Bleed adds a floor to the scale — enough that the region inside
+    /// the margin can cover the display on its own — and clamps the offset so the
+    /// margin stays outside. Where the natural cover already crops more than the
+    /// margin, as a narrow display does to a wide frame, both are inert and the
+    /// result is unchanged.
+    ///
+    /// Layer geometry runs bottom-up while a focus is quoted from the top, hence
+    /// the flip on y. Degenerate sizes fall back to the bounds, which renders as
+    /// the centred fill rather than as nothing.
+    func filledFrame(content: CGSize, in bounds: CGRect, bleed: SceneBleed? = nil) -> CGRect {
         guard content.width > 0, content.height > 0, bounds.width > 0, bounds.height > 0 else { return bounds }
         let point = clamped
-        let scale = max(bounds.width / content.width, bounds.height / content.height)
+        let margin = (bleed ?? SceneBleed()).clamped
+        let safe = CGSize(width: content.width * max(1 - margin.left - margin.right, 0.05),
+                          height: content.height * max(1 - margin.top - margin.bottom, 0.05))
+        let scale = max(bounds.width / content.width, bounds.height / content.height,
+                        bounds.width / safe.width, bounds.height / safe.height)
         let filled = CGSize(width: content.width * scale, height: content.height * scale)
-        return CGRect(x: bounds.minX - (filled.width - bounds.width) * point.x,
-                      y: bounds.minY - (filled.height - bounds.height) * (1 - point.y),
+        // `lead` is the margin nearest the axis origin in layer terms, `trail` the
+        // far one; `t` slides the content from showing its lead edge to its trail.
+        func offset(span: CGFloat, across: CGFloat, lead: Double, trail: Double, t: Double) -> CGFloat {
+            let value = -(span - across) * CGFloat(t)
+            let atLeast = across - span * CGFloat(1 - trail)
+            let atMost = -span * CGFloat(lead)
+            // When the margins exactly determine the position the interval is a
+            // single point, and rounding can make it look empty by a hair; when
+            // they genuinely overlap it is empty for real. Splitting the limits
+            // covers both without a cliff between them.
+            guard atLeast <= atMost else { return (atLeast + atMost) / 2 }
+            return min(max(value, atLeast), atMost)
+        }
+        return CGRect(x: bounds.minX + offset(span: filled.width, across: bounds.width,
+                                              lead: margin.left, trail: margin.right, t: point.x),
+                      y: bounds.minY + offset(span: filled.height, across: bounds.height,
+                                              lead: margin.bottom, trail: margin.top, t: 1 - point.y),
                       width: filled.width, height: filled.height)
+    }
+}
+
+/// Margin the artist painted past the intended composition so that a crop has
+/// somewhere to go, as unit fractions of each edge. Declaring it lets every
+/// display crop at least that much: a panel matching the export's aspect crops
+/// nothing on its own and would otherwise show the margin, while a narrower one
+/// already crops more and is left alone.
+///
+/// This is not matte. Matte is the renderer's background showing through a frame
+/// the camera failed to cover, and is a defect to fix in the recipe.
+struct SceneBleed: Codable, Sendable, Equatable {
+    var top: Double = 0
+    var left: Double = 0
+    var bottom: Double = 0
+    var right: Double = 0
+    var isEmpty: Bool { top == 0 && left == 0 && bottom == 0 && right == 0 }
+    /// Clamped so a slip cannot ask for more margin than there is frame.
+    var clamped: SceneBleed {
+        let unit = { (v: Double) in min(max(v, 0), 0.45) }
+        return SceneBleed(top: unit(top), left: unit(left), bottom: unit(bottom), right: unit(right))
     }
 }
 
@@ -69,6 +116,8 @@ struct SceneDescriptor: Codable, Sendable {
     var canvas: Canvas? = nil
     /// Absent means centred, which is exactly the previous behaviour.
     var focus: SceneFocus? = nil
+    /// Margin every display should crop away before filling. Absent means none.
+    var bleed: SceneBleed? = nil
     var metadata: SceneMetadata? = nil
     var components: [String: SceneComponent]? = nil
     let title: String
@@ -100,13 +149,14 @@ struct SceneDescriptor: Codable, Sendable {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = [], focus: SceneFocus? = nil) {
-        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants; self.focus = focus
+    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = [], focus: SceneFocus? = nil, bleed: SceneBleed? = nil) {
+        self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants; self.focus = focus; self.bleed = bleed
     }
-    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants, focus }
+    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants, focus, bleed }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         focus = try c.decodeIfPresent(SceneFocus.self, forKey: .focus)
+        bleed = try c.decodeIfPresent(SceneBleed.self, forKey: .bleed)
         canvas = try c.decodeIfPresent(Canvas.self, forKey: .canvas)
         metadata = try c.decodeIfPresent(SceneMetadata.self, forKey: .metadata)
         components = try c.decodeIfPresent([String: SceneComponent].self, forKey: .components)
@@ -121,7 +171,7 @@ struct SceneDescriptor: Codable, Sendable {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         var controls = parameters
         for key in controls.keys { controls[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
-        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants, focus: focus)
+        return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants, focus: focus, bleed: bleed)
     }
     func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
@@ -231,7 +281,7 @@ struct SceneDescriptor: Codable, Sendable {
         for id in result.flatMap({ $0.descendants }).map(\.id) {
             _ = SceneTree.edit(id, in: &result) { siblings, index in siblings[index].componentID = nil }
         }
-        return SceneDescriptor(title: title, nodes: result, canvas: canvas, focus: focus)
+        return SceneDescriptor(title: title, nodes: result, canvas: canvas, focus: focus, bleed: bleed)
     }
 }
 
@@ -878,6 +928,7 @@ struct LocalSceneSource: SceneSource {
     private struct Scene: Decodable {
         let canvas: SceneDescriptor.Canvas?
         let focus: SceneFocus?
+        let bleed: SceneBleed?
         let parameters: [String: SceneParameter]?
         let bindings: [SceneParameterBinding]?
         let timeline: SceneTimeline?
@@ -1083,7 +1134,7 @@ struct LocalSceneSource: SceneSource {
         guard manifest.version == SceneFormat.revision || scene.variants == nil else {
             throw SceneError.invalid("Scene variants require revision 21.")
         }
-        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [], focus: scene.focus)
+        let result = SceneDescriptor(title: manifest.title, nodes: nodes, parameters: scene.parameters ?? [:], bindings: scene.bindings ?? [], timeline: scene.timeline, canvas: scene.canvas, metadata: manifest.metadata, components: components, variants: scene.variants ?? [], focus: scene.focus, bleed: scene.bleed)
         if manifest.version == SceneFormat.revision {
             guard SceneFormat.features(result).isSubset(of: Set(manifest.features ?? [])) else { throw SceneError.invalid("The manifest is missing required scene features.") }
         } else if result.parameters.values.contains(where: { $0.type != .number || !$0.targets.isEmpty }) {

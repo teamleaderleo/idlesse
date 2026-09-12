@@ -155,6 +155,7 @@ extension SceneRenderer {
 private final class VideoWallpaperView: NSView {
     let playerLayer = AVPlayerLayer()
     var focus: SceneFocus? { didSet { needsLayout = true } }
+    var bleed: SceneBleed? { didSet { needsLayout = true } }
     /// Zero until the item reports it; layout falls back to the centred fill.
     var presentationSize: CGSize = .zero { didSet { needsLayout = true } }
 
@@ -175,8 +176,8 @@ private final class VideoWallpaperView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard let focus else { playerLayer.frame = bounds; return }
-        playerLayer.frame = focus.filledFrame(content: presentationSize, in: bounds)
+        guard focus != nil || bleed?.isEmpty == false else { playerLayer.frame = bounds; return }
+        playerLayer.frame = (focus ?? .centre).filledFrame(content: presentationSize, in: bounds, bleed: bleed)
     }
 }
 
@@ -534,9 +535,10 @@ final class VideoRenderer: SceneRenderer {
             loopCount: looper?.loopCount ?? 0, audioMuted: player?.isMuted ?? true,
             allowsDisplaySleep: !(player?.preventsDisplaySleepDuringVideoPlayback ?? false))
     }
-    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, onError: @escaping (String) -> Void) {
+    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil, onError: @escaping (String) -> Void) {
         let view = VideoWallpaperView(frame: bounds)
         view.focus = focus
+        view.bleed = bleed
         let queue = AVQueuePlayer()
         queue.isMuted = true
         queue.volume = 0
@@ -556,7 +558,7 @@ final class VideoRenderer: SceneRenderer {
         // A focus needs the source dimensions, which are only known once the item is
         // ready. The looper swaps items per cycle, so this follows the queue's
         // current item rather than the template.
-        if focus != nil {
+        if focus != nil || bleed?.isEmpty == false {
             sizeObservation = queue.observe(\.currentItem?.presentationSize, options: [.initial, .new]) { [weak view] player, _ in
                 guard let size = player.currentItem?.presentationSize, size.width > 0, size.height > 0 else { return }
                 DispatchQueue.main.async { view?.presentationSize = size }
@@ -628,7 +630,7 @@ final class LayeredSceneRenderer: SceneRenderer {
                         child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
-                case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, onError: onError)
+                case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed, onError: onError)
                 case .particles, .text, .shape, .shader: throw SceneError.invalid("This creative layer requires Metal.")
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
                 case .group(let nodes):

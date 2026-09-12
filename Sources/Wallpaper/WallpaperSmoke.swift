@@ -51,6 +51,35 @@ enum WallpaperSmoke {
         precondition(focused.replacingNodes(focused.nodes).focus == SceneFocus(x: 0.25, y: 0.75),
             "replacingNodes must carry focus forward")
 
+        // Bleed, on the two displays this was built for. Hina's margin is on the
+        // right: the 16:9 panel crops nothing by itself and must be made to, while
+        // the 1.545 panel already crops 13% and must be left exactly as it was.
+        let margin = SceneBleed(right: 0.05)
+        let wideBleed = SceneFocus.centre.filledFrame(content: wide, in: display, bleed: margin)
+        let wideNone = SceneFocus.centre.filledFrame(content: wide, in: display)
+        precondition(abs(wideBleed.width - wideNone.width) < 0.01,
+            "a narrow display already crops past the margin, so bleed must not rescale it")
+        precondition(abs(wideBleed.minX - wideNone.minX) < 0.01,
+            "nor reposition it: its natural crop already excludes the margin")
+
+        let matching = CGRect(x: 0, y: 0, width: 3840, height: 2160)   // 16:9 panel, 16:9 source
+        let exact = SceneFocus.centre.filledFrame(content: wide, in: matching)
+        precondition(abs(exact.width - matching.width) < 0.01, "matching aspects fill exactly, cropping nothing")
+        let cropped = SceneFocus.centre.filledFrame(content: wide, in: matching, bleed: margin)
+        precondition(cropped.width > matching.width + 1, "bleed must force a crop where the fill would not")
+        precondition(abs(cropped.minX) < 0.01, "and push it all to the margin's side, not split it")
+        let marginEdge = cropped.minX + cropped.width * (1 - 0.05)
+        precondition(marginEdge >= matching.maxX - 0.01, "the margin must end up off screen")
+        // Bleed on both sides has to split, since neither side can be favoured.
+        let both = SceneFocus.centre.filledFrame(content: wide, in: matching, bleed: SceneBleed(left: 0.04, right: 0.04))
+        precondition(abs(both.minX + (both.width - matching.width) / 2) < 0.01, "symmetric margin crops symmetrically")
+        // Same round-trip trap as focus: explicit CodingKeys drop unknown fields.
+        let bled = SceneDescriptor(title: "bleed", nodes: [SceneNode(content: .gradient)], bleed: margin)
+        let bledBack = try JSONDecoder().decode(SceneDescriptor.self, from: JSONEncoder().encode(bled))
+        precondition(bledBack.bleed == margin, "bleed must survive an encode/decode round-trip")
+        precondition(bled.replacingNodes(bled.nodes).bleed == margin, "replacingNodes must carry bleed forward")
+        precondition(SceneBleed(right: 9).clamped.right <= 0.45, "a margin cannot exceed the frame")
+
         var viewport = TimelineViewport()
         viewport.resize(to: 10)
         precondition(viewport.start == 0 && viewport.span == 10)
