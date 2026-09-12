@@ -238,6 +238,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private var asleep = false
     private var sessionInactive = false
     private var displayAsleep = false
+    private var selectedMotionTarget: ScenePropertyAddress?
+    private var canvasMotionBase: SceneDescriptor?
+    private var canvasMotionPreview: SceneDescriptor?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var clock: SceneClock { host.clock }
     private let apply: (URL) -> Void
@@ -416,15 +419,15 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             guard let self, self.scene.allNodes.indices.contains(index) else { return }
             self.nodePicker.selectItem(at: index); self.selectNode()
         }
-        dragOverlay.onPreviewTransform = { [weak self] transform in
-            guard let self, !self.saving else { return }
-            var nodes = self.scene.nodes
-            guard let id = self.editor.selectedNode?.id else { return }
-            _ = SceneTree.edit(id, in: &nodes) { siblings, index in siblings[index].transform = transform }
-            _ = self.renderer?.updateScene(self.scene.replacingNodes(nodes))
+        dragOverlay.onBeginTransform = { [weak self] gesture in self?.beginCanvasMotion(gesture) ?? false }
+        dragOverlay.onPreviewTransform = { [weak self] transform, gesture in
+            self?.previewCanvasMotion(transform, gesture: gesture)
         }
-        dragOverlay.onTransform = { [weak self] t, name in self?.editor.transform(t, action: name) }
-        dragOverlay.onNudge = { [weak self] x, y in self?.editor.nudge(x: x, y: y) }
+        dragOverlay.onTransform = { [weak self] transform, name, gesture in
+            self?.commitCanvasMotion(transform, name: name, gesture: gesture)
+        }
+        dragOverlay.onCancelTransform = { [weak self] in self?.cancelCanvasMotion() }
+        dragOverlay.onNudge = { [weak self] x, y in self?.nudgeCanvasMotion(x: x, y: y) }
         dragOverlay.onDelete = { [weak self] in self?.editor.remove() }
 
         pointerToggle.target = self; pointerToggle.action = #selector(togglePointer)
@@ -445,6 +448,14 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
 
         layerInspector.onRename = { [weak self] in self?.renameNode() }
         layerInspector.onTransform = { [weak self] in self?.editTransform() }
+        layerInspector.onNumericProperty = { [weak self] target, value in self?.editMotionProperty(target, value: value) }
+        layerInspector.onSelectMotionTarget = { [weak self] target in
+            guard let self else { return }
+            self.selectedMotionTarget = target
+            self.updateTimeline()
+        }
+        layerInspector.onMotionCommand = { [weak self] target, command in self?.handleMotionCommand(target, command: command) }
+        layerInspector.onTypedMotionCommand = { [weak self] target, command in self?.handleTypedMotionCommand(target, command: command) }
         layerInspector.onVisibility = { [weak self] in
             guard let self else { return }
             self.editor.toggleVisibility(self.nodePicker.indexOfSelectedItem)
@@ -489,6 +500,15 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             self.paused = true; self.updatePlayback()
             do { try self.clock.seek(to: time); self.renderer?.refreshSceneTime(); self.updateTimeline() }
             catch { self.detailLabel.stringValue = error.localizedDescription }
+        }
+        timeline.onAutoKey = { [weak self] _ in
+            self?.selectNode()
+            self?.updateTimeline()
+        }
+        timeline.onSelectTarget = { [weak self] target in
+            guard let self else { return }
+            self.selectedMotionTarget = target
+            self.layerInspector.revealMotionTarget(target)
         }
         timeline.onMoveKey = { [weak self] target, index, time in
             guard let self, !self.saving, self.editor.selectedNode?.id == target.nodeID,
@@ -667,27 +687,211 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         removeNodeButton.isEnabled = !saving && siblings.count > 1
         reorderButton.isEnabled = !saving && siblings.count > 1
         nameField.stringValue = node.displayName
-        var previewNodes = (try? scene.evaluated().nodes) ?? scene.nodes
-        for binding in scene.bindings where [.x, .y, .scale, .rotation].contains(binding.target.property) {
-            _ = SceneTree.edit(binding.target.nodeID, in: &previewNodes) { nodes, index in nodes[index].locked = true }
-        }
+        if selectedMotionTarget?.nodeID != node.id { selectedMotionTarget = nil }
+        let signals = motionSignals()
+        let previewNodes = (try? scene.evaluated(signals: signals).nodes) ?? scene.nodes
         dragOverlay.roots = previewNodes
         dragOverlay.isEnabled = !saving
         dragOverlay.selected = editor.selection
         dragOverlay.transform = previewNodes.flatMap { $0.descendants }.first { $0.id == node.id }?.transform ?? node.transform
         reorderButton.title = offset == 0 ? "Bring Forward" : "Send Backward"
-        let values: [Double] = [node.transform.x ?? 0, node.transform.y ?? 0, node.transform.scale ?? 1,
-                                node.transform.rotation ?? 0, node.opacity]
-        for (index, pair) in zip(transformFields, values).enumerated() {
-            let (field, value) = pair
-            let property: ScenePropertyAddress.Property = [.x, .y, .scale, .rotation, .opacity][index]
-            let bound = scene.bindings.contains { $0.target == ScenePropertyAddress(nodeID: node.id, property: property) }
-            field.stringValue = String(format: "%.3f", value)
-            field.isEnabled = !saving && !bound
-            field.toolTip = bound ? "Controlled by a binding. Use Controls… or remove the binding in Bind…. This is the static fallback." : nil
-        }
-        layerInspector.update(scene: scene, node: node, saving: saving)
+        layerInspector.update(scene: scene, node: node, saving: saving, time: clock.time,
+                              signals: signals, autoKey: timeline.autoKeyEnabled)
+        updateTimeline()
     }
+    private func motionSignals() -> SceneSignals { SceneSignals(time: clock.time) }
+
+    private func commitMotionScene(_ next: SceneDescriptor, name: String) {
+        _ = applyEdit(next.nodes, selected: editor.selection, name: name, controls: next)
+    }
+
+    private func editMotionProperty(_ target: ScenePropertyAddress, value: Double) {
+        guard !saving, editor.selectedNode?.id == target.nodeID, editor.selectedNode?.locked == false else { return }
+        do {
+            let next = try StudioMotionAuthoring.edit(value, target: target, time: clock.time,
+                                                      autoKey: timeline.autoKeyEnabled, in: scene)
+            selectedMotionTarget = target
+            commitMotionScene(next, name: timeline.autoKeyEnabled ? "Auto-Key \(target.label(in: scene.nodes))" : "Change \(target.label(in: scene.nodes))")
+        } catch { detailLabel.stringValue = error.localizedDescription; selectNode() }
+    }
+
+    private func handleMotionCommand(_ target: ScenePropertyAddress, command: StudioMotionCommand) {
+        guard !saving, editor.selectedNode?.id == target.nodeID, editor.selectedNode?.locked == false else { return }
+        selectedMotionTarget = target
+        if case .select = command { layerInspector.revealMotionTarget(target); updateTimeline(); return }
+        if case .revealTimeline = command { updateTimeline(); return }
+        if case .advancedBinding = command { editBinding(); return }
+        if case .advancedKeyframes = command { editKeyframes(); return }
+        do {
+            let next: SceneDescriptor
+            switch command {
+            case .select, .revealTimeline, .advancedBinding, .advancedKeyframes:
+                return
+            case .makeStatic:
+                next = try StudioMotionAuthoring.makeStatic(target, signals: motionSignals(), in: scene)
+            case .addKey:
+                next = try StudioMotionAuthoring.promoteToKeyframes(target, time: clock.time,
+                                                                    signals: motionSignals(), in: scene)
+            case .removeKey:
+                next = try StudioMotionAuthoring.removeKey(target, time: clock.time,
+                                                           signals: motionSignals(), in: scene)
+            case .bindSignal(let signal):
+                next = try StudioMotionAuthoring.bind(target, to: signal, in: scene)
+            case .bindControl(let key):
+                next = try StudioMotionAuthoring.bind(target, toParameter: key, in: scene)
+            case .createControl:
+                let range = try target.range(in: scene.nodes)
+                let value = try StudioMotionAuthoring.visibleValue(of: target, in: scene, signals: motionSignals())
+                var controlled = scene
+                let key = UUID().uuidString
+                controlled.parameters[key] = SceneParameter(name: target.label(in: scene.nodes), value: value,
+                                                             min: range.lowerBound, max: range.upperBound)
+                next = try StudioMotionAuthoring.bind(target, toParameter: key, in: controlled)
+            case .updateMapping(let scale, let offset, let period, let smoothing):
+                next = try StudioMotionAuthoring.updateMapping(target, scale: scale, offset: offset,
+                                                               period: period, smoothing: smoothing, in: scene)
+            case .interpolation(let interpolation):
+                next = try StudioMotionAuthoring.setInterpolation(interpolation, target: target, in: scene)
+            }
+            commitMotionScene(next, name: "Change \(target.label(in: scene.nodes)) Motion")
+        } catch { detailLabel.stringValue = error.localizedDescription }
+    }
+
+    private func handleTypedMotionCommand(_ target: SceneControlTarget, command: StudioTypedMotionCommand) {
+        guard !saving, editor.selectedNode?.id == target.nodeID, editor.selectedNode?.locked == false else { return }
+        if case .select = command { return }
+        do {
+            let next: SceneDescriptor
+            switch command {
+            case .select: return
+            case .makeStatic:
+                next = try StudioMotionAuthoring.makeStatic(target, in: scene)
+            case .bindControl(let key):
+                next = try StudioMotionAuthoring.bind(target, toParameter: key, in: scene)
+            case .createControl:
+                let nodeName = editor.selectedNode?.displayName ?? "Layer"
+                let propertyName: String
+                switch target.property {
+                case .visible: propertyName = "Visibility"
+                case .blend: propertyName = "Blend"
+                case .text: propertyName = "Text"
+                case .fill: propertyName = "Fill"
+                }
+                var controlled = scene
+                let key = UUID().uuidString
+                controlled.parameters[key] = try StudioMotionAuthoring.newControl(for: target,
+                    name: "\(nodeName) \(propertyName)", in: scene)
+                next = try StudioMotionAuthoring.bind(target, toParameter: key, in: controlled)
+            }
+            commitMotionScene(next, name: "Change Property Motion")
+        } catch { detailLabel.stringValue = error.localizedDescription }
+    }
+
+    private func canvasTargets(for gesture: SceneTransformGesture, nodeID: UUID) -> [ScenePropertyAddress] {
+        switch gesture {
+        case .move: return [.init(nodeID: nodeID, property: .x), .init(nodeID: nodeID, property: .y)]
+        case .scale: return [.init(nodeID: nodeID, property: .scale)]
+        case .rotate: return [.init(nodeID: nodeID, property: .rotation)]
+        }
+    }
+
+    private func beginCanvasMotion(_ gesture: SceneTransformGesture) -> Bool {
+        guard !saving, let node = editor.selectedNode, !node.locked else { return false }
+        let targets = canvasTargets(for: gesture, nodeID: node.id)
+        let blocked = targets.first { !StudioMotionAuthoring.writeDisposition(for: $0, in: scene,
+            time: clock.time, autoKey: timeline.autoKeyEnabled).writable }
+        guard blocked == nil else {
+            detailLabel.stringValue = "\(blocked!.label(in: scene.nodes)) has another Motion owner, or needs Auto-Key at this playhead."
+            return false
+        }
+        paused = true
+        updatePlayback()
+        canvasMotionBase = scene
+        canvasMotionPreview = nil
+        selectedMotionTarget = targets.first
+        return true
+    }
+
+    private func canvasMotionScene(_ transform: SceneNode.Transform, gesture: SceneTransformGesture,
+                                   base: SceneDescriptor) throws -> SceneDescriptor {
+        guard let node = editor.selectedNode else { return base }
+        let values: [(ScenePropertyAddress.Property, Double)]
+        switch gesture {
+        case .move:
+            values = [(.x, transform.x ?? 0), (.y, transform.y ?? 0)]
+        case .scale:
+            values = [(.scale, transform.scale ?? 1)]
+        case .rotate:
+            values = [(.rotation, transform.rotation ?? 0)]
+        }
+        let signals = motionSignals()
+        var next = base
+        for (property, value) in values {
+            let target = ScenePropertyAddress(nodeID: node.id, property: property)
+            let current = try StudioMotionAuthoring.visibleValue(of: target, in: base, signals: signals)
+            guard abs(current - value) > 0.0000001 else { continue }
+            next = try StudioMotionAuthoring.edit(value, target: target, time: clock.time,
+                                                  autoKey: timeline.autoKeyEnabled, in: next)
+        }
+        return next
+    }
+
+    private func previewCanvasMotion(_ transform: SceneNode.Transform, gesture: SceneTransformGesture) {
+        guard let base = canvasMotionBase else { return }
+        do {
+            let next = try canvasMotionScene(transform, gesture: gesture, base: base)
+            guard renderer?.updateScene(next) == true else { throw SceneError.invalid("Could not preview this motion edit.") }
+            canvasMotionPreview = next
+        } catch {
+            if let valid = canvasMotionPreview ?? canvasMotionBase { _ = renderer?.updateScene(valid) }
+            detailLabel.stringValue = error.localizedDescription
+        }
+    }
+
+    private func commitCanvasMotion(_ transform: SceneNode.Transform, name: String, gesture: SceneTransformGesture) {
+        guard let base = canvasMotionBase else { return }
+        do {
+            let next = try (canvasMotionPreview ?? canvasMotionScene(transform, gesture: gesture, base: base))
+            canvasMotionBase = nil
+            canvasMotionPreview = nil
+            commitMotionScene(next, name: timeline.autoKeyEnabled ? "Auto-Key \(name)" : name)
+        } catch {
+            canvasMotionBase = nil
+            canvasMotionPreview = nil
+            _ = renderer?.updateScene(base)
+            detailLabel.stringValue = error.localizedDescription
+            selectNode()
+        }
+    }
+
+    private func cancelCanvasMotion() {
+        if let base = canvasMotionBase { _ = renderer?.updateScene(base) }
+        canvasMotionBase = nil
+        canvasMotionPreview = nil
+        selectNode()
+    }
+
+    private func nudgeCanvasMotion(x: Double, y: Double) {
+        guard !saving, let node = editor.selectedNode, !node.locked else { return }
+        paused = true
+        updatePlayback()
+        do {
+            let signals = motionSignals()
+            var next = scene
+            for (property, delta) in [(ScenePropertyAddress.Property.x, x), (.y, y)] where abs(delta) > 0 {
+                let target = ScenePropertyAddress(nodeID: node.id, property: property)
+                guard StudioMotionAuthoring.writeDisposition(for: target, in: next, time: clock.time,
+                    autoKey: timeline.autoKeyEnabled).writable else {
+                    throw SceneError.invalid("\(target.label(in: scene.nodes)) cannot be edited at this playhead with its current Motion owner.")
+                }
+                let current = try StudioMotionAuthoring.visibleValue(of: target, in: next, signals: signals)
+                next = try StudioMotionAuthoring.edit(current + delta, target: target, time: clock.time,
+                                                      autoKey: timeline.autoKeyEnabled, in: next)
+            }
+            commitMotionScene(next, name: timeline.autoKeyEnabled ? "Auto-Key Nudge Layer" : "Nudge Layer")
+        } catch { detailLabel.stringValue = error.localizedDescription; selectNode() }
+    }
+
     @objc private func editTransform() {
         guard !saving, let current = editor.selectedNode, !current.locked else { return }
         let values = transformFields.compactMap { Double($0.stringValue) }
@@ -1644,7 +1848,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         measureButton.title = "Measuring…"
     }
     private func updateTimeline() {
-        timeline.update(scene: scene, selectedID: editor.selectedNode?.id, time: clock.time, enabled: renderer is MetalSceneRenderer)
+        timeline.update(scene: scene, selectedID: editor.selectedNode?.id, selectedTarget: selectedMotionTarget,
+                        time: clock.time, enabled: renderer is MetalSceneRenderer)
     }
     private func updatePerformance() {
         let levels = clock.audioLevels()
