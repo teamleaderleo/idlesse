@@ -1,0 +1,32 @@
+name: Palette 32 Studio fixup
+
+on:
+  push:
+    branches:
+      - palette/32-variants-studio
+    paths:
+      - '.github/workflows/palette-32-studio-fixup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: palette/32-variants-studio
+          fetch-depth: 0
+      - run: python3 Tools/palette32_studio_fixup.py
+      - run: swiftc -O Sources/Runtime/Scene.swift Sources/Harness/SceneVariantAuthoring.swift Tests/StudioVariantTests.swift -o /tmp/studio-variant-tests
+      - run: /tmp/studio-variant-tests
+      - run: git diff --check
+      - name: Commit edits
+        run: |
+          git rm Tools/palette32_studio_fixup.py .github/workflows/palette-32-studio-fixup.yml .github/workflows/palette-32-studio-apply.yml
+          git add Sources/Harness/StudioWindowController.swift test.sh
+          git config user.name 'Palette 32'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Wire Studio variant authoring'
+          git push origin HEAD:palette/32-variants-studio
