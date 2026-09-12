@@ -229,6 +229,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     private let host = ScenePreviewHost()
     private var renderer: SceneRenderer? { get { host.renderer } set { host.renderer = newValue } }
     private var scene: SceneDescriptor { get { document.scene } set { document.scene = newValue } }
+    private var selectedVariantID: UUID?
     private var selectedURL: URL? { get { document.sourceURL } set { document.sourceURL = newValue } }
     private var scopedURL: URL? { get { document.scopedURL } set { document.scopedURL = newValue } }
     private var watcher: SceneWatcher?
@@ -286,7 +287,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             let selection = self.nodePicker.indexOfSelectedItem
             let renderer = self.renderer
             self.scene = target.scene
-            let updated = self.renderer?.updateScene(target.scene) ?? false
+            let restoreID = self.selectedVariantID.flatMap { id in target.scene.variants.contains(where: { $0.id == id }) ? id : nil }
+            let effective = target.scene.applyingVariant(id: restoreID).scene
+            let updated = self.renderer?.updateScene(effective) ?? false
             if !updated { self.rebuild() }
             if (updated || self.renderer !== renderer), previous.timeline != target.scene.timeline {
                 try? self.clock.configure(timeline: target.scene.timeline)
@@ -301,6 +304,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
             guard let self else { return }
             self.cancelLoading()
             self.watcher = nil
+            if let id = self.selectedVariantID, !target.scene.variants.contains(where: { $0.id == id }) { self.selectedVariantID = nil }
             self.updateInspector()
             self.nodePicker.selectItem(at: target.selected)
             self.selectNode()
@@ -603,7 +607,8 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         do {
             let bounds = NSRect(origin: .zero, size: canvas.bounds.insetBy(dx: 40, dy: 40).size)
             guard bounds.width > 0, bounds.height > 0 else { return }
-            next = try host.prepare(scene: scene, bounds: bounds, scale: window.backingScaleFactor,
+            let effective = scene.applyingVariant(id: selectedVariantID).scene
+            next = try host.prepare(scene: effective, bounds: bounds, scale: window.backingScaleFactor,
                                     metal: engine.indexOfSelectedItem == 1, onError: onError)
         } catch {
             detailLabel.stringValue = error.localizedDescription
@@ -630,6 +635,7 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         updatePlayback()
     }
     private func updateInspector() {
+        if let id = selectedVariantID, !scene.variants.contains(where: { $0.id == id }) { selectedVariantID = nil }
         if !scene.usesAudio { clock.audioEnabled = false }
         audioToggle.isEnabled = scene.usesAudio && !saving
         audioToggle.state = clock.audioEnabled ? .on : .off
@@ -712,8 +718,11 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         let previous = scene
         let snapshot = EditSnapshot(scene: previous, selected: nodePicker.indexOfSelectedItem, draft: draft)
         let previousRenderer = renderer
-        scene = (controls ?? scene).replacingNodes(nodes)
-        let updated = renderer?.updateScene(scene) ?? false
+        var authoring = SceneVariantAuthoringState(scene: (controls ?? scene).replacingNodes(nodes), selectedID: selectedVariantID)
+        authoring.pruneRemovedControls()
+        scene = authoring.scene
+        let effective = scene.applyingVariant(id: selectedVariantID).scene
+        let updated = renderer?.updateScene(effective) ?? false
         if !updated { rebuild() }
         guard updated || renderer !== previousRenderer else { scene = previous; updateInspector(); return false }
         if previous.timeline != scene.timeline {
@@ -758,13 +767,30 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
     }
     @objc private func editControls() {
         guard !saving else { return }
-        let original = scene.parameters
-        SceneParameterControls.present(scene: scene, window: window) { [weak self] values in
-            guard let self, self.scene.parameters == original, values != original else { return }
-            var next = self.scene
-            next.parameters = values
-            _ = self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Controls", controls: next)
-        }
+        let originalVariantID = selectedVariantID
+        let sheet = SceneVariantControlsSheet(scene: scene, selectedID: selectedVariantID, window: window,
+            preview: { [weak self] draft, variantID in
+                guard let self else { return false }
+                let effective = draft.applyingVariant(id: variantID).scene
+                return self.renderer?.updateScene(effective) ?? false
+            }, completion: { [weak self] next, variantID in
+                guard let self else { return }
+                let changed = next.parameters != self.scene.parameters || next.variants != self.scene.variants
+                let previousID = self.selectedVariantID
+                self.selectedVariantID = variantID
+                if changed {
+                    if !self.applyEdit(next.nodes, selected: self.editor.selection, name: "Change Scene Variants", controls: next) {
+                        self.selectedVariantID = previousID
+                        _ = self.renderer?.updateScene(self.scene.applyingVariant(id: previousID).scene)
+                    }
+                } else {
+                    _ = self.renderer?.updateScene(self.scene.applyingVariant(id: variantID).scene)
+                }
+            }, cancel: { [weak self] in
+                guard let self else { return }
+                _ = self.renderer?.updateScene(self.scene.applyingVariant(id: originalVariantID).scene)
+            })
+        sheet.present()
     }
     @objc private func toggleAudio() {
         guard scene.usesAudio, !saving else { return }

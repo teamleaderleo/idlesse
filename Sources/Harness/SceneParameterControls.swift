@@ -2,21 +2,25 @@ import AppKit
 
 /// Generated controls shared by Studio and the desktop host. No media is copied.
 final class SceneParameterControls: NSView, NSTextFieldDelegate {
+    enum Origin { case defaultValue, inherited, overridden }
+
     private var sliders: [String: NSSlider] = [:]
     private var labels: [Int: NSTextField] = [:]
     private var typedControls: [String: NSControl] = [:]
     private let sourceParameters: [String: SceneParameter]
     var onChange: (([String: SceneParameter]) -> Void)?
+    var onUseDefault: ((String) -> Void)?
 
-    init(parameters: [String: SceneParameter]) {
+    init(parameters: [String: SceneParameter], origins: [String: Origin]? = nil) {
         sourceParameters = parameters
         let keys = parameters.keys.sorted()
+        let originHeight = origins == nil ? 0 : 24
         // Keep the pre-super layout calculation explicit: Swift's optimized
         // ownership pass crashes on the map/reduce expression in this initializer.
         var heights: [Int] = []
         var totalHeight = 0
         for key in keys {
-            let height = parameters[key]?.type == .string ? 112 : 64
+            let height = (parameters[key]?.type == .string ? 112 : 64) + originHeight
             heights.append(height)
             totalHeight += height
         }
@@ -25,8 +29,10 @@ final class SceneParameterControls: NSView, NSTextFieldDelegate {
         for (index, key) in keys.enumerated() {
             let parameter = parameters[key]!
             y -= CGFloat(heights[index])
+            let baseY = y + CGFloat(originHeight)
+            let baseHeight = CGFloat(heights[index] - originHeight)
             let title = NSTextField(labelWithString: parameter.name)
-            title.frame = NSRect(x: 0, y: y + CGFloat(heights[index]) - 30, width: 250, height: 20)
+            title.frame = NSRect(x: 0, y: baseY + baseHeight - 30, width: 250, height: 20)
             addSubview(title)
             if parameter.type != .number {
                 let control: NSControl
@@ -56,22 +62,38 @@ final class SceneParameterControls: NSView, NSTextFieldDelegate {
                     control = field
                 case .number: preconditionFailure()
                 }
-                control.frame = NSRect(x: 0, y: y + 4, width: 330, height: parameter.type == .string ? 72 : 26)
+                control.frame = NSRect(x: 0, y: baseY + 4, width: 330, height: parameter.type == .string ? 72 : 26)
                 control.setAccessibilityLabel(parameter.name)
                 control.target = self
                 control.action = #selector(typedChanged)
                 addSubview(control); typedControls[key] = control
-                continue
+            } else {
+                let value = NSTextField(labelWithString: String(format: "%.3f", parameter.value))
+                value.frame = NSRect(x: 255, y: baseY + 34, width: 80, height: 20)
+                addSubview(value); labels[index] = value
+                let slider = NSSlider(value: parameter.value, minValue: parameter.min, maxValue: parameter.max,
+                                      target: self, action: #selector(changed))
+                slider.frame = NSRect(x: 0, y: baseY + 4, width: 330, height: 24)
+                slider.tag = index; slider.isContinuous = true
+                slider.setAccessibilityLabel(parameter.name)
+                addSubview(slider); sliders[key] = slider
             }
-            let value = NSTextField(labelWithString: String(format: "%.3f", parameter.value))
-            value.frame = NSRect(x: 255, y: y + 34, width: 80, height: 20)
-            addSubview(value); labels[index] = value
-            let slider = NSSlider(value: parameter.value, minValue: parameter.min, maxValue: parameter.max,
-                                  target: self, action: #selector(changed))
-            slider.frame = NSRect(x: 0, y: y + 4, width: 330, height: 24)
-            slider.tag = index; slider.isContinuous = true
-            slider.setAccessibilityLabel(parameter.name)
-            addSubview(slider); sliders[key] = slider
+            if let origin = origins?[key] {
+                let status = NSTextField(labelWithString: origin == .defaultValue ? "Default" : origin == .inherited ? "Inherited" : "Override")
+                status.textColor = origin == .overridden ? .controlAccentColor : .secondaryLabelColor
+                status.font = .systemFont(ofSize: 11)
+                status.frame = NSRect(x: 0, y: y + 2, width: 100, height: 18)
+                addSubview(status)
+                if origin == .overridden {
+                    let useDefault = NSButton(title: "Use Default", target: self, action: #selector(useDefault(_:)))
+                    useDefault.bezelStyle = .inline
+                    useDefault.controlSize = .small
+                    useDefault.identifier = NSUserInterfaceItemIdentifier(key)
+                    useDefault.frame = NSRect(x: 235, y: y, width: 95, height: 22)
+                    useDefault.setAccessibilityLabel("Use Default for \(parameter.name)")
+                    addSubview(useDefault)
+                }
+            }
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -81,6 +103,10 @@ final class SceneParameterControls: NSView, NSTextFieldDelegate {
         emitChange()
     }
     @objc private func typedChanged(_ sender: NSControl) { emitChange() }
+    @objc private func useDefault(_ sender: NSButton) {
+        guard let key = sender.identifier?.rawValue else { return }
+        onUseDefault?(key)
+    }
     func controlTextDidChange(_ obj: Notification) { emitChange() }
 
     /// Returns a validated snapshot of the values currently visible in the
