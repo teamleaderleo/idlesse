@@ -840,6 +840,30 @@ enum WallpaperSmoke {
         precondition(CGImageDestinationFinalize(dest))
         let still = try AnimatedImageRenderer(url: gifURL, bounds: NSRect(x: 0, y: 0, width: 64, height: 64))
         defer { still.releaseResources() }
+        let focal = SceneFocus(x: 0.2, y: 0.7)
+        let imageNode = SceneNode(content: .image(folder.appendingPathComponent("test.png")))
+        let animatedNode = SceneNode(content: .image(gifURL))
+        var focusedScene = SceneDescriptor(title: "Nested focus", nodes: [
+            SceneNode(content: .group([imageNode, animatedNode]))
+        ], focus: focal)
+        let focusedRenderer = try LayeredSceneRenderer(playable: focusedScene,
+            bounds: NSRect(x: 0, y: 0, width: 64, height: 64), scale: 1,
+            clock: SceneClock(), onError: { preconditionFailure($0) })
+        defer { focusedRenderer.releaseResources() }
+        func canvases(_ view: NSView) -> [ImageCanvasView] {
+            if let canvas = view as? ImageCanvasView { return [canvas] }
+            return view.subviews.flatMap(canvases)
+        }
+        let originalCanvases = canvases(focusedRenderer.view)
+        precondition(originalCanvases.count == 2)
+        precondition(originalCanvases.allSatisfy { $0.fillFocus == CGPoint(x: focal.x, y: focal.y) })
+        focusedScene.focus = SceneFocus(x: 0.8, y: 0.1)
+        precondition(focusedRenderer.updateScene(focusedScene))
+        precondition(zip(originalCanvases, canvases(focusedRenderer.view)).allSatisfy { $0 === $1 })
+        precondition(originalCanvases.allSatisfy { $0.fillFocus == CGPoint(x: 0.8, y: 0.1) })
+        focusedScene.focus = nil
+        precondition(focusedRenderer.updateScene(focusedScene))
+        precondition(originalCanvases.allSatisfy { $0.fillFocus == nil })
         precondition(still.diagnostics.animated)
         still.setPaused(false)
         let deadline = Date(timeIntervalSinceNow: 5)

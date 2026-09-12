@@ -245,7 +245,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private func stepWallpaper(delta: Int) {
         do {
             try prepareLibrary()
-            library?.cycle(delta: delta)
+            library?.cycle(delta: delta, from: wallpaper.selectedURL)
         } catch {
             NSSound.beep()
         }
@@ -339,7 +339,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
-    @objc private func showSettings() { showLibrary() }
+    @objc private func showSettings() { appSettings.present(tab: 0) }
 
     private func showSaverSettings(asSheet: Bool = false) {
         let settingsWindow = settingsController.window

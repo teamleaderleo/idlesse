@@ -51,6 +51,14 @@ Run the development app:
 ./build.sh run
 ```
 
+With Glaeda's native Apple build helper installed, `glaeda-apple plan` shows the
+selected cache generation and `glaeda-apple warm` builds the complete app through
+the existing bundling/signing flow. The checked-in `glaeda.apple.json` separates
+SwiftPM scratch, compiler modules, extension binaries, and app products by Apple
+toolchain and build settings. It preserves the ordinary `build/` and `.build/`
+flow for direct `build.sh` invocations. Private logs and generated products live
+under `.glaeda/apple-build/`; builds do not launch the app automatically.
+
 Install the screen saver locally:
 
 ```sh

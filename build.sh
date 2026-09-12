@@ -9,6 +9,13 @@ CONFIG="${CONFIG:-debug}"
 # Idlesse is currently developed/tested on Apple Silicon. Override ARCHS later
 # (for example: ARCHS="arm64 x86_64") when we actually need a universal build.
 ARCHS="${ARCHS:-arm64}"
+SWIFT_SCRATCH="${IDLESSE_SWIFT_SCRATCH_PATH:-$ROOT/.build}"
+EXTENSION_CACHE="${IDLESSE_EXTENSION_CACHE_PATH:-$ROOT/.build/appex-cache}"
+SWIFT_CACHE_ARGS=()
+if [[ -n "${IDLESSE_MODULE_CACHE_PATH:-}" ]]; then
+  mkdir -p "$IDLESSE_MODULE_CACHE_PATH"
+  SWIFT_CACHE_ARGS=( -module-cache-path "$IDLESSE_MODULE_CACHE_PATH" )
+fi
 
 SAVER="$BUILD/Idlesse.saver"
 APP="$BUILD/Idlesse.app"
@@ -59,6 +66,7 @@ compile_saver_arch() {
   local output="$2"
 
   xcrun swiftc \
+    ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} \
     -sdk "$SDK" \
     -target "$arch-apple-macosx$MIN_MACOS" \
     -swift-version 5 \
@@ -131,7 +139,7 @@ compile_app_full() {
     "${SWIFT_OPT[@]}" -module-name IdlesseApp )
   local f
   for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
-  xcrun swiftc "${args[@]}" "${APP_SOURCES[@]}" \
+  xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} "${args[@]}" "${APP_SOURCES[@]}" \
     -o "$APP/Contents/MacOS/Idlesse"
 }
 
@@ -145,10 +153,10 @@ compile_app_full() {
 # never needs a rebuild at all.
 compile_app_incremental() {
   local out
-  out="$(swift build --product IdlesseApp 2>&1)" || { printf '%s\n' "$out" | tail -n 5; return 1; }
+  out="$(xcrun swift build --package-path "$ROOT" --scratch-path "$SWIFT_SCRATCH" --product IdlesseApp 2>&1)" || { printf '%s\n' "$out" | tail -n 5; return 1; }
   grep -q "Build of product 'IdlesseApp' complete" <<< "$out" || { printf '%s\n' "$out" | tail -n 5; return 1; }
   local built
-  built="$(swift build --product IdlesseApp --show-bin-path 2>/dev/null)/IdlesseApp"
+  built="$(xcrun swift build --package-path "$ROOT" --scratch-path "$SWIFT_SCRATCH" --product IdlesseApp --show-bin-path 2>/dev/null)/IdlesseApp"
   [[ -x "$built" ]] || return 1
   cp "$built" "$APP/Contents/MacOS/Idlesse"
   return 0
@@ -162,12 +170,12 @@ compile_preview_extension() {
   local framework="$5"
   local plist="$6"
   local bundle="$APP/Contents/PlugIns/$executable.appex"
-  local appex_cache="$ROOT/.build/appex-cache"
+  local appex_cache="$EXTENSION_CACHE"
   mkdir -p "$bundle/Contents/MacOS" "$appex_cache"
   local hash
   hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS-$module"; cat "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider") | shasum -a 256 | cut -d' ' -f1)"
   if [[ ! -f "$appex_cache/$hash" ]]; then
-    xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
       -swift-version 5 "${SWIFT_OPT[@]}" -module-name "$module" \
       -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
       "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider" \
@@ -204,12 +212,12 @@ build_app() {
   mkdir -p "$extension/Contents/MacOS"
   # The single-file appex compiles in ~2s; cache it by content hash so warm
   # builds skip it. Evicted by ./build.sh clean (lives outside $BUILD on purpose).
-  local appex_cache="$ROOT/.build/appex-cache"
+  local appex_cache="$EXTENSION_CACHE"
   mkdir -p "$appex_cache"
   local appex_hash
   appex_hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS"; cat "$ROOT/Sources/DesktopMenu/FinderSync.swift") | shasum -a 256 | cut -d' ' -f1)"
   if [[ ! -f "$appex_cache/$appex_hash" ]]; then
-    xcrun swiftc -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
+    xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
       -swift-version 5 "${SWIFT_OPT[@]}" -module-name IdlesseDesktopMenu \
       -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
       "$ROOT/Sources/DesktopMenu/FinderSync.swift" -framework AppKit -framework FinderSync \
