@@ -30,18 +30,13 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
     private var ambientRotationMinutes = 30
     private var ambientAccess: SceneLibraryStore.Access?
     private var activeAmbientTarget: AmbientWallpaperTarget?
-    private var ignoreNextCommittedSelection = false
     private(set) var currentAmbientResolution: AmbientResolution?
     var onAmbientResolutionChanged: ((AmbientResolution) -> Void)?
 
     private static let ambientAuthorityKey = "ambientSets.authoritative"
     private static let arrangementSnapshotKey = "ambientSets.arrangementSnapshot"
     private static let collectionScheduleBackupKey = "ambientSets.legacyCollectionScheduleBackup"
-
-    private struct LegacyCollectionScheduleBackup: Codable {
-        var collectionID: String
-        var playback: SceneLibraryStore.Playback
-    }
+    private static let maxArrangementSnapshotBytes = 524_288
 
     enum WeatherGroup: String {
         case clear, cloudy, precip
@@ -176,12 +171,22 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
 
         if isAmbientSetsAuthoritative {
             comfort.setAmbientAuthorityEnabled(true)
-            ignoreNextCommittedSelection = true
-            do { try suspendLegacyCollectionSchedules() }
-            catch {
-                NSLog("Idlesse Ambient Sets could not suspend legacy collection schedules: %@", error.localizedDescription)
-                defaults.set(false, forKey: Self.ambientAuthorityKey)
-                comfort.setAmbientAuthorityEnabled(false)
+            do {
+                try suspendLegacyCollectionSchedules()
+            } catch {
+                let suspensionError = error
+                do {
+                    try restoreLegacyCollectionSchedules()
+                    defaults.set(false, forKey: Self.ambientAuthorityKey)
+                    comfort.setAmbientAuthorityEnabled(false)
+                } catch {
+                    // Recovery failed after a relaunch. Keep Ambient authority
+                    // active so exactly one controller still owns actuation.
+                    defaults.set(true, forKey: Self.ambientAuthorityKey)
+                    comfort.setAmbientAuthorityEnabled(true)
+                    NSLog("Idlesse Ambient Sets kept authority after schedule recovery failed: %@ / %@",
+                          suspensionError.localizedDescription, error.localizedDescription)
+                }
             }
         }
         if useMyLocation { requestLocationFix() }
@@ -394,25 +399,47 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
         }
         try AmbientSetActuationPolicy.validateUserSets(sets)
         guard let ambientStore else { throw AmbientSetActuationError.unavailableStore }
+
+        let previousCatalog = ambientStore.catalog
         let heldManualWallpaper = manualHoldKey != nil ? wallpaper.selectedURL : nil
-        try ambientStore.replaceAll(sets)
-        try ambientStore.setManualHold(nil)
-        try captureArrangementSnapshot(force: true)
+        let snapshot = try makeArrangementSnapshot()
+        let snapshotData = try encodedArrangementSnapshot(snapshot)
+
+        try suspendLegacyCollectionSchedules()
         do {
-            try suspendLegacyCollectionSchedules()
+            try ambientStore.replaceCatalog(AmbientSetCatalog(sets: sets, manualHold: nil))
         } catch {
-            try? restoreLegacyCollectionSchedules()
-            throw error
+            let ambientError = error
+            try? ambientStore.replaceCatalog(previousCatalog)
+            do {
+                try restoreLegacyCollectionSchedules()
+            } catch {
+                // Legacy recovery failed after its schedule windows were suspended.
+                // The previous valid Ambient catalog becomes the recovery owner.
+                defaults.set(snapshotData, forKey: Self.arrangementSnapshotKey)
+                defaults.set(true, forKey: Self.ambientAuthorityKey)
+                comfort.setAmbientAuthorityEnabled(true)
+                appliedKey = nil
+                manualHoldKey = nil
+                wallpaper.modeOverrideActive = false
+                refresh()
+                NSLog("Idlesse Ambient cutover kept Ambient authority after rollback failed: %@",
+                      error.localizedDescription)
+            }
+            throw ambientError
         }
+
+        defaults.set(snapshotData, forKey: Self.arrangementSnapshotKey)
         defaults.set(true, forKey: Self.ambientAuthorityKey)
         comfort.setAmbientAuthorityEnabled(true)
         appliedKey = nil
         manualHoldKey = nil
         wallpaper.modeOverrideActive = false
-        ignoreNextCommittedSelection = false
         if let heldManualWallpaper {
-            updateArrangementWallpaper(heldManualWallpaper)
-            applyManualOverrides(.init(wallpaper: AmbientSetActuationPolicy.currentSelectionTarget), label: "Manual Wallpaper")
+            updateArrangementWallpaperPlan()
+            activeAmbientTarget = AmbientSetActuationPolicy.currentSelectionTarget
+            applyManualOverrides(.init(wallpaper: AmbientSetActuationPolicy.currentSelectionTarget),
+                                 label: "Manual Wallpaper")
         } else {
             refresh()
         }
@@ -420,24 +447,30 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
 
     func disableAmbientSets() throws {
         guard isAmbientSetsAuthoritative else { return }
+        let snapshot = arrangementSnapshot()
+
+        // Restore the legacy scheduler while Ambient still owns every output. If
+        // this write fails, authority stays entirely with Ambient and the caller
+        // can retry without a mixed state.
+        try restoreLegacyCollectionSchedules()
+
         boundaryTimer?.invalidate(); boundaryTimer = nil
         stopAmbientRotation()
-        try ambientStore?.setManualHold(nil)
-        let snapshot = arrangementSnapshot()
-        if let snapshot {
-            comfort.applyResolvedDesktopIconsVisible(snapshot.filesVisible)
-            comfort.applyResolvedDesktopWidgetsVisible(snapshot.widgetsVisible)
-        }
-        let restoreURL = arrangementWallpaperURL()
         defaults.set(false, forKey: Self.ambientAuthorityKey)
         comfort.setAmbientAuthorityEnabled(false)
-        try restoreLegacyCollectionSchedules()
         currentAmbientResolution = nil
         activeAmbientTarget = nil
         wallpaper.modeOverrideActive = false
-        if let restoreURL, restoreURL != wallpaper.selectedURL {
-            expectingCommit = restoreURL
-            wallpaper.select(restoreURL, automatic: true)
+
+        if let snapshot {
+            wallpaper.applyPersistedDisplayAssignmentPlan(snapshot.wallpaperPlan)
+            comfort.applyResolvedDesktopIconsVisible(snapshot.filesVisible)
+            comfort.applyResolvedDesktopWidgetsVisible(snapshot.widgetsVisible)
+            comfort.applyResolvedDimming(snapshot.dimming)
+            if let restoreURL = snapshot.wallpaperPlan.baseURL(), restoreURL != wallpaper.selectedURL {
+                expectingCommit = restoreURL
+                wallpaper.select(restoreURL, automatic: true)
+            }
         }
         refresh()
     }
@@ -520,10 +553,14 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
             return
         }
         if AmbientSetActuationPolicy.isArrangementDefault(target) {
+            if target == activeAmbientTarget { return }
             stopAmbientRotation()
             activeAmbientTarget = target
-            if let url = arrangementWallpaperURL(), url != wallpaper.selectedURL {
-                wallpaper.select(url, automatic: true, transient: true)
+            if let snapshot = arrangementSnapshot() {
+                wallpaper.applyPersistedDisplayAssignmentPlan(snapshot.wallpaperPlan)
+                if let url = snapshot.wallpaperPlan.baseURL(), url != wallpaper.selectedURL {
+                    wallpaper.select(url, automatic: true, transient: true)
+                }
             }
             return
         }
@@ -652,39 +689,65 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Arrangement default and manual hold
 
+    private func makeArrangementSnapshot() throws -> AmbientArrangementSnapshot {
+        let snapshot = AmbientArrangementSnapshot(
+            wallpaperPlan: wallpaper.persistedDisplayAssignmentPlan(),
+            filesVisible: comfort.desktopIconsVisible,
+            widgetsVisible: comfort.desktopWidgetsVisible,
+            dimming: comfort.resolvedDimmingState)
+        guard snapshot.isValid else { throw AmbientSetActuationError.invalidArrangementSnapshot }
+        return snapshot
+    }
+
+    private func encodedArrangementSnapshot(_ snapshot: AmbientArrangementSnapshot) throws -> Data {
+        let data = try JSONEncoder().encode(snapshot)
+        guard data.count <= Self.maxArrangementSnapshotBytes else {
+            throw AmbientSetActuationError.invalidArrangementSnapshot
+        }
+        return data
+    }
+
+    private func saveArrangementSnapshot(_ snapshot: AmbientArrangementSnapshot) throws {
+        defaults.set(try encodedArrangementSnapshot(snapshot), forKey: Self.arrangementSnapshotKey)
+    }
+
     private func captureArrangementSnapshot(force: Bool) throws {
         if !force, arrangementSnapshot() != nil { return }
-        let baselineWallpaper = appliedKey != nil ? (daySceneURL ?? wallpaper.selectedURL) : wallpaper.selectedURL
-        let bookmark = baselineWallpaper.flatMap(Self.makeBookmark)
-        let snapshot = AmbientArrangementSnapshot(wallpaperBookmark: bookmark,
-                                                  filesVisible: comfort.desktopIconsVisible,
-                                                  widgetsVisible: comfort.desktopWidgetsVisible,
-                                                  dimming: AmbientDimmingState(enabled: false, level: comfort.bedtimeSettings.amount))
-        guard snapshot.isValid else { throw AmbientSetActuationError.invalidArrangementSnapshot }
-        let data = try JSONEncoder().encode(snapshot)
-        defaults.set(data, forKey: Self.arrangementSnapshotKey)
+        try saveArrangementSnapshot(makeArrangementSnapshot())
     }
 
     private func arrangementSnapshot() -> AmbientArrangementSnapshot? {
         guard let data = defaults.data(forKey: Self.arrangementSnapshotKey),
-              data.count <= 32_768,
+              data.count <= Self.maxArrangementSnapshotBytes,
               let snapshot = try? JSONDecoder().decode(AmbientArrangementSnapshot.self, from: data),
               snapshot.isValid else { return nil }
         return snapshot
     }
 
-    private func arrangementWallpaperURL() -> URL? {
-        arrangementSnapshot()?.wallpaperBookmark.flatMap(Self.resolveBookmark)
-    }
-
-    private func updateArrangementWallpaper(_ url: URL) {
+    private func updateArrangementWallpaperPlan() {
         guard var snapshot = arrangementSnapshot() else {
             try? captureArrangementSnapshot(force: true)
             return
         }
-        snapshot.wallpaperBookmark = Self.makeBookmark(url)
-        guard snapshot.isValid, let data = try? JSONEncoder().encode(snapshot) else { return }
-        defaults.set(data, forKey: Self.arrangementSnapshotKey)
+        snapshot.wallpaperPlan = wallpaper.persistedDisplayAssignmentPlan()
+        try? saveArrangementSnapshot(snapshot)
+    }
+
+    /// A user edit in Displays updates Same / Per Display / Span beneath Ambient
+    /// automation while keeping the prior Arrangement Default base wallpaper.
+    func adoptManualDisplayArrangement() {
+        guard isAmbientSetsAuthoritative else { return }
+        guard var snapshot = arrangementSnapshot() else {
+            try? captureArrangementSnapshot(force: true)
+            return
+        }
+        var plan = wallpaper.persistedDisplayAssignmentPlan()
+        plan.baseBookmark = snapshot.wallpaperPlan.baseBookmark
+        snapshot.wallpaperPlan = plan
+        try? saveArrangementSnapshot(snapshot)
+        activeAmbientTarget = AmbientSetActuationPolicy.currentSelectionTarget
+        applyManualOverrides(.init(wallpaper: AmbientSetActuationPolicy.currentSelectionTarget),
+                             label: "Manual Displays")
     }
 
     private func applyManualOverrides(_ changes: AmbientDesktopOverrides, label: String) {
@@ -726,33 +789,33 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Legacy collection schedule cutover / recovery
 
+    private func legacyScheduleBackup() throws -> [AmbientLegacyCollectionScheduleBackup]? {
+        guard let data = defaults.data(forKey: Self.collectionScheduleBackupKey) else { return nil }
+        guard data.count <= 131_072 else { throw AmbientSetActuationError.invalidLegacySchedule }
+        let backup = try JSONDecoder().decode([AmbientLegacyCollectionScheduleBackup].self, from: data)
+        guard backup.count <= SceneLibraryStore.maxEntries else {
+            throw AmbientSetActuationError.invalidLegacySchedule
+        }
+        return backup
+    }
+
     private func suspendLegacyCollectionSchedules() throws {
         let library = try loadLibraryStore()
-        let backup = library.catalog.collections.compactMap { collection -> LegacyCollectionScheduleBackup? in
-            guard let playback = collection.playback,
-                  playback.startMinute != nil, playback.endMinute != nil else { return nil }
-            return .init(collectionID: collection.id, playback: playback)
+        if defaults.data(forKey: Self.collectionScheduleBackupKey) == nil {
+            let backup = AmbientLegacyScheduleTransaction.backup(from: library.catalog)
+            if !backup.isEmpty {
+                let data = try JSONEncoder().encode(backup)
+                guard data.count <= 131_072 else { throw AmbientSetActuationError.invalidLegacySchedule }
+                defaults.set(data, forKey: Self.collectionScheduleBackupKey)
+            }
         }
-        if !backup.isEmpty && defaults.data(forKey: Self.collectionScheduleBackupKey) == nil {
-            defaults.set(try JSONEncoder().encode(backup), forKey: Self.collectionScheduleBackupKey)
-        }
-        for item in backup {
-            var playback = item.playback
-            playback.startMinute = nil
-            playback.endMinute = nil
-            playback.weekdays = nil
-            try library.setPlayback(item.collectionID, playback)
-        }
+        try AmbientLegacyScheduleTransaction.suspend(library)
     }
 
     private func restoreLegacyCollectionSchedules() throws {
-        guard let data = defaults.data(forKey: Self.collectionScheduleBackupKey), data.count <= 131_072 else { return }
-        let backup = try JSONDecoder().decode([LegacyCollectionScheduleBackup].self, from: data)
-        guard backup.count <= SceneLibraryStore.maxEntries else { throw AmbientSetActuationError.invalidArrangementSnapshot }
+        guard let backup = try legacyScheduleBackup() else { return }
         let library = try loadLibraryStore()
-        for item in backup where library.catalog.collections.contains(where: { $0.id == item.collectionID }) {
-            try library.setPlayback(item.collectionID, item.playback)
-        }
+        try AmbientLegacyScheduleTransaction.restore(library, backup: backup)
         defaults.removeObject(forKey: Self.collectionScheduleBackupKey)
     }
 
@@ -765,13 +828,9 @@ final class AmbientModesController: NSObject, CLLocationManagerDelegate {
             ambientAccess?.close(); ambientAccess = nil
             stopAmbientRotation()
             activeAmbientTarget = AmbientSetActuationPolicy.currentSelectionTarget
-            updateArrangementWallpaper(url)
-            if ignoreNextCommittedSelection {
-                ignoreNextCommittedSelection = false
-                refresh()
-                return
-            }
-            applyManualOverrides(.init(wallpaper: AmbientSetActuationPolicy.currentSelectionTarget), label: "Manual Wallpaper")
+            updateArrangementWallpaperPlan()
+            applyManualOverrides(.init(wallpaper: AmbientSetActuationPolicy.currentSelectionTarget),
+                                 label: "Manual Wallpaper")
             return
         }
 
