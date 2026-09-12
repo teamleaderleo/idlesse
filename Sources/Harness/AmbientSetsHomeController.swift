@@ -197,7 +197,6 @@ final class AmbientSetsHomeController: NSViewController, NSTableViewDataSource, 
         let intro = NSTextField(wrappingLabelWithString:
             "Name desktop states, order their priority, and let one resolver choose the active result.")
         intro.textColor = .secondaryLabelColor
-
         stateLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         explanationLabel.textColor = .secondaryLabelColor
         nextLabel.textColor = .secondaryLabelColor
@@ -273,8 +272,8 @@ final class AmbientSetsHomeController: NSViewController, NSTableViewDataSource, 
         }
         addButton.target = self; addButton.action = #selector(addSet)
         removeButton.target = self; removeButton.action = #selector(removeSet)
-        upButton.target = self; upButton.action = #selector(moveUp)
-        downButton.target = self; downButton.action = #selector(moveDown)
+        upButton.target = self; upButton.action = #selector(moveSelectedUp)
+        downButton.target = self; downButton.action = #selector(moveSelectedDown)
         let buttons = NSStackView(views: [addButton, removeButton, NSView(), upButton, downButton])
         buttons.spacing = 6
         buttons.translatesAutoresizingMaskIntoConstraints = false
@@ -667,8 +666,8 @@ final class AmbientSetsHomeController: NSViewController, NSTableViewDataSource, 
         persistSets(selecting: next)
     }
 
-    @objc private func moveUp() { moveSelected(by: -1) }
-    @objc private func moveDown() { moveSelected(by: 1) }
+    @objc private func moveSelectedUp() { moveSelected(by: -1) }
+    @objc private func moveSelectedDown() { moveSelected(by: 1) }
 
     private func moveSelected(by delta: Int) {
         guard let selectedID, let index = sets.firstIndex(where: { $0.id == selectedID }) else { return }
