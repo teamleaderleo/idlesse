@@ -30,16 +30,27 @@ extension WallpaperController {
         return ResolvedWallpaperAssignmentPlan(mode: mode, topology: topology, assignments: assignments)
     }
 
-    /// Attach #52's session UUID/direct-CG migration keys to the richer display
-    /// identity before resolving assignments. Reconnects can therefore recover
-    /// an existing bookmark even when the live display handle changes.
+    /// Attach #52's UUID/direct-CG migration keys to persisted hardware identity.
+    /// All reconnect matches are computed against the pre-refresh registry before
+    /// any current identity is remembered, preventing loop-order bias for twins.
     func reconcileDurableDisplayAssignments(topology: DisplayTopology = .current()) {
-        let store = DisplayAssignmentStore(defaults: resumeDefaults,
-                                           prefix: DisplayAssignmentStore.wallpaperPrefix)
-        for display in topology.displays {
-            store.reconcile(identityKey: topology.persistentKey(for: display),
-                            persistentID: Self.persistentDisplayIdentifier(display.liveID),
-                            legacyDisplayID: display.liveID)
+        let assignmentStore = DisplayAssignmentStore(defaults: resumeDefaults,
+                                                      prefix: DisplayAssignmentStore.wallpaperPrefix)
+        let identityStore = DisplayIdentityStore(defaults: resumeDefaults,
+                                                 prefix: DisplayAssignmentStore.wallpaperPrefix)
+        let matches: [(DisplaySnapshot, String, String?)] = topology.displays.map { display in
+            let currentKey = topology.persistentKey(for: display)
+            let previous = identityStore.previousAssignmentKey(for: display.identity, proposedKey: currentKey)
+            return (display, currentKey, previous)
+        }
+
+        for (display, currentKey, previousKey) in matches {
+            assignmentStore.reconcile(
+                identityKey: currentKey,
+                previousIdentityKey: previousKey == currentKey ? nil : previousKey,
+                persistentID: Self.persistentDisplayIdentifier(display.liveID),
+                legacyDisplayID: display.liveID)
+            identityStore.remember(display.identity, assignmentKey: currentKey)
         }
     }
 }
