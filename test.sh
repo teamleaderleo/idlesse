@@ -147,3 +147,4 @@ build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+python3 Tests/HomeShellContractTests.py
