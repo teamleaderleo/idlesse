@@ -338,7 +338,8 @@ final class LibraryCardView: NSView {
         return changed
     }
 
-    func prepareForReuse() {
+    override func prepareForReuse() {
+        super.prepareForReuse()
         cancelThumbnailRequest()
         item = nil
         isSelected = false
