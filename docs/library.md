@@ -161,13 +161,18 @@ the moving composition. This is a still-preview library rather than a grid of
 continuously playing wallpapers.
 
 The memory cache holds at most four 1024×576 widescreen posters (about 9 MiB pixel data).
-List thumbnails use a separate cache capped at 64 images. There is no disk thumbnail
-cache or original-media duplication. Renderer working memory uses the existing scene
-budgets during generation. Selecting a scene or reopening Library checks its revision
-before reusing a poster. Packages use bounded JSON and file metadata revisions; raw
-media uses modification time and size. Revision checks run off the main thread. Edits
-during generation discard the result. Refresh Preview forces regeneration. Closing the
-Library cancels its request and clears the image cache.
+List and grid thumbnails share a separate cache capped at 64 images and 64 MiB. Packages
+prefer a baked preview or decodable package asset. Assetless procedural packages then
+render one 320×180 compositor probe at metadata `previewTime`, covering shader, particle,
+gradient, text, and shape scenes. Thumbnail decoding and probe rendering stay on the
+utility thumbnail queue, release renderer resources after each probe, and leave the
+existing placeholder in place when generation fails. There is no disk thumbnail cache
+or original-media duplication. Renderer working memory uses the existing scene budgets
+during generation. Selecting a scene or reopening Library checks its revision before
+reusing a poster. Packages use bounded JSON and file metadata revisions; raw media uses
+modification time and size. Revision checks run off the main thread. Edits during
+generation discard the result. Refresh Preview forces regeneration. Closing the Library
+cancels its request and clears the image cache.
 
 Cloud-backed individual media or Source descendants may need to download when explicitly
 selected for preview.
@@ -178,10 +183,10 @@ additions/removals/moves/replacements, ambiguity and review-only relinks, stable
 retention, cancellation/atomic apply, bounded digest work, traversal and symlink escape
 rejection, metadata round trips, favorite/recent/collection preservation, source removal
 without media deletion, retained legacy limits, source limits, corrupt and future-version
-index preservation, generated Metal posters, favorite filtering, empty searches, and
-bundled-scene routing to a Studio draft. The offscreen UI capture exercises layout but
-cannot fully reproduce macOS glass-control appearance; live UI validation remains
-separate from those tests.
+index preservation, generated Metal posters, bounded particle and shader thumbnail probes,
+favorite filtering, empty searches, and bundled-scene routing to a Studio draft. The
+offscreen UI capture exercises layout but cannot fully reproduce macOS glass-control
+appearance; live UI validation remains separate from those tests.
 
 ## Wallpaper transitions and shared canvases
 
