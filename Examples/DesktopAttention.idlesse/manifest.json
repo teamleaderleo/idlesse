@@ -1,0 +1,11 @@
+{
+  "version": 21,
+  "title": "Quiet Wake",
+  "features": ["motion", "particles"],
+  "capabilities": ["desktop-attention"],
+  "metadata": {
+    "description": "A soft field of fireflies that settles behind windows and wakes as the desktop returns.",
+    "tags": ["ambient", "attention", "particles"],
+    "createdWith": "Idlesse"
+  }
+}

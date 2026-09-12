@@ -1,0 +1,48 @@
+{
+  "nodes": [
+    {
+      "id": "A42A0000-0000-4000-8000-000000000010",
+      "type": "gradient",
+      "name": "Dusk",
+      "style": {"vignette": 0.35}
+    },
+    {
+      "id": "A42A0000-0000-4000-8000-000000000011",
+      "type": "particles",
+      "name": "Quiet Fireflies",
+      "opacity": 0.72,
+      "emitter": {
+        "count": 112,
+        "lifetime": 8,
+        "speed": 0.18,
+        "wind": 0.02,
+        "gravity": 0,
+        "size": 0.006,
+        "seed": 4242
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "target": {"nodeID": "A42A0000-0000-4000-8000-000000000011", "property": "emitter.speed"},
+      "signal": "desktop.attention",
+      "scale": 0.2,
+      "offset": 0.015,
+      "smoothing": 1.4
+    },
+    {
+      "target": {"nodeID": "A42A0000-0000-4000-8000-000000000011", "property": "opacity"},
+      "signal": "desktop.attention",
+      "scale": 0.54,
+      "offset": 0.18,
+      "smoothing": 1.8
+    },
+    {
+      "target": {"nodeID": "A42A0000-0000-4000-8000-000000000010", "property": "style.vignette"},
+      "signal": "desktop.attention",
+      "scale": -0.2,
+      "offset": 0.55,
+      "smoothing": 2.0
+    }
+  ]
+}
