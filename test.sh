@@ -135,3 +135,4 @@ build/tests/comfort
 build/tests/library
 build/tests/library-grid
 build/tests/ambient-sets
+python3 Tests/HomeShellContractTests.py
