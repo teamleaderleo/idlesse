@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "app": {
+      "engine": "script",
+      "executable": "build.sh",
+      "arguments": ["app"],
+      "environment": {
+        "CONFIG": "debug",
+        "ARCHS": "arm64",
+        "MIN_MACOS": "14.0",
+        "BUILD_DIR": "{products}",
+        "IDLESSE_SWIFT_SCRATCH_PATH": "{scratch}",
+        "IDLESSE_EXTENSION_CACHE_PATH": "{extensions}",
+        "IDLESSE_MODULE_CACHE_PATH": "{module_cache}"
+      }
+    },
+    "swift": {
+      "engine": "swiftpm",
+      "configuration": "debug",
+      "product": "IdlesseApp"
+    }
+  }
+}
