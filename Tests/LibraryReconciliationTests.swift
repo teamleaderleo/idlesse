@@ -7,10 +7,11 @@ struct LibraryReconciliationChecks {
         try catalogMoveAndReplacement()
         try digestAndProbableMoveRules()
         try ambiguityStaysUnresolved()
+        try identityConflictsNeverFallThrough()
         try cancellationLeavesBytesUntouched()
         try relinkAndReconcileStaySeparate()
         try digestBudgetSkipsLargeFiles()
-        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, atomic cancellation, relink separation and bounded hashing")
+        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, ambiguity, identity conflicts, atomic cancellation, relink separation and bounded hashing")
     }
 
     private static func entry(_ id: String, path: String, catalogID: String? = nil,
@@ -113,10 +114,29 @@ struct LibraryReconciliationChecks {
             draft("new/one.mp4", title: "Same", bytes: 900),
             draft("new/two.mp4", title: "Same", bytes: 900)
         ]
-        let diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: old, scanned: incoming)
+        var diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: old, scanned: incoming)
         precondition(diff.matches.isEmpty)
         precondition(diff.probableMoves.isEmpty)
         precondition(diff.missingEntryIDs.count == 2 && diff.addedScannedIndices.count == 2)
+
+        let duplicatePath = [
+            entry("path-one", path: "duplicate.mp4", title: "One", bytes: 10),
+            entry("path-two", path: "duplicate.mp4", title: "Two", bytes: 20)
+        ]
+        diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: duplicatePath,
+            scanned: [draft("duplicate.mp4", title: "Replacement", bytes: 30)])
+        precondition(diff.matches.isEmpty, "Duplicate old paths must never pick one entry implicitly")
+        precondition(diff.missingEntryIDs.count == 2 && diff.addedScannedIndices == [0])
+    }
+
+    private static func identityConflictsNeverFallThrough() throws {
+        let digest = String(repeating: "cd", count: 32)
+        let old = entry("old", path: "old.mp4", catalogID: "catalog-old", title: "Clip", bytes: 444, digest: digest)
+        let incoming = draft("new.mp4", catalogID: "catalog-new", title: "Clip", bytes: 444, digest: digest)
+        let diff = try SceneLibraryStore.reconciliationDiff(sourceID: "source", existing: [old], scanned: [incoming])
+        precondition(diff.matches.isEmpty, "Conflicting Source catalog IDs must outrank digest evidence")
+        precondition(diff.probableMoves.isEmpty, "Conflicting Source catalog IDs must not become probable relinks")
+        precondition(diff.missingEntryIDs == ["old"] && diff.addedScannedIndices == [0])
     }
 
     private static func cancellationLeavesBytesUntouched() throws {
