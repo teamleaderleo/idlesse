@@ -91,10 +91,11 @@ fi
 LIBRARY_SRCS=(
   Sources/Harness/SceneLibraryStore.swift
   Sources/Harness/SceneLibraryReconciliation.swift
+  Sources/Harness/SceneLibrarySQLiteStore.swift
   Tests/LibraryTests.swift
 )
 if needs_build "build/tests/library" "${LIBRARY_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -o build/tests/library &
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -lsqlite3 -o build/tests/library &
   pids+=($!)
 fi
 
@@ -102,14 +103,27 @@ fi
 LIBRARY_RECONCILE_SRCS=(
   Sources/Harness/SceneLibraryStore.swift
   Sources/Harness/SceneLibraryReconciliation.swift
+  Sources/Harness/SceneLibrarySQLiteStore.swift
   Tests/LibraryReconciliationTests.swift
 )
 if needs_build "build/tests/library-reconcile" "${LIBRARY_RECONCILE_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${LIBRARY_RECONCILE_SRCS[@]}" -o build/tests/library-reconcile &
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_RECONCILE_SRCS[@]}" -lsqlite3 -o build/tests/library-reconcile &
   pids+=($!)
 fi
 
-# 8. Library gallery virtualization. Compile only the production layout planner
+# 8. SQLite migration/recovery and deterministic export
+LIBRARY_SQLITE_SRCS=(
+  Sources/Harness/SceneLibraryStore.swift
+  Sources/Harness/SceneLibraryReconciliation.swift
+  Sources/Harness/SceneLibrarySQLiteStore.swift
+  Tests/LibrarySQLiteTests.swift
+)
+if needs_build "build/tests/library-sqlite" "${LIBRARY_SQLITE_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite &
+  pids+=($!)
+fi
+
+# 9. Library gallery virtualization. Compile only the production layout planner
 # from LibraryGridView so 1k/4k coverage stays synthetic and never decodes media.
 LIBRARY_GRID_SRCS=(
   Sources/Harness/LibraryGridView.swift
@@ -133,4 +147,5 @@ build/tests/audio
 build/tests/comfort
 build/tests/library
 build/tests/library-reconcile
+build/tests/library-sqlite
 build/tests/library-grid
