@@ -4,7 +4,7 @@ Issue #31 is layered directly on the assignment runtime from #52. `DisplayAssign
 
 ## Display identity
 
-`CGDirectDisplayID` is a live-session handle only. `DisplayIdentity` records the ColorSync display UUID plus vendor/model/serial, built-in state, physical millimetres, and the localized display name. The UUID is the preferred durable key. Hardware fields provide reconnect matching when a UUID changes or is unavailable. Truly indistinguishable siblings receive a deterministic relative-position suffix instead of persisting their current numeric CG handle.
+`CGDirectDisplayID` is a live-session handle only. `DisplayIdentity` records the ColorSync display UUID plus vendor/model/serial, built-in state, physical millimetres, and the localized display name. The hardware fingerprint is the canonical persistence key so an assignment survives a reissued ColorSync UUID; ColorSync UUID remains the exact-match/session alias used by #52. Truly indistinguishable siblings receive a deterministic relative-position suffix instead of persisting their current numeric CG handle.
 
 `DisplayAssignmentStore.reconcile(identityKey:persistentID:legacyDisplayID:)` migrates the existing #52 UUID/direct-CG assignment keys onto the durable identity key while retaining compatibility aliases. A reconnected display can therefore seed a newly issued session UUID from the durable assignment. Clearing an assignment clears the canonical durable copy as well.
 
@@ -16,7 +16,7 @@ Mirrored displays retain their own snapshot for diagnostics but resolve wallpape
 
 ## Known arrangements
 
-`KnownDisplayArrangementsStore` records topology signatures with hard-bounded JSON state in UserDefaults. A lone built-in panel begins as **MacBook Only**; multi-display layouts begin as **Desk Setup**. Reconnecting a known docked/undocked combination reuses the matching profile. Profiles describe remembered arrangements; macOS continues to own physical monitor placement.
+`KnownDisplayArrangementsStore` records topology signatures with hard-bounded JSON state in UserDefaults: at most 16 recent arrangements with at most 16 member identities each. A lone built-in panel begins as **MacBook Only**; multi-display layouts begin as **Desk Setup**. Reconnecting a known docked/undocked combination reuses the matching profile. Profiles describe remembered arrangements; macOS continues to own physical monitor placement.
 
 ## Library assignment flow
 
@@ -28,4 +28,4 @@ Displays contains no second Library catalog. Selecting **Choose in Library…** 
 
 ## CI coverage
 
-`DisplayTopologySmoke` uses synthetic one-display, offset two-display, mirrored, and mixed-resolution/scale layouts. It also checks a reconnect identity match and known docked/undocked arrangement recording. `WallpaperPolicyTests` covers direct-CG -> UUID -> durable-identity migration and recovery under a new session UUID. No physical displays are required for these checks.
+`DisplayTopologySmoke` uses synthetic one-display, offset two-display, mirrored, and mixed-resolution/scale layouts. It also checks a ColorSync UUID change against the same hardware identity and known docked/undocked arrangement recording. `WallpaperPolicyTests` covers direct-CG -> UUID -> durable-identity migration and recovery under a new session UUID. No physical displays are required for these checks.
