@@ -533,7 +533,7 @@ struct SceneNode: Codable, Sendable {
             guard text.utf8.count <= 4096, !font.isEmpty, font.utf8.count <= 160,
                   size.isFinite, (4...512).contains(size), lineSpacing.isFinite, (0...256).contains(lineSpacing),
                   (32...4096).contains(width), (32...4096).contains(height),
-                  SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid text, typography, fill or canvas dimensions.")
+                  SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid text, typography, fill or canvas dimensions.") }
         }
     }
     struct Shape: Codable, Sendable, Equatable {
