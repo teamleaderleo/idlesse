@@ -6,7 +6,9 @@ Idlesse now treats the Library-owned window as the primary application window. `
 
 Home exposes Library and Displays as first-class destinations. Favorites, Recently Opened, and saved Collections reuse the Library's existing filter/sort controls so imports, Sources, collection membership/order, schedules, search, selection, previews, drag/drop, and Studio handoff keep one implementation. The persistent toolbar shows the active wallpaper, previous/pause/next controls, the current display destination, and collection-rotation status when active.
 
-The Displays destination owns desktop task controls (Files, Widgets, and Same on All Displays). Issue #31 replaces this Phase-1 summary surface with the visual topology/assignment model while preserving the destination and Home ownership.
+Home owns the desktop Files/Widgets controls. The Displays content accepts an optional reusable `NSViewController` plus activation callback. When #31 is present, Home embeds that controller's own view directly and keeps the desktop controls below it. Home never extracts a `contentView` from the standalone Displays window. Until the #31 dependency lands, the Phase-1 Same-on-All summary remains the fallback.
+
+This seam lets #31's visual `DisplayAssignmentViewController` serve both Home and the existing standalone #52 command path with one implementation: the standalone controller is a thin window wrapper, while Home owns a separate destination-controller instance.
 
 ## Settings
 
@@ -14,4 +16,4 @@ Settings is a separate preferences window. Playback, automation, screen-saver, a
 
 ## Regression coverage
 
-`Tests/HomeShellContractTests.py`, run by `test.sh`, protects the core ownership rule and expected Home destinations/controls. `HomeWindowController.smokeTest()` also provides deterministic AppKit shell assertions for harnesses that instantiate the production controller.
+`Tests/HomeShellContractTests.py`, run by `test.sh`, protects the core ownership rule, expected Home destinations/controls, the reusable Displays destination seam, Home-owned panel presentation, and Now Playing thumbnail caching. `HomeWindowController.smokeTest()` also provides deterministic AppKit shell assertions for harnesses that instantiate the production controller.
