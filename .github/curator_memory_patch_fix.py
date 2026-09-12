@@ -8,6 +8,7 @@ s = s.replace('SELECT item_id, recent_at FROM item_state WHERE recent_at IS NOT 
               'SELECT item_id, recent_at FROM item_state WHERE recent_at IS NOT NULL ORDER BY item_id")')
 s = s.replace('guard let id = statement.text(0) else { throw failure("An item state row is invalid.") }\n            result[id] = Date(timeIntervalSinceReferenceDate: statement.double(1))',
               'guard let id = statement.text(0), let time = statement.optionalDouble(1) else { throw failure("An item state row is invalid.") }\n            result[id] = Date(timeIntervalSinceReferenceDate: time)')
+s = s.replace('statement.double(1)', 'statement.optionalDouble(1)!')
 s = s.replace("'            SELECT id, name, playback_present, playback_minutes, playback_shuffle, playback_start_minute, playback_end_minute, weekdays_present\\n'",
               "'            SELECT id, name, playback_present, playback_minutes, playback_shuffle,\\n                   playback_start_minute, playback_end_minute, weekdays_present\\n'")
 s = s.replace('''                var settings = SceneLibraryStore.Playback(minutes: statement.int(3), shuffle: statement.int(4) != 0,
