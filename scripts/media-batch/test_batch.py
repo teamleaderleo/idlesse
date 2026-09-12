@@ -65,5 +65,17 @@ class EdgeBarTests(unittest.TestCase):
         im = self.frame((0, 0, 512, 288))
         im.paste((0, 0, 0), (0, 140, 30, 150))
         self.assertEqual(verify.bars(im)['left'], 0)
+    def test_near_black_painted_texture_is_not_matte(self):
+        # Sakurako's shadowed stone: dark, but grain from 4 to 11, never flat.
+        im = self.frame((0, 0, 512, 288))
+        px = im.load()
+        for y in range(120):
+            for x in range(512):
+                v = 1 + (x * 7 + y * 3) % 3
+                px[x, y] = (v, v + 1, v + 2)
+        self.assertEqual(verify.bars(im)['top'], 0)
+    def test_encoded_void_colour_still_matches(self):
+        edges = verify.bars(self.frame((120, 60, 400, 230), matte=(25, 32, 43)))
+        self.assertEqual(edges, {'top': 60, 'bottom': 58, 'left': 120, 'right': 112})
 
 if __name__ == '__main__': unittest.main()

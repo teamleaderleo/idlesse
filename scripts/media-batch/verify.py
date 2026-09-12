@@ -8,7 +8,7 @@ from PIL import Image, ImageChops, ImageStat
 # guessed from corner pixels, which on flat-painted art are often the art.
 RENDER_MATTES=((0,0,0),(24,32,43))
 
-def bars(im,tolerance=12,mattes=RENDER_MATTES,min_run=0.1):
+def bars(im,tolerance=3,mattes=RENDER_MATTES,min_run=0.1):
     """Renderer matte around the art, in the image's pixels, inward from each edge.
 
     Measured per line rather than per edge. A camera that leaves a wedge or a
@@ -22,6 +22,12 @@ def bars(im,tolerance=12,mattes=RENDER_MATTES,min_run=0.1):
     report that bar's full span twice. And dark art touching the frame, hair or
     an outline, is matte-coloured for a few scattered lines; a run has to cover
     ``min_run`` of the edge before it counts.
+
+    The colour tolerance is tight on purpose. A clear colour survives HEVC
+    almost exactly -- measured, 99.5% of Ibuki's and Nagisa's matte is within 3
+    of black, and the Azur void decodes to (25,32,43) -- while very dark painted
+    texture does not: none of Sakurako's shadowed stone is within 3, all of it
+    sits at 4-11. At a tolerance of 12 that shadow read as a 293px bar.
     """
     px=im.load();w,h=im.size
     def near(p,m):return abs(p[0]-m[0])+abs(p[1]-m[1])+abs(p[2]-m[2])<=tolerance
