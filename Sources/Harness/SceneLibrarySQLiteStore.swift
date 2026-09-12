@@ -189,6 +189,16 @@ enum SceneLibrarySQLiteCatalog {
             put(stack.representativeID, "representativeID", into: &value)
             return value
         }
+        root["memory"] = catalog.memory.keys.sorted().map { id -> [String: Any] in
+            let memory = catalog.memory[id]!
+            var value: [String: Any] = ["id": id, "playCount": memory.playCount]
+            if let rating = memory.rating { value["rating"] = rating }
+            return value
+        }
+        root["smartCollections"] = catalog.smartCollections.enumerated().map { ordinal, collection -> [String: Any] in
+            ["ordinal": ordinal, "id": collection.id, "name": collection.name,
+             "sort": collection.sort.rawValue, "predicates": collection.predicates.map(String.init(describing:))]
+        }
         root["collections"] = catalog.collections.enumerated().map { ordinal, collection -> [String: Any] in
             var value: [String: Any] = [
                 "ordinal": ordinal,
@@ -198,6 +208,7 @@ enum SceneLibrarySQLiteCatalog {
             ]
             if let playback = collection.playback {
                 var object: [String: Any] = ["minutes": playback.minutes, "shuffle": playback.shuffle]
+                if let mode = playback.mode { object["mode"] = mode.rawValue }
                 if let start = playback.startMinute { object["startMinute"] = start }
                 if let end = playback.endMinute { object["endMinute"] = end }
                 if let weekdays = playback.weekdays { object["weekdays"] = weekdays.sorted() }
@@ -294,7 +305,9 @@ enum SceneLibrarySQLiteCatalog {
         CREATE TABLE item_state (
             item_id TEXT PRIMARY KEY,
             recent_at REAL,
-            play_position REAL
+            play_position REAL,
+            rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+            play_count INTEGER NOT NULL DEFAULT 0 CHECK(play_count >= 0)
         ) WITHOUT ROWID;
         CREATE TABLE collections (
             id TEXT PRIMARY KEY,
@@ -303,6 +316,7 @@ enum SceneLibrarySQLiteCatalog {
             playback_present INTEGER NOT NULL CHECK(playback_present IN (0,1)),
             playback_minutes INTEGER,
             playback_shuffle INTEGER,
+            playback_mode TEXT,
             playback_start_minute INTEGER,
             playback_end_minute INTEGER,
             weekdays_present INTEGER NOT NULL CHECK(weekdays_present IN (0,1))
@@ -332,6 +346,21 @@ enum SceneLibrarySQLiteCatalog {
             PRIMARY KEY(stack_id, ordinal),
             UNIQUE(stack_id, entry_id)
         ) WITHOUT ROWID;
+        CREATE TABLE smart_collections (
+            id TEXT PRIMARY KEY,
+            ordinal INTEGER NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            sort TEXT NOT NULL
+        );
+        CREATE TABLE smart_collection_predicates (
+            collection_id TEXT NOT NULL REFERENCES smart_collections(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            text_value TEXT,
+            int_value INTEGER,
+            bool_value INTEGER,
+            PRIMARY KEY(collection_id, ordinal)
+        ) WITHOUT ROWID;
         CREATE UNIQUE INDEX entries_source_catalog_identity
             ON entries(source_id, catalog_id)
             WHERE source_id IS NOT NULL AND catalog_id IS NOT NULL AND catalog_id <> '';
@@ -347,12 +376,14 @@ enum SceneLibrarySQLiteCatalog {
         CREATE INDEX item_state_recent ON item_state(recent_at DESC);
         CREATE INDEX collection_items_scene ON collection_items(scene_id, collection_id);
         CREATE INDEX user_stack_items_entry ON user_stack_items(entry_id, stack_id);
+        CREATE INDEX smart_predicates_kind ON smart_collection_predicates(kind, collection_id);
         CREATE UNIQUE INDEX collections_name_nocase ON collections(name COLLATE NOCASE);
+        CREATE UNIQUE INDEX smart_collections_name_nocase ON smart_collections(name COLLATE NOCASE);
         """)
     }
 
     private static func clearCatalog(in db: Database) throws {
-        for table in ["user_stack_items", "user_stacks", "collection_items", "collection_weekdays", "collections", "item_state", "favorites",
+        for table in ["smart_collection_predicates", "smart_collections", "user_stack_items", "user_stacks", "collection_items", "collection_weekdays", "collections", "item_state", "favorites",
                       "entry_metadata", "entry_tags", "entries", "source_metadata", "sources", "catalog_meta"] {
             try db.execute("DELETE FROM \(table)")
         }
@@ -364,7 +395,8 @@ enum SceneLibrarySQLiteCatalog {
         try insertEntries(catalog.entries, in: db)
         try insertStacks(catalog.stacks, in: db)
         try insertFavorites(catalog.favorites, in: db)
-        try insertState(catalog.recent, in: db)
+        try insertState(catalog.recent, memory: catalog.memory, in: db)
+        try insertSmartCollections(catalog.smartCollections, in: db)
         try insertCollections(catalog.collections, in: db)
     }
 
@@ -437,18 +469,51 @@ enum SceneLibrarySQLiteCatalog {
         for id in favorites.sorted() { try statement.bind(id, at: 1); try statement.stepDone(); statement.reset() }
     }
 
-    private static func insertState(_ recents: [String: Date], in db: Database) throws {
-        let statement = try db.prepare("INSERT INTO item_state(item_id, recent_at, play_position) VALUES(?, ?, NULL)")
-        for id in recents.keys.sorted() {
-            try statement.bind(id, at: 1); try statement.bind(recents[id]!.timeIntervalSinceReferenceDate, at: 2)
+    private static func insertState(_ recents: [String: Date], memory: [String: SceneLibraryStore.ItemMemory], in db: Database) throws {
+        let statement = try db.prepare("INSERT INTO item_state(item_id, recent_at, play_position, rating, play_count) VALUES(?, ?, NULL, ?, ?)")
+        let ids = Set(recents.keys).union(memory.keys)
+        for id in ids.sorted() {
+            try statement.bind(id, at: 1)
+            if let recent = recents[id] { try statement.bind(recent.timeIntervalSinceReferenceDate, at: 2) } else { try statement.bind(Optional<Double>.none, at: 2) }
+            try statement.bind(memory[id]?.rating, at: 3); try statement.bind(memory[id]?.playCount ?? 0, at: 4)
             try statement.stepDone(); statement.reset()
         }
     }
 
+
+    private static func insertSmartCollections(_ collections: [SceneLibraryStore.SmartCollection], in db: Database) throws {
+        let collection = try db.prepare("INSERT INTO smart_collections(id, ordinal, name, sort) VALUES(?, ?, ?, ?)")
+        let predicate = try db.prepare("INSERT INTO smart_collection_predicates(collection_id, ordinal, kind, text_value, int_value, bool_value) VALUES(?, ?, ?, ?, ?, ?)")
+        for (ordinal, value) in collections.enumerated() {
+            try collection.bind(value.id, at: 1); try collection.bind(ordinal, at: 2); try collection.bind(value.name, at: 3)
+            try collection.bind(value.sort.rawValue, at: 4); try collection.stepDone(); collection.reset()
+            for (predicateOrdinal, valuePredicate) in value.predicates.enumerated() {
+                let encoded = encodePredicate(valuePredicate)
+                try predicate.bind(value.id, at: 1); try predicate.bind(predicateOrdinal, at: 2); try predicate.bind(encoded.kind, at: 3)
+                try predicate.bind(encoded.text, at: 4); try predicate.bind(encoded.int, at: 5)
+                if let bool = encoded.bool { try predicate.bind(bool ? 1 : 0, at: 6) } else { try predicate.bind(Optional<Int>.none, at: 6) }
+                try predicate.stepDone(); predicate.reset()
+            }
+        }
+    }
+    private static func encodePredicate(_ predicate: SceneLibraryStore.SmartPredicate) -> (kind: String, text: String?, int: Int?, bool: Bool?) {
+        switch predicate {
+        case .favorite(let value): return ("favorite", nil, nil, value)
+        case .ratingAtLeast(let value): return ("ratingAtLeast", nil, value, nil)
+        case .playedAtLeast(let value): return ("playedAtLeast", nil, value, nil)
+        case .unplayed: return ("unplayed", nil, nil, nil)
+        case .mediaType(let value): return ("mediaType", value, nil, nil)
+        case .series(let value): return ("series", value, nil, nil)
+        case .character(let value): return ("character", value, nil, nil)
+        case .tag(let value): return ("tag", value, nil, nil)
+        case .sourceID(let value): return ("sourceID", value, nil, nil)
+        case .duplicate: return ("duplicate", nil, nil, nil)
+        }
+    }
     private static func insertCollections(_ collections: [SceneLibraryStore.Collection], in db: Database) throws {
         let collection = try db.prepare("""
             INSERT INTO collections(id, ordinal, name, playback_present, playback_minutes, playback_shuffle,
-                playback_start_minute, playback_end_minute, weekdays_present) VALUES(?,?,?,?,?,?,?,?,?)
+                playback_mode, playback_start_minute, playback_end_minute, weekdays_present) VALUES(?,?,?,?,?,?,?,?,?,?)
             """)
         let weekday = try db.prepare("INSERT INTO collection_weekdays(collection_id, weekday) VALUES(?, ?)")
         let item = try db.prepare("INSERT INTO collection_items(collection_id, ordinal, scene_id) VALUES(?, ?, ?)")
@@ -456,8 +521,8 @@ enum SceneLibrarySQLiteCatalog {
             let playback = value.playback
             try collection.bind(value.id, at: 1); try collection.bind(ordinal, at: 2); try collection.bind(value.name, at: 3)
             try collection.bind(playback == nil ? 0 : 1, at: 4); try collection.bind(playback?.minutes, at: 5)
-            try collection.bind(playback.map { $0.shuffle ? 1 : 0 }, at: 6); try collection.bind(playback?.startMinute, at: 7)
-            try collection.bind(playback?.endMinute, at: 8); try collection.bind(playback?.weekdays == nil ? 0 : 1, at: 9)
+            try collection.bind(playback.map { $0.shuffle ? 1 : 0 }, at: 6); try collection.bind(playback?.mode?.rawValue, at: 7)
+            try collection.bind(playback?.startMinute, at: 8); try collection.bind(playback?.endMinute, at: 9); try collection.bind(playback?.weekdays == nil ? 0 : 1, at: 10)
             try collection.stepDone(); collection.reset()
             for day in playback?.weekdays?.sorted() ?? [] {
                 try weekday.bind(value.id, at: 1); try weekday.bind(day, at: 2); try weekday.stepDone(); weekday.reset()
@@ -483,7 +548,10 @@ enum SceneLibrarySQLiteCatalog {
         catalog.sources = try readSources(in: db)
         catalog.entries = try readEntries(in: db)
         catalog.favorites = try readFavorites(in: db)
-        catalog.recent = try readState(in: db)
+        let state = try readState(in: db)
+        catalog.recent = state.recent
+        catalog.memory = state.memory
+        catalog.smartCollections = try readSmartCollections(in: db)
         catalog.stacks = try readStacks(in: db)
         catalog.collections = try readCollections(in: db)
         return catalog
@@ -494,7 +562,9 @@ enum SceneLibrarySQLiteCatalog {
             ("sources", SceneLibraryStore.maxSources),
             ("entries", SceneLibraryStore.maxIndividualEntries + SceneLibraryStore.maxSourceEntries),
             ("favorites", 256),
-            ("item_state", 256),
+            ("item_state", SceneLibraryStore.maxIndividualEntries + SceneLibraryStore.maxSourceEntries),
+            ("smart_collections", 32),
+            ("smart_collection_predicates", 32 * 8),
             ("collections", 32),
             ("collection_weekdays", 32 * 7),
             ("collection_items", 32 * 256),
@@ -583,14 +653,18 @@ enum SceneLibrarySQLiteCatalog {
         return result
     }
 
-    private static func readState(in db: Database) throws -> [String: Date] {
-        let statement = try db.prepare("SELECT item_id, recent_at FROM item_state WHERE recent_at IS NOT NULL ORDER BY item_id")
-        var result: [String: Date] = [:]
+    private static func readState(in db: Database) throws -> (recent: [String: Date], memory: [String: SceneLibraryStore.ItemMemory]) {
+        let statement = try db.prepare("SELECT item_id, recent_at, rating, play_count FROM item_state")
+        var recent: [String: Date] = [:]
+        var memory: [String: SceneLibraryStore.ItemMemory] = [:]
         while try statement.stepRow() {
-            guard let id = statement.text(0), let time = statement.optionalDouble(1) else { throw failure("An item state row is invalid.") }
-            result[id] = Date(timeIntervalSinceReferenceDate: time)
+            guard let id = statement.text(0) else { throw failure("An item state row is invalid.") }
+            if !statement.isNull(1) { recent[id] = Date(timeIntervalSinceReferenceDate: statement.optionalDouble(1)!) }
+            let rating = statement.isNull(2) ? nil : statement.int(2)
+            let playCount = statement.int(3)
+            if rating != nil || playCount > 0 { memory[id] = .init(rating: rating, playCount: playCount) }
         }
-        return result
+        return (recent, memory)
     }
 
 
@@ -610,6 +684,40 @@ enum SceneLibrarySQLiteCatalog {
         }
         return result
     }
+
+    private static func readSmartCollections(in db: Database) throws -> [SceneLibraryStore.SmartCollection] {
+        var predicates: [String: [(Int, SceneLibraryStore.SmartPredicate)]] = [:]
+        let rows = try db.prepare("SELECT collection_id, ordinal, kind, text_value, int_value, bool_value FROM smart_collection_predicates ORDER BY collection_id, ordinal")
+        while try rows.stepRow() {
+            guard let id = rows.text(0), let kind = rows.text(2) else { throw failure("A Smart Collection predicate row is invalid.") }
+            predicates[id, default: []].append((rows.int(1), try decodePredicate(kind: kind, text: rows.text(3), int: rows.isNull(4) ? nil : rows.int(4), bool: rows.isNull(5) ? nil : rows.int(5) != 0)))
+        }
+        let statement = try db.prepare("SELECT id, name, sort FROM smart_collections ORDER BY ordinal")
+        var result: [SceneLibraryStore.SmartCollection] = []
+        while try statement.stepRow() {
+            guard let id = statement.text(0), let name = statement.text(1), let rawSort = statement.text(2), let sort = SceneLibraryStore.SmartSort(rawValue: rawSort) else {
+                throw failure("A Smart Collection row is invalid.")
+            }
+            result.append(.init(id: id, name: name, predicates: (predicates[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), sort: sort))
+        }
+        return result
+    }
+    private static func decodePredicate(kind: String, text: String?, int: Int?, bool: Bool?) throws -> SceneLibraryStore.SmartPredicate {
+        switch kind {
+        case "favorite": if let bool { return .favorite(bool) }
+        case "ratingAtLeast": if let int { return .ratingAtLeast(int) }
+        case "playedAtLeast": if let int { return .playedAtLeast(int) }
+        case "unplayed": return .unplayed
+        case "mediaType": if let text { return .mediaType(text) }
+        case "series": if let text { return .series(text) }
+        case "character": if let text { return .character(text) }
+        case "tag": if let text { return .tag(text) }
+        case "sourceID": if let text { return .sourceID(text) }
+        case "duplicate": return .duplicate
+        default: break
+        }
+        throw failure("A Smart Collection predicate is invalid.")
+    }
     private static func readCollections(in db: Database) throws -> [SceneLibraryStore.Collection] {
         var weekdays: [String: Set<Int>] = [:]
         let weekdayRows = try db.prepare("SELECT collection_id, weekday FROM collection_weekdays ORDER BY collection_id, weekday")
@@ -624,8 +732,7 @@ enum SceneLibrarySQLiteCatalog {
             items[id, default: []].append((itemRows.int(1), sceneID))
         }
         let statement = try db.prepare("""
-            SELECT id, name, playback_present, playback_minutes, playback_shuffle,
-                   playback_start_minute, playback_end_minute, weekdays_present
+            SELECT id, name, playback_present, playback_minutes, playback_shuffle, playback_mode, playback_start_minute, playback_end_minute, weekdays_present
             FROM collections ORDER BY ordinal
             """)
         var result: [SceneLibraryStore.Collection] = []
@@ -637,8 +744,9 @@ enum SceneLibrarySQLiteCatalog {
                     throw failure("A collection playback row is incomplete.")
                 }
                 playback = .init(minutes: minutes, shuffle: shuffleValue != 0,
-                    startMinute: statement.optionalInt(5), endMinute: statement.optionalInt(6),
-                    weekdays: statement.int(7) == 1 ? (weekdays[id] ?? []) : nil)
+                    mode: statement.text(5).flatMap(SceneLibraryStore.Playback.SelectionMode.init(rawValue:)),
+                    startMinute: statement.optionalInt(6), endMinute: statement.optionalInt(7),
+                    weekdays: statement.int(8) == 1 ? (weekdays[id] ?? []) : nil)
             } else { playback = nil }
             result.append(.init(id: id, name: name,
                 sceneIDs: (items[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), playback: playback))

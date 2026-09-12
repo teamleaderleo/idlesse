@@ -199,8 +199,11 @@ final class SceneLibraryStore {
     }
 
     struct Playback: Codable, Equatable {
+        enum SelectionMode: String, Codable, Sendable { case ordered, shuffle, weighted, surprise }
         var minutes: Int = 30
         var shuffle: Bool = false
+        var mode: SelectionMode? = nil
+        var effectiveMode: SelectionMode { mode ?? (shuffle ? .shuffle : .ordered) }
         var startMinute: Int?
         var endMinute: Int?
         // Calendar weekday numbers; nil preserves legacy daily schedules.
@@ -224,6 +227,29 @@ final class SceneLibraryStore {
         var sceneIDs: [String]
         var representativeID: String?
     }
+    struct ItemMemory: Codable, Equatable, Sendable {
+        var rating: Int? = nil
+        var playCount: Int = 0
+    }
+    enum SmartPredicate: Codable, Equatable, Sendable {
+        case favorite(Bool)
+        case ratingAtLeast(Int)
+        case playedAtLeast(Int)
+        case unplayed
+        case mediaType(String)
+        case series(String)
+        case character(String)
+        case tag(String)
+        case sourceID(String)
+        case duplicate
+    }
+    enum SmartSort: String, Codable, Sendable { case name, rating, recent, playCount }
+    struct SmartCollection: Codable, Equatable, Sendable {
+        var id: String = UUID().uuidString
+        var name: String
+        var predicates: [SmartPredicate]
+        var sort: SmartSort = .name
+    }
     struct Catalog: Codable, Equatable {
         var version: Int = SceneLibraryStore.catalogVersion
         var entries: [Entry] = []
@@ -232,8 +258,10 @@ final class SceneLibraryStore {
         var recent: [String: Date] = [:]
         var collections: [Collection] = []
         var stacks: [UserStack] = []
+        var memory: [String: ItemMemory] = [:]
+        var smartCollections: [SmartCollection] = []
         init() {}
-        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, collections, stacks }
+        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, collections, stacks, memory, smartCollections }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
@@ -243,6 +271,8 @@ final class SceneLibraryStore {
             recent = try values.decode([String: Date].self, forKey: .recent)
             collections = try values.decodeIfPresent([Collection].self, forKey: .collections) ?? []
             stacks = try values.decodeIfPresent([UserStack].self, forKey: .stacks) ?? []
+            memory = try values.decodeIfPresent([String: ItemMemory].self, forKey: .memory) ?? [:]
+            smartCollections = try values.decodeIfPresent([SmartCollection].self, forKey: .smartCollections) ?? []
         }
     }
 
@@ -383,7 +413,7 @@ final class SceneLibraryStore {
         next.sources.removeAll { $0.id == id }
         next.entries.removeAll { $0.sourceID == id }
         next.favorites.subtract(removed)
-        for entryID in removed { next.recent.removeValue(forKey: entryID) }
+        for entryID in removed { next.recent.removeValue(forKey: entryID); next.memory.removeValue(forKey: entryID) }
         for index in next.collections.indices { next.collections[index].sceneIDs.removeAll { removed.contains($0) } }
         Self.pruneStacks(&next.stacks, removing: removed)
         try save(next)
@@ -394,12 +424,28 @@ final class SceneLibraryStore {
         if !next.favorites.insert(id).inserted { next.favorites.remove(id) }
         try save(next)
     }
-    func used(_ id: String) throws {
+    func used(_ id: String, at date: Date = Date()) throws {
         var next = catalog
-        next.recent[id] = Date()
+        next.recent[id] = date
+        if next.entries.contains(where: { $0.id == id }) {
+            var memory = next.memory[id] ?? ItemMemory()
+            memory.playCount = min(1_000_000_000, memory.playCount + 1)
+            next.memory[id] = memory
+        }
         while next.recent.count > 256, let oldest = next.recent.min(by: { $0.value < $1.value })?.key {
             next.recent.removeValue(forKey: oldest)
         }
+        try save(next)
+    }
+    func rate(_ id: String, rating: Int?) throws {
+        guard catalog.entries.contains(where: { $0.id == id }), rating.map({ (1...5).contains($0) }) ?? true else {
+            throw failure("Ratings use one to five stars for an existing Library wallpaper.")
+        }
+        var next = catalog
+        var memory = next.memory[id] ?? ItemMemory()
+        memory.rating = rating
+        if memory.rating == nil && memory.playCount == 0 { next.memory.removeValue(forKey: id) }
+        else { next.memory[id] = memory }
         try save(next)
     }
     func remove(_ id: String) throws {
@@ -407,6 +453,7 @@ final class SceneLibraryStore {
         next.entries.removeAll { $0.id == id }
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
+        next.memory.removeValue(forKey: id)
         for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
         Self.pruneStacks(&next.stacks, removing: [id])
         try save(next)
@@ -449,6 +496,25 @@ final class SceneLibraryStore {
         let destination = index + offset
         guard next.stacks[stack].sceneIDs.indices.contains(destination) else { return }
         next.stacks[stack].sceneIDs.swapAt(index, destination)
+        try save(next)
+    }
+
+    @discardableResult func createSmartCollection(name: String, predicates: [SmartPredicate], sort: SmartSort = .name) throws -> SmartCollection {
+        let collection = SmartCollection(name: name.trimmingCharacters(in: .whitespacesAndNewlines), predicates: predicates, sort: sort)
+        var next = catalog
+        next.smartCollections.append(collection)
+        try save(next)
+        return collection
+    }
+    func updateSmartCollection(_ collection: SmartCollection) throws {
+        var next = catalog
+        guard let index = next.smartCollections.firstIndex(where: { $0.id == collection.id }) else { throw failure("Smart Collection no longer exists.") }
+        next.smartCollections[index] = collection
+        try save(next)
+    }
+    func removeSmartCollection(_ id: String) throws {
+        var next = catalog
+        next.smartCollections.removeAll { $0.id == id }
         try save(next)
     }
     @discardableResult func createCollection(name: String) throws -> Collection {
@@ -601,7 +667,7 @@ final class SceneLibraryStore {
               value.entries.filter({ $0.bookmark != nil }).count <= Self.maxIndividualEntries,
               value.entries.filter({ $0.sourceID != nil }).count <= Self.maxSourceEntries,
               value.sources.count <= Self.maxSources,
-              value.favorites.count <= 256, value.recent.count <= 256,
+              value.favorites.count <= 256, value.recent.count <= 256, value.memory.count <= value.entries.count,
               Set(value.entries.map(\.id)).count == value.entries.count,
               Set(value.sources.map(\.id)).count == value.sources.count
         else { throw failure("The Library index exceeds its limits.") }
@@ -651,11 +717,49 @@ final class SceneLibraryStore {
                 }
             }
         }
+        try validateMemory(value)
+        try validateSmartCollections(value)
         try validateStacks(value)
         try validateCollections(value)
     }
 
 
+
+    private func validateMemory(_ value: Catalog) throws {
+        let ids = Set(value.entries.map(\.id))
+        guard value.memory.allSatisfy({ key, state in
+            ids.contains(key) && state.playCount >= 0 && state.playCount <= 1_000_000_000 && (state.rating.map { (1...5).contains($0) } ?? true)
+        }) else { throw failure("Library ratings and play counts reference invalid wallpapers or values.") }
+    }
+    private func validateSmartCollections(_ value: Catalog) throws {
+        let ordinaryNames = Set(value.collections.map { $0.name.lowercased() })
+        let smartNames = value.smartCollections.map { $0.name.lowercased() }
+        guard value.smartCollections.count <= 32,
+              Set(value.smartCollections.map(\.id)).count == value.smartCollections.count,
+              Set(smartNames).count == smartNames.count,
+              ordinaryNames.isDisjoint(with: Set(smartNames)) else {
+            throw failure("Use at most 32 Smart Collections with names distinct from ordinary collections.")
+        }
+        for collection in value.smartCollections {
+            guard !collection.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  collection.name.utf8.count <= 120, collection.id.utf8.count <= 128,
+                  (1...8).contains(collection.predicates.count),
+                  collection.predicates.allSatisfy(Self.validSmartPredicate) else {
+                throw failure("Smart Collections need 1–8 supported predicates with bounded values.")
+            }
+        }
+    }
+    private static func validSmartPredicate(_ predicate: SmartPredicate) -> Bool {
+        switch predicate {
+        case .favorite: return true
+        case .ratingAtLeast(let value): return (1...5).contains(value)
+        case .playedAtLeast(let value): return (1...1_000_000_000).contains(value)
+        case .unplayed, .duplicate: return true
+        case .mediaType(let value): return !value.isEmpty && value.utf8.count <= 64
+        case .series(let value), .character(let value), .tag(let value), .sourceID(let value):
+            return !value.isEmpty && value.utf8.count <= 512
+        }
+    }
     private func validateStacks(_ value: Catalog) throws {
         let entryIDs = Set(value.entries.map(\.id))
         guard value.stacks.count <= 128,

@@ -147,6 +147,21 @@ if needs_build "build/tests/library-stacks" "${LIBRARY_STACK_SRCS[@]}"; then
   pids+=($!)
 fi
 
+
+# 11. Library memory, Smart Collections, weighted playback and duplicate detection.
+LIBRARY_MEMORY_SRCS=(
+  Sources/Harness/SceneLibraryStore.swift
+  Sources/Harness/SceneLibraryReconciliation.swift
+  Sources/Harness/SceneLibrarySQLiteStore.swift
+  Sources/Harness/SceneLibraryStacks.swift
+  Sources/Harness/SceneLibraryMemory.swift
+  Tests/LibraryMemoryTests.swift
+)
+if needs_build "build/tests/library-memory" "${LIBRARY_MEMORY_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${LIBRARY_MEMORY_SRCS[@]}" -lsqlite3 -o build/tests/library-memory &
+  pids+=($!)
+fi
+
 # Await any parallel background compilations
 for pid in ${pids[@]+"${pids[@]}"}; do
   wait "$pid"
@@ -163,3 +178,4 @@ build/tests/library-reconcile
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/library-stacks
+build/tests/library-memory
