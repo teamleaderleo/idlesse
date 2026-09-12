@@ -162,7 +162,8 @@ struct LibraryReconciliationChecks {
             preconditionFailure("A stale reconciliation review was accepted")
         } catch {}
         precondition(store.catalog == snapshot)
-        precondition(try Data(contentsOf: store.file) == before)
+        let after = try Data(contentsOf: store.file)
+        precondition(after == before)
     }
 
     private static func relinkAndReconcileStaySeparate() throws {
