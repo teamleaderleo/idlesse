@@ -133,6 +133,7 @@ enum SceneLibrarySQLiteCatalog {
                 ) WITHOUT ROWID;
                 CREATE INDEX entries_source_group ON entries(source_id, group_id);
                 CREATE INDEX user_stack_items_entry ON user_stack_items(entry_id, stack_id);
+                UPDATE catalog_meta SET value = '2' WHERE key = 'schema_version';
                 PRAGMA user_version = 2;
                 """)
         }
