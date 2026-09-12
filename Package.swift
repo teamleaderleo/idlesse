@@ -29,8 +29,11 @@ let package = Package(
                 .linkedFramework("IOKit"),
                 .linkedFramework("CoreLocation"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("AppIntents"),
                 .linkedFramework("Photos"),
+                .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("ScreenSaver"),
+                .linkedFramework("ServiceManagement"),
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("Carbon"),
             ]
