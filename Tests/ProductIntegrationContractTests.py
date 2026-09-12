@@ -19,12 +19,16 @@ assert "AmbientSetsHomeController(modes: modes" in home
 assert "ambientStatusButton" in home and "showAmbientStatus" in home
 
 # The permanent display seam owns Arrangement Default updates. Background screen
-# refreshes rebuild UI without being mistaken for a user edit.
+# refreshes rebuild UI without being mistaken for a user edit, and #52's old
+# standalone entry forwards into Home after bootstrap.
 for token in ["var onArrangementChange", "onArrangementChange?()"]:
     assert token in displays, token
 schedule_refresh = displays.split("private func scheduleTopologyRefresh", 1)[1].split("private func rebuild", 1)[0]
 assert "onArrangementChange" not in schedule_refresh
 assert "displays.onArrangementChange = { [weak modes]" in settings
+assert "static var homePresenter: (() -> Void)?" in displays
+assert "DisplayAssignmentController.homePresenter = { [weak home]" in settings
+assert "if let homePresenter = Self.homePresenter" in displays
 
 # Arrangement Default stores #70's mode plus durable per-display assignments.
 for token in ["var mode: DisplayAssignmentMode", "var assignments: [Assignment]", "baseBookmark"]:
@@ -47,7 +51,7 @@ assert "setPlayback(" not in modes
 assert "data.write(to: file, options: .atomic)" in transaction
 
 # Cutover changes Ambient sets + hold together; visible Settings no longer owns
-# automation controls. The historical route goes directly to Ambient Sets.
+# automation controls. Historical automation entry points route into Ambient Sets.
 store = (root / "Sources/Wallpaper/AmbientSetStore.swift").read_text()
 assert "func replaceCatalog" in store
 assert "replaceCatalog(AmbientSetCatalog(sets: sets, manualHold: nil))" in modes
@@ -57,6 +61,15 @@ for stale in ["Schedule dimming", "Follow the sun", "Weather scenes", "Choose ni
     assert stale not in settings_ui, stale
 assert "if requested == 1, let home" in settings
 assert "home.presentAmbientSets()" in settings
+assert 'item.title = "Ambient Sets…"' in settings
+assert "#selector(openAmbientSetsFromMenu(_:))" in settings
+
+# The Library view remains owned by its Library window. Settings receives the old
+# install call only as a bootstrap signal and never reparents Library into a tab.
+install = settings.split("func installLibrary", 1)[1].split("/// Historical callers", 1)[0]
+assert "item.view = view" not in install
+assert "tabs.addTabViewItem" not in install
+assert "library.hostWindow = library.window" in install
 
 # Home Pause follows WallpaperController's animation-aware validator instead of
 # merely checking for any selected URL.
