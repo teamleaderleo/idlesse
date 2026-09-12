@@ -31,6 +31,8 @@ needs_build() {
 
 pids=()
 
+SCENE_GEOMETRY_SRCS=(Sources/Runtime/SceneGeometrySupport.swift)
+
 # 1. Decoder
 DECODER_SRCS=(
   Sources/Shared/ScalingMode.swift
@@ -46,35 +48,38 @@ fi
 
 # 2. Scenes
 SCENES_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
   Sources/Runtime/Scene.swift
   Sources/Runtime/SceneClock.swift
   Tests/SceneTests.swift
 )
 if needs_build "build/tests/scenes" "${SCENES_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${SCENES_SRCS[@]}" -o build/tests/scenes &
+  xcrun swiftc "$OPT_FLAG" "${SCENES_SRCS[@]}" -framework CoreGraphics -o build/tests/scenes &
   pids+=($!)
 fi
 
 # 3. Recovery
 RECOVERY_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
   Sources/Runtime/Scene.swift
   Sources/Harness/SceneDocument.swift
   Tests/RecoveryTests.swift
 )
 if needs_build "build/tests/recovery" "${RECOVERY_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${RECOVERY_SRCS[@]}" -framework AppKit -framework AVFoundation -o build/tests/recovery &
+  xcrun swiftc "$OPT_FLAG" "${RECOVERY_SRCS[@]}" -framework CoreGraphics -framework AppKit -framework AVFoundation -o build/tests/recovery &
   pids+=($!)
 fi
 
 # 4. Audio
 AUDIO_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
   Sources/Runtime/Scene.swift
   Sources/Runtime/SceneClock.swift
   Sources/Runtime/AudioBandAnalyzer.swift
   Tests/AudioTests.swift
 )
 if needs_build "build/tests/audio" "${AUDIO_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${AUDIO_SRCS[@]}" -o build/tests/audio &
+  xcrun swiftc "$OPT_FLAG" "${AUDIO_SRCS[@]}" -framework CoreGraphics -o build/tests/audio &
   pids+=($!)
 fi
 
@@ -125,11 +130,12 @@ fi
 # 9. Named scene variants. Foundation-only coverage for revision-21 persistence,
 # validation, variant application, trigger routing, and legacy upgrade behavior.
 VARIANT_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
   Sources/Runtime/Scene.swift
   Tests/VariantTests.swift
 )
 if needs_build "build/tests/variants" "${VARIANT_SRCS[@]}"; then
-  xcrun swiftc "$OPT_FLAG" "${VARIANT_SRCS[@]}" -o build/tests/variants &
+  xcrun swiftc "$OPT_FLAG" "${VARIANT_SRCS[@]}" -framework CoreGraphics -o build/tests/variants &
   pids+=($!)
 fi
 
@@ -137,6 +143,7 @@ fi
 # This suite stays GPU-free; the app build separately compiles the real Metal renderer into
 # both application extensions.
 QUICKLOOK_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
   Sources/Runtime/Scene.swift
   Sources/Runtime/ScenePreviewPolicy.swift
   Sources/Harness/DocumentOpenRouter.swift
@@ -144,6 +151,18 @@ QUICKLOOK_SRCS=(
 )
 if needs_build "build/tests/quick-look" "${QUICKLOOK_SRCS[@]}"; then
   xcrun swiftc "$OPT_FLAG" "${QUICKLOOK_SRCS[@]}" -framework CoreGraphics -o build/tests/quick-look &
+  pids+=($!)
+fi
+
+# 11. Property-centric Studio motion and Auto-Key rules.
+STUDIO_MOTION_SRCS=(
+  "${SCENE_GEOMETRY_SRCS[@]}"
+  Sources/Runtime/Scene.swift
+  Sources/Harness/StudioMotionAuthoring.swift
+  Tests/StudioMotionTests.swift
+)
+if needs_build "build/tests/studio-motion" "${STUDIO_MOTION_SRCS[@]}"; then
+  xcrun swiftc "$OPT_FLAG" "${STUDIO_MOTION_SRCS[@]}" -framework CoreGraphics -o build/tests/studio-motion &
   pids+=($!)
 fi
 
@@ -163,4 +182,5 @@ build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
 build/tests/quick-look
+build/tests/studio-motion
 python3 Tests/HomeShellContractTests.py
