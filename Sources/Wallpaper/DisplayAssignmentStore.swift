@@ -58,19 +58,27 @@ struct DisplayAssignmentStore {
         defaults.removeObject(forKey: aliasKey(persistentID))
     }
 
-    /// Link the session's ColorSync/CG identifier to the richer hardware
-    /// identity. This migrates direct-CG and #52 UUID persistence in place and
-    /// also restores an assignment when macOS gives the same monitor a new live
-    /// identifier after dock/reconnect.
+    /// Link the current #52 session identifier to canonical display identity.
+    /// `previousIdentityKey` is supplied only after the persisted identity
+    /// registry produced a unique reconnect match; ambiguous monitors therefore
+    /// cannot borrow each other's bookmark.
     @discardableResult
-    func reconcile(identityKey durableIdentity: String, persistentID: String,
+    func reconcile(identityKey durableIdentity: String,
+                   previousIdentityKey: String? = nil,
+                   persistentID: String,
                    legacyDisplayID: UInt32) -> Data? {
         let durableKey = identityKey(durableIdentity)
+        let previousKey = previousIdentityKey.flatMap { previous in
+            previous == durableIdentity ? nil : identityKey(previous)
+        }
         let sessionKey = stableKey(persistentID)
         let oldKey = legacyKey(legacyDisplayID)
-        let data = defaults.data(forKey: durableKey)
-            ?? defaults.data(forKey: sessionKey)
-            ?? defaults.data(forKey: oldKey)
+
+        var data = defaults.data(forKey: durableKey)
+        if data == nil, let previousKey { data = defaults.data(forKey: previousKey) }
+        if data == nil { data = defaults.data(forKey: sessionKey) }
+        if data == nil { data = defaults.data(forKey: oldKey) }
+
         guard let data else {
             defaults.set(durableIdentity, forKey: aliasKey(persistentID))
             return nil
