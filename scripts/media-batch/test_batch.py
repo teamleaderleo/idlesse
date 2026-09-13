@@ -5,6 +5,8 @@ spec = importlib.util.spec_from_file_location('batch', pathlib.Path(__file__).wi
 batch = importlib.util.module_from_spec(spec); spec.loader.exec_module(batch)
 spec = importlib.util.spec_from_file_location('verify', pathlib.Path(__file__).with_name('verify.py'))
 verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
+spec = importlib.util.spec_from_file_location('ingest', pathlib.Path(__file__).with_name('ingest.py'))
+ingest = importlib.util.module_from_spec(spec); spec.loader.exec_module(ingest)
 
 class AtlasTests(unittest.TestCase):
     def test_scale_pixel_coordinates_preserves_rotation_and_names(self):
@@ -77,5 +79,37 @@ class EdgeBarTests(unittest.TestCase):
     def test_encoded_void_colour_still_matches(self):
         edges = verify.bars(self.frame((120, 60, 400, 230), matte=(25, 32, 43)))
         self.assertEqual(edges, {'top': 60, 'bottom': 58, 'left': 120, 'right': 112})
+
+class CropCameraTests(unittest.TestCase):
+    def mapped(self, camera, p):
+        # render.js: a stage point at frame fraction p lands at 0.5 + (p - c) * zoom.
+        zoom, cx, cy = camera
+        return 0.5 + (p[0] - cx) * zoom, 0.5 + (p[1] - cy) * zoom
+    def test_crop_box_fills_the_new_frame(self):
+        base = [1.3, 0.45, 0.55]
+        box = [0.2, 0.1, 0.5, 0.5]
+        camera = ingest.crop_to_camera(base, box)
+        # The box's corners, as stage points under the base camera...
+        def stage(q): return (base[1] + (q[0] - 0.5) / base[0], base[2] + (q[1] - 0.5) / base[0])
+        top_left = self.mapped(camera, stage((0.2, 0.1)))
+        bottom_right = self.mapped(camera, stage((0.7, 0.6)))
+        # ...land on the new frame's edges.
+        for got, want in zip(top_left + bottom_right, (0, 0, 1, 1)):
+            self.assertAlmostEqual(got, want, places=3)
+    def test_whole_frame_is_the_same_camera(self):
+        self.assertEqual(ingest.crop_to_camera([2.0, 0.4, 0.6], [0, 0, 1, 1]), [2.0, 0.4, 0.6])
+        self.assertEqual(ingest.crop_to_camera(None, [0, 0, 1, 1]), [1.0, 0.5, 0.5])
+    def test_box_that_is_not_16_9_is_shown_whole(self):
+        zoom, _, _ = ingest.crop_to_camera(None, [0.25, 0, 0.5, 1])
+        self.assertEqual(zoom, 1.0)
+    def test_rejects_a_box_outside_the_frame(self):
+        with self.assertRaises(SystemExit):
+            ingest.crop_to_camera(None, [0.8, 0, 0.5, 1])
+    def test_recipe_for_one_animation_leaves_the_others(self):
+        cams = {'A_home': [1.2, 0.5, 0.5]}
+        result = ingest.with_recipe(cams, 'A_home', 'Idle_02', [2, 0.4, 0.4])
+        self.assertEqual(result['A_home'], {'default': [1.2, 0.5, 0.5], 'Idle_02': [2, 0.4, 0.4]})
+        self.assertEqual(ingest.recipe_for(result, 'A_home', 'Idle_01'), [1.2, 0.5, 0.5])
+        self.assertEqual(cams, {'A_home': [1.2, 0.5, 0.5]}, 'input is not mutated')
 
 if __name__ == '__main__': unittest.main()

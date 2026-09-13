@@ -43,6 +43,8 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
     private let resetButton = NSButton(title: "Reset", target: nil, action: nil)
+    private let rerenderButton = NSButton(title: "Re-render Camera…", target: nil, action: nil)
+    private var rerender: Process?
     private let tone = ToneBox()
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
@@ -135,7 +137,12 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         saveButton.keyEquivalent = "\r"
         resetButton.toolTip = "Remove the crop, focus and adjustments"
         revertButton.toolTip = "Go back to the last saved framing"
-        let buttons = NSStackView(views: [resetButton, revertButton, NSView(), saveButton])
+        rerenderButton.target = self
+        rerenderButton.action = #selector(rerenderCamera)
+        rerenderButton.bezelStyle = .rounded
+        rerenderButton.toolTip = "Render the video again with the crop box as its camera, for full sharpness"
+        rerenderButton.isHidden = Pipeline.current(for: media) == nil
+        let buttons = NSStackView(views: [resetButton, revertButton, NSView(), rerenderButton, saveButton])
         buttons.spacing = 10
 
         let controls = NSStackView(views: [hint, softenRow, summary, buttons])
@@ -169,6 +176,122 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     }
 
     // MARK: Media
+
+    // MARK: Re-render
+
+    /// The export pipeline, when this Mac has one and the file came out of it.
+    /// `ingest.py` records its own paths in the app's defaults each time it runs.
+    struct Pipeline {
+        let interpreter: URL
+        let script: URL
+        let workspace: URL
+        static func current(for media: URL) -> Pipeline? {
+            let defaults = UserDefaults.standard
+            guard let interpreter = defaults.string(forKey: "IdlessePipelineInterpreter"),
+                  let script = defaults.string(forKey: "IdlessePipelineScript"),
+                  let workspace = defaults.string(forKey: "IdlessePipelineWorkspace"),
+                  FileManager.default.isExecutableFile(atPath: interpreter),
+                  FileManager.default.fileExists(atPath: script) else { return nil }
+            let receipt = media.deletingPathExtension().appendingPathExtension("source.json")
+            guard let data = try? Data(contentsOf: receipt),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["asset"] is String, object["animation"] is String else { return nil }
+            return Pipeline(interpreter: URL(fileURLWithPath: interpreter), script: URL(fileURLWithPath: script),
+                            workspace: URL(fileURLWithPath: workspace))
+        }
+    }
+
+    @objc private func rerenderCamera() {
+        if let rerender {
+            rerender.terminate()
+            return
+        }
+        guard let pipeline = Pipeline.current(for: media), let window else { return }
+        guard !(framing.bleed?.clamped.isEmpty ?? true) else {
+            summary.stringValue = "Draw a crop box first; the re-render makes that box the whole frame."
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Re-render with this crop as the camera?"
+        alert.informativeText = "The video is rendered again on this Mac from its upscaled textures, so the crop keeps full detail. The current file is archived first, and the crop box and focus are cleared afterwards because the new video is already cropped. Adjustments are kept.\n\nIf this scene was never upscaled, nothing is rendered or billed; the pipeline stops and says so."
+        alert.addButton(withTitle: "Re-render")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            if self.saveButton.isEnabled { self.save() }
+            guard !self.saveButton.isEnabled else { return }
+            self.startRerender(pipeline)
+        }
+    }
+
+    private func startRerender(_ pipeline: Pipeline) {
+        let process = Process()
+        process.executableURL = pipeline.interpreter
+        process.arguments = [pipeline.script.path, "--reframe", media.path, "--from-sidecar", "--workspace", pipeline.workspace.path]
+        process.currentDirectoryURL = pipeline.workspace
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let output = OutputBuffer()
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let line = output.append(data)
+            DispatchQueue.main.async { if let line { self?.summary.stringValue = line } }
+        }
+        process.terminationHandler = { [weak self] finished in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async { self?.finishRerender(finished, output: output.text) }
+        }
+        do {
+            try process.run()
+        } catch {
+            summary.stringValue = "Couldn’t start the pipeline: " + error.localizedDescription
+            return
+        }
+        rerender = process
+        rerenderButton.title = "Stop Re-render"
+        for control in [saveButton, revertButton, resetButton] { control.isEnabled = false }
+        canvas.isEditable = false
+        adjustments.forEach { $0.slider.isEnabled = false }
+        summary.stringValue = "Rendering a preview…"
+    }
+
+    private func finishRerender(_ process: Process, output: String) {
+        rerender = nil
+        rerenderButton.title = "Re-render Camera…"
+        canvas.isEditable = true
+        adjustments.forEach { $0.slider.isEnabled = true }
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            framingChanged()
+            let alert = NSAlert()
+            alert.messageText = process.terminationReason == .uncaughtSignal ? "Re-render stopped" : "Re-render didn’t finish"
+            alert.informativeText = output.split(separator: "\n").suffix(12).joined(separator: "\n")
+            if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+            return
+        }
+        // The pipeline replaced the file in place and cleared the crop it used.
+        saved = (try? SceneFraming.beside(media)) ?? nil ?? SceneFraming()
+        framing = saved
+        onSaved(media)
+        looper?.disableLooping(); looper = nil; player?.pause(); player = nil
+        canvas.setContent(size: nil)
+        load()
+        summary.stringValue = "Re-rendered. " + (output.split(separator: "\n").last(where: { $0.hasPrefix("Installed") }).map(String.init) ?? "")
+    }
+
+    /// Collects pipeline output from the reading thread; hands back the latest whole line.
+    private final class OutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
+        func append(_ chunk: Data) -> String? {
+            lock.lock(); defer { lock.unlock() }
+            data.append(chunk)
+            if data.count > 256_000 { data.removeFirst(data.count - 256_000) }
+            return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init)
+        }
+    }
 
     private func load() {
         canvas.displays = MediaFramingCanvas.connectedDisplays()
@@ -277,6 +400,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
 
     private func updateButtons() {
         let dirty = normalized(framing) != normalized(saved)
+        guard rerender == nil else { return }
         saveButton.isEnabled = dirty
         revertButton.isEnabled = dirty
         resetButton.isEnabled = normalized(framing) != normalized(SceneFraming())
@@ -339,6 +463,11 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if rerender != nil {
+            summary.stringValue = "Stop the re-render before closing."
+            NSSound.beep()
+            return false
+        }
         guard saveButton.isEnabled else { return true }
         let alert = NSAlert()
         alert.messageText = "Save the framing changes?"
@@ -354,6 +483,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        rerender?.terminate()
         loadTask?.cancel()
         player?.pause()
         looper?.disableLooping()
@@ -461,6 +591,8 @@ final class MediaFramingCanvas: NSView {
     var focus = SceneFocus.centre { didSet { overlay.needsDisplay = true } }
     var bleed = SceneBleed() { didSet { overlay.needsDisplay = true } }
     private(set) var contentSize: CGSize?
+    /// Off while a re-render uses the saved crop, so the box cannot drift from it.
+    var isEditable = true
     /// Focus, bleed, and the framing before the gesture when one just finished.
     var onChange: ((SceneFocus, SceneBleed, SceneFraming?) -> Void)?
 
@@ -665,7 +797,7 @@ final class MediaFramingCanvas: NSView {
         }
 
         override func mouseDown(with event: NSEvent) {
-            guard let canvas else { return }
+            guard let canvas, canvas.isEditable else { return }
             let p = convert(event.locationInWindow, from: nil)
             startFraming = SceneFraming(focus: canvas.focus, bleed: canvas.bleed)
             if event.clickCount == 2, canvas.contentRect.contains(p) {

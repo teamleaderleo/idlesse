@@ -157,6 +157,44 @@ Tests: `python3 scripts/media-batch/test_batch.py`.
 
 After exports, run `verify.py --root build/ba-export-study` using the study venv (Pillow). It creates first/middle/last strips and loop-boundary diagnostics for review. Then `archive.py --root build/ba-export-study --drive "<existing Drive sync root>/Idlesse"` copies and hashes videos, provenance, posters and one source/restoration archive. It does not claim cloud sync or delete playback files.
 
+## Importing one lobby
+
+`ingest.py` takes one scene from source to installed wallpaper:
+
+```sh
+python3 scripts/media-batch/ingest.py hanako_home                  # already in assets-pc
+python3 scripts/media-batch/ingest.py ~/Downloads/lobby.zip --title Someone
+python3 scripts/media-batch/ingest.py --fetch ch0400_home --title Someone   # BA-AD download
+python3 scripts/media-batch/ingest.py hanako_home --crop 0.1 0 0.8 0.8 --preview
+```
+
+It renders a free preview from the original textures and measures matte across
+the loop before anything else; `--preview` stops there, and matte stops the run
+unless `--allow-matte`. `--crop X Y W H` is a unit box of the current frame to
+keep, and becomes the camera. Upscaling is the only paid step: it runs only for
+a lobby never upscaled before, is quoted from the timings of past runs and
+Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds
+the worst case), and needs a yes or `--yes`. Everything else is local.
+
+### Re-rendering a crop
+
+A crop drawn in **Adjust Framing…** is a display-side zoom, so it enlarges the
+video. To keep full detail, render the crop as the camera instead:
+
+```sh
+python3 scripts/media-batch/ingest.py --reframe ".../<Title>-Restored-4K60.mp4" --from-sidecar
+```
+
+or press **Re-render Camera…** in the editor, which runs exactly that. It reads
+the camera the export was made with from its `.source.json`, composes the crop on
+top, exports locally from the existing upscaled textures, archives the old file
+in `superseded-<date>/`, copies over it in place, and removes the crop box and
+focus from the sidecar while keeping adjustments. The app never passes `--yes`,
+so a scene that still needs upscaling stops at the quote. The button appears
+once `ingest.py` has run on this Mac, because each run records its location in
+the app's defaults. New cameras are written to both the workspace and the
+tracked `cameras.json`; commit the latter to keep them.
+
 ## One-command pipeline
 
 `pipeline.py` chains restoration/export, diagnostic previews and Drive copying, stopping on failures. Completed video checkpoints are reused. Example:
