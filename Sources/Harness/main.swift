@@ -474,6 +474,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
 let app = NSApplication.shared
 
+if CommandLine.arguments.contains("--smoke-selection-transactions") {
+    do { try WallpaperController.smokeSelectionTransactions(); exit(EXIT_SUCCESS) }
+    catch { fputs("Selection transaction checks failed: \(error)\n", stderr); exit(EXIT_FAILURE) }
+}
+
 if CommandLine.arguments.contains("--smoke-home") {
     do {
         try HomeWindowController.smokeTest()

@@ -383,6 +383,58 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
+    static func smokeSelectionTransactions() throws {
+        final class ControlledSource: SceneSource {
+            var blocked = false
+            var entered = false
+            func resolve(_ url: URL) async throws -> SceneDescriptor {
+                if url.lastPathComponent == "slow" {
+                    entered = true
+                    // Deliberately ignore cancellation: stale providers must not win.
+                    while blocked { await Task.yield(); try? await Task.sleep(nanoseconds: 5_000_000) }
+                }
+                if url.lastPathComponent == "bad" { throw SceneError.invalid("Expected load failure") }
+                return SceneDescriptor(title: url.lastPathComponent, nodes: [SceneNode(content: .gradient)])
+            }
+        }
+        let source = ControlledSource()
+        let host = WallpaperController()
+        host.source = source
+        host.presentsWindows = false
+        var errors = [String]()
+        host.onError = { errors.append($0) }
+        defer { host.shutdown() }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition() && Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+            precondition(condition(), "Selection transaction timed out")
+        }
+        let first = URL(fileURLWithPath: "/transaction/first")
+        let latest = URL(fileURLWithPath: "/transaction/latest")
+        host.select(first); wait { !host.isLoading }
+        precondition(host.selectedURL == first)
+        let original = host.surfaces.first
+        source.blocked = true
+        host.select(URL(fileURLWithPath: "/transaction/slow"))
+        wait { source.entered }
+        precondition(host.selectedURL == first && host.surfaces.first === original,
+                     "Loading must retain the active surface")
+        host.select(latest); wait { !host.isLoading }
+        source.blocked = false
+        // Let the stale provider return after the newer selection has committed.
+        let drainUntil = Date().addingTimeInterval(0.1)
+        while Date() < drainUntil { _ = RunLoop.current.run(mode: .default, before: drainUntil) }
+        precondition(host.selectedURL == latest && errors.isEmpty, "Late cancelled loads must not replace playback or report errors")
+        let working = host.surfaces.first
+        host.select(URL(fileURLWithPath: "/transaction/bad")); wait { !host.isLoading }
+        precondition(host.selectedURL == latest && host.surfaces.first === working,
+                     "Failed loads must retain the active surface")
+        precondition(errors.count == 1, "Only the current failed load should report an error")
+        print("Selection transactions passed: retain active surface, latest wins, late cancellation, failed load")
+    }
+
     static func smokeResume(url: URL) throws {
         let suite = "Idlesse.ResumeTest." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
@@ -507,7 +559,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var lastReloadError: String?
     private(set) var revision = 0
     var sceneTime: TimeInterval { clock.time }
-    private let source: SceneSource = LocalSceneSource()
+    private var source: SceneSource = LocalSceneSource()
     private var scopeStarted = false
     private var retiring: [WallpaperSurface] = []
     private var retiringURL: URL?
@@ -767,6 +819,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         if adopted { self?.stop(); self?.showError(message) }
                         else { preparationError = message }
                     })
+                let preparedGeneration = self.surfaceGeneration
                 defer {
                     if !adopted { replacement.forEach { $0.close() }; newHub?.close() }
                 }
@@ -777,14 +830,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     let deadline = ProcessInfo.processInfo.systemUptime + 10
                     while !replacement.allSatisfy({ $0.isReadyForDisplay }) {
                         try Task.checkCancellation()
-                        guard request == self.generation, !self.suspended else { throw CancellationError() }
+                        guard request == self.generation, preparedGeneration == self.surfaceGeneration, !self.suspended else { throw CancellationError() }
                         if let preparationError { throw SceneError.invalid(preparationError) }
                         guard ProcessInfo.processInfo.systemUptime < deadline else { throw WallpaperError.preparationTimeout }
                         try await Task.sleep(nanoseconds: 30_000_000)
                         replacement.forEach { $0.refreshPreparation() }
                     }
                     try Task.checkCancellation()
-                    guard request == self.generation, !self.suspended else { throw CancellationError() }
+                    guard request == self.generation, preparedGeneration == self.surfaceGeneration, !self.suspended else { throw CancellationError() }
                     if let preparationError { throw SceneError.invalid(preparationError) }
                 }
                 let fade = !reloading && self.presentsWindows && !self.suspended && !self.shouldPause &&
@@ -845,6 +898,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
+                if error is CancellationError {
+                    if let previousURL = self.selectedURL, let previousScene = self.playable {
+                        self.watch(url: previousURL, scene: previousScene)
+                    }
+                    return
+                }
                 if reloading {
                     self.lastReloadError = error.localizedDescription
                     self.updateMenu()

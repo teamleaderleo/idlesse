@@ -65,3 +65,7 @@ Replacement selection now waits for render readiness before retiring the active 
 This preparation temporarily retains both scenes and their resources. The deadline bounds loading time, not peak memory. Further qualification should cover rapid replacement, decoder failure, and suspension during preparation.
 
 The rebuilt app restored Hina, then completed Library selection Hina → Tiger → Hina. The final Library state reports Hina on desktop with playback running. This verifies ordinary real-media handoff completion; it is not a frame-by-frame latency measurement.
+
+`--smoke-selection-transactions` now exercises the real selection controller with a deliberately delayed source that ignores cancellation. It verifies active surface identity is retained during loading, the newer request wins even when the old provider returns late, and a failed load retains the selected scene and surface while reporting exactly one error. It runs without presenting test wallpaper windows or persisting selection. This does not yet qualify decoder failure after render preparation begins.
+
+Preparation also checks the surface generation, so display rebuilds invalidate pending candidates. Lifecycle cancellation restores the active package watcher and exits without an error dialog. Home shows a compact Loading indicator beside the current display status while preparation runs.
