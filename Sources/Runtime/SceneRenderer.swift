@@ -189,6 +189,19 @@ private final class VideoWallpaperView: NSView {
 /// Anything single-frame (or undecodable) throws and the caller falls back to
 /// StaticImageRenderer. Metal scenes show the first frame; animation lives in
 /// the Standard compositor.
+extension ImageCanvasView {
+    func setSceneFraming(focus: SceneFocus?, bleed: SceneBleed?) {
+        fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
+        if focus != nil || bleed?.isEmpty == false {
+            fillFrame = { content, bounds in
+                (focus ?? .centre).filledFrame(content: content, in: bounds, bleed: bleed)
+            }
+        } else {
+            fillFrame = nil
+        }
+    }
+}
+
 final class AnimatedImageRenderer: SceneRenderer {
     let view: NSView
     private let canvas = ImageCanvasView()
@@ -206,7 +219,7 @@ final class AnimatedImageRenderer: SceneRenderer {
             loopCount: loops, frameCount: frames)
     }
 
-    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil) throws {
+    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 1 else {
             throw SceneError.invalid("Not an animated image.")
@@ -221,7 +234,7 @@ final class AnimatedImageRenderer: SceneRenderer {
         self.count = count
         self.delays = delays
         view = canvas
-        canvas.fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
+        canvas.setSceneFraming(focus: focus, bleed: bleed)
         canvas.frame = bounds
         canvas.scalingMode = .fill
         canvas.backdropColor = .clear
@@ -293,7 +306,7 @@ final class StaticImageRenderer: SceneRenderer {
         }
         let canvas = ImageCanvasView(frame: bounds)
         canvas.scalingMode = .fill
-        canvas.fillFocus = playable.focus.map { CGPoint(x: $0.x, y: $0.y) }
+        canvas.setSceneFraming(focus: playable.focus, bleed: playable.bleed)
         canvas.currentImage = image
         view = canvas
     }
@@ -634,10 +647,10 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds, focus: playable.focus) {
+                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed) {
                         child = animated
                     } else {
-                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, nodes: [node], focus: playable.focus), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
+                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, nodes: [node], focus: playable.focus, bleed: playable.bleed), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed, onError: onError)
@@ -685,9 +698,9 @@ final class LayeredSceneRenderer: SceneRenderer {
         let bounds = view.bounds
         for (index, node) in nodes.enumerated() {
             if let canvas = children[index].view as? ImageCanvasView {
-                canvas.fillFocus = scene.focus.map { CGPoint(x: $0.x, y: $0.y) }
+                canvas.setSceneFraming(focus: scene.focus, bleed: scene.bleed)
             }
-            if let video = children[index].view as? VideoWallpaperView { video.focus = scene.focus }
+            if let video = children[index].view as? VideoWallpaperView { video.focus = scene.focus; video.bleed = scene.bleed }
             children[index].view.alphaValue = node.visible ? node.opacity : 0
             let t = node.transform
             var matrix = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,

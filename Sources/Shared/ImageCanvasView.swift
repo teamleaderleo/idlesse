@@ -2,6 +2,8 @@ import AppKit
 
 final class ImageCanvasView: NSView {
     /// Unit coordinates measured from the top-left; only used for aspect fill.
+    // Runtime hosts can provide shared crop geometry without coupling the saver to Scene types.
+    var fillFrame: ((CGSize, CGRect) -> CGRect)? { didSet { needsDisplay = true } }
     var fillFocus: CGPoint? { didSet { needsDisplay = true } }
     var currentImage: NSImage? {
         didSet { needsDisplay = true }
@@ -70,6 +72,8 @@ final class ImageCanvasView: NSView {
     func destinationRect(for image: NSImage) -> NSRect {
         let source = image.size
         guard source.width > 0, source.height > 0 else { return .zero }
+
+        if scalingMode == .fill, let fillFrame { return fillFrame(source, bounds) }
 
         let scale: CGFloat
         switch scalingMode {
