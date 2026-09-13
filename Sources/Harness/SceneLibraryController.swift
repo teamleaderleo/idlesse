@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 import ImageIO
+import CoreImage
 
 /// Native reference library with one on-demand poster, never a grid of live renderers.
 final class SceneLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
@@ -751,7 +752,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let self else { return }
             let source = opened.url
             let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+            let framingData = Self.thumbnailFramingData(source)
+            let framing = framingData.flatMap { try? JSONDecoder().decode(SceneFraming.self, from: $0) }
+            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)|\(framingData?.base64EncodedString() ?? "")" as NSString
             if let image = self.thumbnails.object(forKey: key) {
                 finish(image)
                 return
@@ -775,11 +778,44 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
             } else { image = nil }
             guard let image else { finish(nil); return }
-            let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-            self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
+            let rendered = Self.framedThumbnail(image, framing: framing,
+                video: ["mp4", "mov", "m4v"].contains(source.pathExtension.lowercased())) ?? image
+            let result = NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height))
+            self.thumbnails.setObject(result, forKey: key, cost: Int(rendered.width * rendered.height * 4))
             finish(result)
         }
     }
+    private static let thumbnailColorContext = CIContext(options: [.cacheIntermediates: false])
+
+    private static func thumbnailFramingData(_ media: URL) -> Data? {
+        guard media.pathExtension.lowercased() != "idlesse",
+              let handle = try? FileHandle(forReadingFrom: SceneFraming.url(for: media)) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 4097), data.count <= 4096 else { return nil }
+        return data
+    }
+
+    /// Work on the bounded poster, never a second live renderer or full video decode.
+    /// Gallery cards use a 16:9 viewport; each actual display can crop differently.
+    private static func framedThumbnail(_ original: CGImage, framing: SceneFraming?, video: Bool) -> CGImage? {
+        guard let framing else { return original }
+        var image = original
+        if video, let tone = framing.tone, !tone.isNeutral {
+            let source = CIImage(cgImage: image)
+            image = thumbnailColorContext.createCGImage(tone.apply(to: source), from: source.extent) ?? image
+        }
+        guard framing.focus != nil || framing.bleed?.isEmpty == false else { return image }
+        guard let context = CGContext(data: nil, width: 320, height: 180, bitsPerComponent: 8,
+            bytesPerRow: 1280, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let frame = (framing.focus ?? .centre).filledFrame(
+            content: CGSize(width: image.width, height: image.height), in: bounds, bleed: framing.bleed)
+        context.interpolationQuality = .high
+        context.draw(image, in: frame)
+        return context.makeImage()
+    }
+
     private static func listThumbnail(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -1587,6 +1623,26 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         try FileManager.default.removeItem(at: SceneFraming.url(for: raw))
         let resetCropRevision = try PosterRevision.read(raw)
         precondition(resetCropRevision == newRevision, "Resetting framing must invalidate the cropped poster")
+        let pixels = CGContext(data: nil, width: 320, height: 180, bitsPerComponent: 8,
+            bytesPerRow: 1280, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        pixels.setFillColor(CGColor(red: 0.5, green: 0, blue: 0, alpha: 1))
+        pixels.fill(CGRect(x: 0, y: 0, width: 160, height: 180))
+        pixels.setFillColor(CGColor(red: 0, green: 0.5, blue: 0, alpha: 1))
+        pixels.fill(CGRect(x: 160, y: 0, width: 160, height: 180))
+        let original = pixels.makeImage()!
+        let cropped = framedThumbnail(original, framing: SceneFraming(bleed: SceneBleed(left: 0.4)), video: false)!
+        let cropBytes = Array((cropped.dataProvider!.data!) as Data)
+        let originalBytes = Array((original.dataProvider!.data!) as Data)
+        let sample = (90 * 320 + 120) * 4
+        precondition(originalBytes[sample] > originalBytes[sample + 1])
+        precondition(cropBytes[sample + 1] > cropBytes[sample], "Gallery crop must hide the declared left margin")
+        let darker = framedThumbnail(original, framing: SceneFraming(tone: SceneTone(exposure: -1)), video: true)!
+        let darkBytes = Array((darker.dataProvider!.data!) as Data)
+        precondition(darker.width == 320 && darker.height == 180)
+        precondition(darkBytes != originalBytes, "Video tone must change the bounded poster")
+        let untouched = framedThumbnail(original, framing: SceneFraming(tone: SceneTone(exposure: -1)), video: false)!
+        precondition(untouched === original, "Image thumbnails must match the video-only tone policy")
         var copied = false
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
