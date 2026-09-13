@@ -5,20 +5,13 @@ let root=URL(fileURLWithPath:FileManager.default.currentDirectoryPath)
 let outputArgument=args.count>1 ? args[1] : "frames"
 let output=outputArgument.hasPrefix("/") ? URL(fileURLWithPath:outputArgument) : root.appendingPathComponent(outputArgument)
 let video=output.pathExtension == "mp4"
-let highPrecision=ProcessInfo.processInfo.environment["IDLESSE_FRAME_ENCODER"] == "x265"
 try FileManager.default.createDirectory(at:video ? output.deletingLastPathComponent() : output,withIntermediateDirectories:true)
 var encoder:Process?
 var encoderPipe:Pipe?
 if video {
  let p=Process(), pipe=Pipe()
  p.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/ffmpeg")
- // x265 at 10 bits keeps soft gradients -- a window glow under a dark tint --
- // smooth where the hardware encoder cuts them into contour bands and blocks.
- // It is several times slower, so it is chosen per run rather than assumed.
- let input=["-hide_banner","-loglevel","error","-y","-f","image2pipe","-framerate","60","-i","pipe:0","-an"]
- let hardware=["-c:v","hevc_videotoolbox","-b:v","40M","-pix_fmt","yuv420p","-color_range","tv","-colorspace","smpte170m"]
- let x265=["-vf","scale=out_color_matrix=bt709:out_range=full,format=yuv420p10le","-c:v","libx265","-preset","fast","-b:v","40M","-maxrate","60M","-bufsize","80M","-x265-params","log-level=error:aq-mode=3","-color_range","pc","-colorspace","bt709"]
- p.arguments=input+(highPrecision ? x265 : hardware)+["-color_primaries","bt709","-color_trc","iec61966-2-1","-tag:v","hvc1","-movflags","+faststart+write_colr",output.path]
+ p.arguments=["-hide_banner","-loglevel","error","-y","-f","image2pipe","-framerate","60","-i","pipe:0","-an","-c:v","hevc_videotoolbox","-b:v","40M","-pix_fmt","yuv420p","-color_range","tv","-colorspace","smpte170m","-color_primaries","bt709","-color_trc","iec61966-2-1","-tag:v","hvc1","-movflags","+faststart+write_colr",output.path]
  p.standardInput=pipe
  try p.run();encoder=p;encoderPipe=pipe
 }
@@ -48,8 +41,7 @@ class Driver:NSObject,WKNavigationDelegate {
    try? encoderPipe?.fileHandleForWriting.close();encoder?.waitUntilExit()
    print("Completed \(index) frames");exit(encoder?.terminationStatus ?? 0)
   }
-  // JPEG frames are quick for the hardware encoder; x265 gets lossless PNG so its precision is real.
-  webView.evaluateJavaScript("window.frame(\(startTime+Double(index)/60),\(video && !highPrecision))"){value,error in
+  webView.evaluateJavaScript("window.frame(\(startTime+Double(index)/60),\(video))"){value,error in
    guard error == nil,let text=value as? String,let data=Data(base64Encoded:text) else {fputs("Frame error \(String(describing:error))\n",stderr);exit(2)}
    do {
     if video {try encoderPipe!.fileHandleForWriting.write(contentsOf:data)}
@@ -69,5 +61,5 @@ let window=NSWindow(contentRect:view.frame,styleMask:.borderless,backing:.buffer
 window.contentView=view
 view.navigationDelegate=driver
 view.load(URLRequest(url:URL(string:"http://127.0.0.1:\(renderPort)/index.html")!))
-DispatchQueue.main.asyncAfter(deadline:.now()+(highPrecision ? 3600 : 600)){fputs("Export timeout\n",stderr);exit(4)}
+DispatchQueue.main.asyncAfter(deadline:.now()+600){fputs("Export timeout\n",stderr);exit(4)}
 app.run()

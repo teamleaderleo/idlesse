@@ -38,16 +38,23 @@ The default encoder captures the WebGL canvas directly through WebCodecs and mux
 
 The native host stops after 120 seconds without progress or 30 minutes total. Jobs sharing a workspace serialize encoding through `.media-encoder.lock`. `run.py --encoder frames` selects the older JPEG/FFmpeg path; `--frame-asset ID` selects it for a specific asset. The runner attempts that local fallback once after a WebCodecs failure, without repeating GPU restoration. Full VideoToolbox decode checks dimensions, cadence and every frame before publication.
 
-`run.py --encoder x265` renders lossless PNG frames and encodes 10-bit HEVC with
-libx265, in full range with BT.709. It takes about one second per 4K frame on an
-M-series Mac, so an 8-second loop takes eight minutes. The run prints its frame
-count as it goes. `ingest.py` uses it by default; `--fast-encode` goes back to
-WebCodecs. The difference shows in soft gradients under translucent layers, such
-as Hina's window glow. Both hardware routes, 8-bit and Main10, cut those gradients
-into contour bands and blocks at 40 Mbit/s. x265 keeps them close to the lossless
-render at a lower bitrate, and even 8-bit x265 beats the hardware Main10 encode. A
-half-float render with dithering was also tried. It added little once encoded,
-and it changed additive highlights, so the renderer still blends in 8 bits.
+`run.py --encoder x265` encodes 10-bit HEVC with libx265, in full range with BT.709.
+`encode_x265.py` loads the page through the same `encode` host. The page reads
+each frame's raw pixels and POSTs them to a loopback receiver, which feeds FFmpeg
+directly, so frames are never PNG-compressed or base64-encoded. It returns
+per-stage timings as `stageSeconds`. Drawing and readback take about 70 ms per 4K
+frame, so x265 sets the pace: about 2–3.5 frames per second with its lookahead
+spread over several threads (the default single lookahead thread halves that).
+`ingest.py` uses x265 by default; `--fast-encode` goes back to WebCodecs.
+`IDLESSE_X265_JOBS` lets several exports share a workspace. Each x265 needs about
+2 GB, and on a Mac already deep in swap, two at once stalled completely, so
+batches here run one lobby at a time.
+
+The difference shows in soft gradients under translucent layers, such as Hina's
+window glow. Both hardware routes, 8-bit and Main10, cut those gradients into
+contour bands and blocks at 40 Mbit/s. x265 keeps them close to the lossless
+render at a lower bitrate. A half-float render with dithering added little once
+encoded and changed additive highlights, so the renderer still blends in 8 bits.
 
 Camera recipes live in `cameras.json`, as `[zoom, cx, cy]` under the skeleton stem. A recipe is framed against bounds read from the *posed* skeleton, so it is only valid for the animation it was tuned on: reusing one across animations drops the model out of frame behind black bars. Where a stem needs more than one, give it an object instead of an array, mapping animation names to recipes with `default` covering the rest:
 
