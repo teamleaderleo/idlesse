@@ -14,8 +14,24 @@ transition defaults in Settings. The legacy screen-saver preview remains an inte
 utility rather than a normal wallpaper navigation destination.
 
 Follow-up work in #107/#108: move browser actions into the native window toolbar,
-separate task progress from item details, and add richer selected/current metadata.
-The present inspector displays the existing poster; it does not run an animated preview.
+and add richer selected/current metadata.
+
+The inspector's Play Preview button creates one local, muted Metal renderer at a requested
+30 fps. It uses the selected scene (including composition), never the desktop selection
+callback. Pointer and system-audio inputs stay off. Stop, selection changes, hiding the
+inspector, leaving Library, closing/minimizing the window, or losing window focus release
+the renderer and its security-scoped access. Pending resolution is canceled and guarded
+against late installation. Preview is explicit, not hover-triggered.
+
+The apply button reports On Desktop for the currently playing URL. Imports, conversions,
+Source scans, and collection-operation messages use a separate dismissible status row;
+poster details and item-specific preview failures stay in the inspector. The status row
+reserves space only while it contains a message.
+
+`--smoke-library` covers local preview setup/teardown, canceled resolution, muted output,
+no desktop-apply callback, current-wallpaper state, and task/item status separation.
+Pass a local video path after the output PNG to exercise video preview setup and composed
+video poster rendering. These offscreen checks do not establish sustained onscreen cadence.
 
 - Eight bundled scenes currently ship with the app: Desk Clock, After Hours, Undertow,
   Fireflies, Ripple, Audio Aurora, Aurora, and Breathing Aurora.

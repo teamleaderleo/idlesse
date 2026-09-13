@@ -66,6 +66,31 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let gridScroll = NSScrollView()
     private let gridView = LibraryGridView()
     private let poster = NSImageView()
+    private let livePreviewButton = NSButton(title: "Play Preview", target: nil, action: nil)
+    private let previewHost = ScenePreviewHost()
+    private var liveTask: Task<Void, Never>?
+    private var liveGeneration = 0
+    private var liveAccess: SceneLibraryStore.Access?
+    private let taskStatus = NSTextField(labelWithString: "")
+    private let dismissStatus = NSButton(title: "Dismiss", target: nil, action: nil)
+    private let taskStatusRow = NSStackView()
+    private var browserBottom: NSLayoutConstraint?
+    private var playingURL: URL?
+    func updatePlayingURL(_ url: URL?) {
+        let next = url?.standardizedFileURL
+        guard next != playingURL else { return }
+        playingURL = next
+        updateApplyState()
+    }
+    private func updateApplyState() {
+        let isPlaying: Bool
+        if let selected, let playingURL {
+            isPlaying = (try? open(selected).url.standardizedFileURL) == playingURL
+        } else { isPlaying = false }
+        apply.title = isPlaying ? "On Desktop" : "Set Wallpaper"
+        apply.isEnabled = selected != nil && !isPlaying
+    }
+    private var previewObservers: [NSObjectProtocol] = []
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
@@ -171,7 +196,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             try store.used(item.id)
             retainUseAccess(opened.access)
             onUse(opened.url)
-        } catch { detail.stringValue = "Rotation: " + error.localizedDescription }
+        } catch { reportTask("Rotation: " + error.localizedDescription) }
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
@@ -190,6 +215,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.center()
         window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         setup()
+        for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification,
+                     NSWindow.didChangeOcclusionStateNotification] {
+            previewObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if name != NSWindow.didChangeOcclusionStateNotification || self.window?.occlusionState.contains(.visible) != true {
+                    self.stopLivePreview()
+                }
+            })
+        }
+        previewObservers.append(NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification,
+            object: browserSplit.splitView, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if self.inspectorItem?.isCollapsed == true { self.stopLivePreview() }
+        })
         reload(selecting: UserDefaults.standard.string(forKey: "Idlesse.library.selectedID"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -293,7 +332,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
         let heading = NSStackView(views: [titleLabel, NSView(), favorite])
         heading.orientation = .horizontal
-        let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
+        livePreviewButton.target = self
+        livePreviewButton.action = #selector(toggleLivePreview)
+        livePreviewButton.bezelStyle = .rounded
+        livePreviewButton.toolTip = "Play a muted preview here without changing the desktop"
+        let primary = NSStackView(views: [apply, livePreviewButton, edit, more, clearSearchButton])
         primary.spacing = 10
         for button in [add, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
@@ -321,7 +364,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         browserSplit.splitView.isVertical = true
         browserSplit.splitView.autosaveName = "IdlesseLibraryInspector"
         browserSplit.splitView.dividerStyle = .thin
-        for view in [toolbar, browserSplit.view] {
+        taskStatus.font = .systemFont(ofSize: 12)
+        taskStatus.textColor = .secondaryLabelColor
+        taskStatus.lineBreakMode = .byTruncatingMiddle
+        dismissStatus.target = self
+        dismissStatus.action = #selector(clearTaskStatus)
+        dismissStatus.bezelStyle = .rounded
+        taskStatusRow.setViews([taskStatus, dismissStatus], in: .leading)
+        taskStatusRow.orientation = .horizontal
+        taskStatusRow.spacing = 12
+        taskStatusRow.isHidden = true
+        for view in [toolbar, browserSplit.view, taskStatusRow] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -340,6 +393,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         poster.translatesAutoresizingMaskIntoConstraints = false
         primary.orientation = .vertical
         primary.alignment = .leading
+        browserBottom = browserSplit.view.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        browserBottom?.isActive = true
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
@@ -348,7 +403,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             browserSplit.view.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
             browserSplit.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             browserSplit.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            browserSplit.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            taskStatusRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            taskStatusRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            taskStatusRow.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
             right.topAnchor.constraint(equalTo: inspector.topAnchor, constant: 12),
             right.leadingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: 16),
             right.trailingAnchor.constraint(equalTo: inspector.trailingAnchor, constant: -16),
@@ -375,6 +432,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     @objc private func toggleInspector() {
         let visible = inspectorButton.state == .on
         inspectorItem?.isCollapsed = !visible
+        if !visible { stopLivePreview() }
         UserDefaults.standard.set(visible, forKey: "Idlesse.library.inspectorVisible")
     }
 
@@ -707,12 +765,74 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
         preview()
     }
+    @objc private func clearTaskStatus() { reportTask("") }
+    private func reportTask(_ message: String) {
+        taskStatus.stringValue = message
+        taskStatus.toolTip = message
+        taskStatusRow.isHidden = message.isEmpty
+        browserBottom?.constant = message.isEmpty ? 0 : -34
+    }
+
+    func stopLivePreview() {
+        liveGeneration += 1
+        liveTask?.cancel()
+        liveTask = nil
+        previewHost.renderer?.view.removeFromSuperview()
+        previewHost.stop()
+        liveAccess = nil
+        livePreviewButton.title = "Play Preview"
+    }
+
+    @objc private func toggleLivePreview() {
+        if liveTask != nil || previewHost.renderer != nil { stopLivePreview(); return }
+        guard let selected, inspectorItem?.isCollapsed == false else { return }
+        let token = liveGeneration
+        livePreviewButton.title = "Cancel Preview"
+        liveTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { if token == self.liveGeneration { self.liveTask = nil } }
+            do {
+                let opened = try self.open(selected)
+                defer { withExtendedLifetime(opened.access) {} }
+                let scene = try await LocalSceneSource().resolve(opened.url)
+                try Task.checkCancellation()
+                guard token == self.liveGeneration else { return }
+                try self.previewHost.clock.configure(timeline: scene.timeline)
+                self.previewHost.clock.pointerEnabled = false
+                self.previewHost.clock.audioEnabled = false
+                let bounds = NSRect(x: 0, y: 0, width: min(600, max(1, self.poster.bounds.width)),
+                                    height: min(338, max(1, self.poster.bounds.height)))
+                let renderer = try self.previewHost.prepare(scene: scene, bounds: bounds, scale: 1, metal: true,
+                    onError: { [weak self] message in
+                        guard let self, token == self.liveGeneration else { return }
+                        self.detail.stringValue = "Preview: " + message
+                        self.stopLivePreview()
+                    })
+                self.previewHost.renderer = renderer
+                self.liveAccess = opened.access
+                renderer.setMuted(true)
+                renderer.setPreferredFrameRate(30)
+                renderer.view.frame = self.poster.bounds
+                renderer.view.autoresizingMask = [.width, .height]
+                self.poster.addSubview(renderer.view)
+                self.previewHost.setPaused(false)
+                self.livePreviewButton.title = "Stop Preview"
+            } catch {
+                guard token == self.liveGeneration, !Task.isCancelled else { return }
+                self.stopLivePreview()
+                self.detail.stringValue = "Preview unavailable: " + error.localizedDescription
+            }
+        }
+    }
+
     private func preview() {
+        stopLivePreview()
+        livePreviewButton.isEnabled = selected != nil
         task?.cancel(); task = nil; generation += 1
         let token = generation
         poster.image = nil
         favorite.isEnabled = selected != nil
-        apply.isEnabled = selected != nil
+        updateApplyState()
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
@@ -855,25 +975,25 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.cacheOrder.removeAll { removed.contains($0) }
                 self.thumbnails.removeAllObjects()
                 self.reload()
-                self.detail.stringValue = "Removed \(source.name) from the Library. Source files were preserved."
-            } catch { self.detail.stringValue = error.localizedDescription }
+                self.reportTask("Removed \(source.name) from the Library. Source files were preserved.")
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
 
     private func reconcileSource(_ id: String) {
         guard conversionTask == nil else {
-            detail.stringValue = "A Library import or Source scan is already running."
+            reportTask("A Library import or Source scan is already running.")
             return
         }
         guard let source = store.catalog.sources.first(where: { $0.id == id }), let window = presentationWindow else { return }
         let access: SceneLibraryStore.Access
         do { access = try store.accessSource(id) }
-        catch { detail.stringValue = error.localizedDescription; return }
+        catch { reportTask(error.localizedDescription); return }
 
         conversionTask = Task { @MainActor [weak self, access] in
             guard let self else { return }
             defer { self.conversionTask = nil; withExtendedLifetime(access) {} }
-            self.detail.stringValue = "Scanning \(source.name)…"
+            self.reportTask("Scanning \(source.name)…")
             do {
                 var drafts = try await Task.detached(priority: .utility) { try Self.scanSource(access.url) }.value
                 try Task.checkCancellation()
@@ -888,7 +1008,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     return digestLengths.contains(bytes) && drafts[index].observation?.hasDigest != true
                 }
                 if !digestCandidates.isEmpty {
-                    self.detail.stringValue = "Checking a bounded set of move candidates…"
+                    self.reportTask("Checking a bounded set of move candidates…")
                     let observations = try await Task.detached(priority: .utility) {
                         try SceneLibraryStore.boundedDigests(root: access.url, drafts: drafts, indices: digestCandidates)
                     }.value
@@ -898,9 +1018,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     }
                     diff = try self.store.prepareReconciliation(sourceID: id, scanned: drafts)
                 }
-                self.detail.stringValue = "Review \(source.name) reconciliation."
+                self.reportTask("Review \(source.name) reconciliation.")
                 guard let accepted = await SourceReconciliationReview.choose(diff: diff, sourceName: source.name, window: window) else {
-                    self.detail.stringValue = "\(source.name) rescan canceled. Library unchanged."
+                    self.reportTask("\(source.name) rescan canceled. Library unchanged.")
                     return
                 }
                 try Task.checkCancellation()
@@ -909,10 +1029,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.reload()
                 let present = self.store.catalog.entries.filter { $0.sourceID == id && $0.availability == .present }.count
                 let missing = self.store.catalog.entries.filter { $0.sourceID == id && $0.availability == .missing }.count
-                self.detail.stringValue = "\(source.name) reconciled: \(present) present, \(missing) missing."
+                self.reportTask("\(source.name) reconciled: \(present) present, \(missing) missing.")
             } catch {
                 guard !Task.isCancelled else { return }
-                self.detail.stringValue = "Source rescan failed: \(error.localizedDescription)"
+                self.reportTask("Source rescan failed: \(error.localizedDescription)")
             }
         }
     }
@@ -935,21 +1055,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     try self.store.relinkSource(id, to: root)
                     self.cache.removeAll(); self.cacheOrder.removeAll(); self.thumbnails.removeAllObjects()
                     self.reload()
-                    self.detail.stringValue = "Source relinked. Run Rescan to reconcile changed descendants."
-                } catch { self.detail.stringValue = error.localizedDescription }
+                    self.reportTask("Source relinked. Run Rescan to reconcile changed descendants.")
+                } catch { self.reportTask(error.localizedDescription) }
             } else { self.importSource(root) }
         }
     }
 
     private func importSource(_ root: URL) {
         guard conversionTask == nil else {
-            detail.stringValue = "An import is already running. Try again when it finishes."
+            reportTask("An import is already running. Try again when it finishes.")
             return
         }
         conversionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.conversionTask = nil }
-            self.detail.stringValue = "Scanning Source…"
+            self.reportTask("Scanning Source…")
             do {
                 let drafts = try await Task.detached(priority: .utility) { try Self.scanSource(root) }.value
                 try Task.checkCancellation()
@@ -960,10 +1080,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.search.stringValue = ""
                 self.filter.selectItem(at: 2); self.revealImportedScope()
                 self.reload(selecting: firstNew)
-                self.detail.stringValue = "\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id && $0.availability == .present }.count) wallpapers in Library."
+                self.reportTask("\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id && $0.availability == .present }.count) wallpapers in Library.")
             } catch {
                 guard !Task.isCancelled else { return }
-                self.detail.stringValue = "Source import failed: \(error.localizedDescription)"
+                self.reportTask("Source import failed: \(error.localizedDescription)")
             }
         }
     }
@@ -1057,7 +1177,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private func importScenes(_ urls: [URL]) {
         guard conversionTask == nil else {
-            detail.stringValue = "An import is already running. Try again when it finishes."
+            reportTask("An import is already running. Try again when it finishes.")
             return
         }
         conversionTask = Task { @MainActor [weak self] in
@@ -1067,14 +1187,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             var failures: [String] = []
             for (index, source) in urls.enumerated() {
                 if Task.isCancelled { return }
-                self.detail.stringValue = "Importing \(index + 1) of \(urls.count)…"
+                self.reportTask("Importing \(index + 1) of \(urls.count)…")
                 do {
                     guard Self.supportedImport(source) else { throw SceneError.invalid("This file type is not supported.") }
                     let convert = try await MediaImport.needsConversion(source)
                     try Task.checkCancellation()
                     let imported: URL
                     if convert {
-                        self.detail.stringValue = "Converting \(index + 1) of \(urls.count)…"
+                        self.reportTask("Converting \(index + 1) of \(urls.count)…")
                         imported = try await MediaImport.convert(source)
                     } else { imported = source }
                     try Task.checkCancellation()
@@ -1087,6 +1207,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
             if firstID != nil { self.search.stringValue = ""; self.filter.selectItem(at: 2); self.revealImportedScope() }
             self.reload(selecting: firstID)
+            self.reportTask("Imported \(urls.count - failures.count) of \(urls.count) wallpapers" + (failures.isEmpty ? "" : " · \(failures.count) failed"))
             if !failures.isEmpty {
                 if let handler = self.importFailureHandler { handler(failures); return }
                 let alert = NSAlert()
@@ -1106,12 +1227,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     @objc private func toggleFavorite() {
         guard let selected else { return }
-        do { try store.favorite(selected.id); reload() } catch { detail.stringValue = error.localizedDescription }
+        do { try store.favorite(selected.id); reload() } catch { reportTask(error.localizedDescription) }
     }
     @objc private func removeScene() {
         guard let selected, selected.entry != nil else { return }
         do { try store.remove(selected.id); cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id }; reload() }
-        catch { detail.stringValue = error.localizedDescription }
+        catch { reportTask(error.localizedDescription) }
     }
     @objc private func useScene() { act(editing: false) }
     var hasCycleCandidates: Bool { !items.isEmpty }
@@ -1140,13 +1261,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let item = collectionActions.selectedItem else { return }
         if ["Move Collection Up", "Move Collection Down"].contains(item.title), let id = filter.selectedItem?.representedObject as? String {
             do { try store.moveCollection(id, by: item.title == "Move Collection Up" ? -1 : 1); reload() }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         if ["Move Scene Earlier", "Move Scene Later"].contains(item.title),
            let id = filter.selectedItem?.representedObject as? String, let selected {
             do { try store.moveScene(selected.id, in: id, by: item.title == "Move Scene Earlier" ? -1 : 1); reload(selecting: selected.id) }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         if item.title == "Playback & Schedule…" { editPlayback(); return }
@@ -1157,32 +1278,32 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 var settings = collection.playback ?? SceneLibraryStore.Playback()
                 settings.minutes = minutes
                 do { try store.setPlayback(id, settings) }
-                catch { detail.stringValue = error.localizedDescription; return }
+                catch { reportTask(error.localizedDescription); return }
             }
             let editedID = filter.selectedItem?.representedObject as? String
             if rotationCollectionID == nil || editedID == rotationCollectionID {
                 rotationMinutes = minutes
                 if rotationTimer != nil { armRotationTimer(); preview() }
             }
-            detail.stringValue = "Collections change every \(minutes) minutes."
+            reportTask("Collections change every \(minutes) minutes.")
             return
         }
         if item.title == "Play Collection in Order" || item.title == "Shuffle Collection" {
             guard let id = filter.selectedItem?.representedObject as? String,
                   let collection = store.catalog.collections.first(where: { $0.id == id }),
-                  !collection.sceneIDs.isEmpty else { detail.stringValue = "Add scenes to this collection first."; return }
+                  !collection.sceneIDs.isEmpty else { reportTask("Add scenes to this collection first."); return }
             stopRotation()
             var settings = collection.playback ?? SceneLibraryStore.Playback()
             settings.shuffle = item.title == "Shuffle Collection"
             do { try store.setPlayback(id, settings) }
-            catch { detail.stringValue = error.localizedDescription; return }
+            catch { reportTask(error.localizedDescription); return }
             beginRotation(store.catalog.collections.first { $0.id == id }!, shuffle: settings.shuffle)
             preview()
             return
         }
         if let id = item.representedObject as? String, let selected {
             do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         let activeID = filter.selectedItem?.representedObject as? String
@@ -1213,7 +1334,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     }
                 }
                 self.reload()
-            } catch { self.detail.stringValue = error.localizedDescription }
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
     private func editPlayback() {
@@ -1271,7 +1392,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.scheduleToken = nil
                 self.checkSchedule()
                 self.preview()
-            } catch { self.detail.stringValue = error.localizedDescription }
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
     private func armRotationTimer() {
@@ -1307,9 +1428,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 onUse(opened.url)
                 if !embedded { window?.orderOut(nil) }
             }
-        } catch { detail.stringValue = error.localizedDescription }
+        } catch { reportTask(error.localizedDescription) }
     }
     func windowWillClose(_ notification: Notification) {
+        stopLivePreview()
         conversionTask?.cancel()
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
@@ -1317,6 +1439,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func windowDidMove(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     func windowDidResize(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     deinit {
+        previewObservers.forEach(NotificationCenter.default.removeObserver)
+        liveTask?.cancel()
+        previewHost.stop()
         conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate()
     }
 
@@ -1380,6 +1505,31 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let deadline = Date().addingTimeInterval(10)
         while controller.task != nil && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         precondition(controller.poster.image != nil, controller.detail.stringValue)
+        controller.updatePlayingURL(try controller.open(controller.selected!).url)
+        precondition(controller.apply.title == "On Desktop" && !controller.apply.isEnabled)
+        controller.updatePlayingURL(nil)
+        precondition(controller.apply.title == "Set Wallpaper" && controller.apply.isEnabled)
+
+        let originalDetail = controller.detail.stringValue
+        controller.reportTask("Importing 1 of 2…")
+        precondition(controller.detail.stringValue == originalDetail, "Import status must not replace artwork details")
+        controller.clearTaskStatus()
+        precondition(controller.taskStatusRow.isHidden)
+        controller.toggleLivePreview()
+        let liveDeadline = Date().addingTimeInterval(10)
+        while controller.liveTask != nil && Date() < liveDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(controller.previewHost.renderer != nil, controller.detail.stringValue)
+        precondition(!applied, "Local preview must not apply a wallpaper")
+        precondition(controller.previewHost.renderer?.diagnostics.audioMuted == true)
+        controller.stopLivePreview()
+        precondition(controller.previewHost.renderer == nil && controller.liveAccess == nil)
+        controller.toggleLivePreview()
+        controller.stopLivePreview()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(controller.previewHost.renderer == nil, "Canceled resolution must not install a late renderer")
+
         precondition(!applied, "Browsing and generating a preview must not apply a desktop wallpaper")
         let colors = NSBitmapImageRep(data: controller.poster.image!.tiffRepresentation!)!
         var hasWarmColor = false
@@ -1511,6 +1661,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let videoDeadline = Date().addingTimeInterval(10)
             while controller.task != nil && Date() < videoDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
             precondition(controller.poster.image != nil && controller.detail.stringValue.contains("fps") && controller.detail.stringValue.contains("×"), controller.detail.stringValue)
+            applied = false
+            controller.toggleLivePreview()
+            let videoPreviewDeadline = Date().addingTimeInterval(10)
+            while controller.liveTask != nil && Date() < videoPreviewDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(controller.previewHost.renderer != nil, controller.detail.stringValue)
+            precondition(controller.previewHost.renderer?.diagnostics.audioMuted == true && !applied)
+            controller.stopLivePreview()
+            precondition(controller.previewHost.renderer == nil)
+
             var video = SceneNode(content: .video(videoURL))
             video.opacity = 0
             let package = folder.appendingPathComponent("Transparent Video.idlesse")

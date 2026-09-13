@@ -284,6 +284,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     private func showDisplays() {
+        library.stopLivePreview()
         currentRow = .displays
         window.title = "Displays"
         activateDisplaysDestination?()
@@ -541,6 +542,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func refreshState() {
         let url = wallpaper.selectedURL
+        library.updatePlayingURL(url)
         let title = url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
         nowPlayingButton.title = title
         let standardized = url?.standardizedFileURL
