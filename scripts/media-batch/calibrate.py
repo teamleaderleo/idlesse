@@ -34,6 +34,11 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
 def serve(root):
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(QuietHandler, directory=str(root)))
+    # The renderer closes its connections as soon as it has what it needs, which
+    # the stock server reports as a traceback; that is not a failure.
+    default_error = server.handle_error
+    server.handle_error = lambda request, address: None if isinstance(sys.exc_info()[1], (ConnectionError, BrokenPipeError)) \
+        else default_error(request, address)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
