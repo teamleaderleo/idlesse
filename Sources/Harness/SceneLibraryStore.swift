@@ -275,9 +275,7 @@ final class SceneLibraryStore {
             throw failure("This Library item is missing from its Source. Rescan the Source to reconcile it.")
         }
         if let bookmark = entry.bookmark {
-            var stale = false
-            let url = try URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI],
-                              relativeTo: nil, bookmarkDataIsStale: &stale)
+            let url = try resolveIndividual(entry, bookmark: bookmark)
             return Access(url: url, scopeURL: url, sourceID: nil)
         }
         guard let sourceID = entry.sourceID, let relative = entry.relativeMediaPath,
@@ -285,6 +283,36 @@ final class SceneLibraryStore {
             throw failure("This Library entry has no usable source reference.")
         }
         return try access(relativePath: relative, source: source)
+    }
+
+    /// A security-scoped bookmark resolves only in the app that made it: one
+    /// written by another tool reads as "isn't in the correct format", and one
+    /// whose file was replaced atomically comes back stale. Idlesse is not
+    /// sandboxed, so the scope adds nothing the path does not already allow.
+    /// Resolve the bookmark plainly and re-mint it here, so the entry heals
+    /// the first time it is opened instead of failing every time.
+    private func resolveIndividual(_ entry: Entry, bookmark: Data) throws -> URL {
+        var stale = false
+        let url: URL
+        do {
+            url = try URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI],
+                          relativeTo: nil, bookmarkDataIsStale: &stale)
+        } catch {
+            var ignored = false
+            guard let plain = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
+                                       relativeTo: nil, bookmarkDataIsStale: &ignored),
+                  FileManager.default.isReadableFile(atPath: plain.path) else { throw error }
+            url = plain
+            stale = true
+        }
+        if stale, let fresh = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil),
+           fresh.count <= Self.maxBookmarkBytes,
+           let index = catalog.entries.firstIndex(where: { $0.id == entry.id && $0.bookmark == bookmark }) {
+            var next = catalog
+            next.entries[index].bookmark = fresh
+            try? save(next)
+        }
+        return url
     }
 
     func accessPoster(_ entry: Entry) throws -> Access? {

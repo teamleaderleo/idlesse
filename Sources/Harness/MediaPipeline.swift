@@ -49,6 +49,49 @@ struct MediaPipeline {
     }
 }
 
+/// Exports installed from Terminal, waiting to join the Library.
+///
+/// `ingest.py` leaves one small note per install in this folder, and the app
+/// adds the named files the moment it notices, so an import started outside the
+/// app needs no second step. A note carries only a path, and a path is taken only
+/// if the file is there; anything else in the folder is ignored and cleared.
+enum LibraryInbox {
+    static let maxNotes = 512
+    static var folder: URL? {
+        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("Idlesse/Library/Inbox", isDirectory: true)
+    }
+    static var notes: [URL] {
+        guard let folder, let names = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return [] }
+        return names.filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+    /// The files named by waiting notes, oldest first. The notes are removed.
+    static func take() -> [URL] {
+        var urls: [URL] = []
+        for note in notes.prefix(maxNotes) {
+            defer { try? FileManager.default.removeItem(at: note) }
+            guard let data = try? Data(contentsOf: note), data.count <= 4096,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let path = object["media"] as? String, path.hasPrefix("/") else { continue }
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            if FileManager.default.fileExists(atPath: url.path), !urls.contains(url) { urls.append(url) }
+        }
+        return urls
+    }
+    /// Calls `onChange` on the main queue whenever something lands in the folder.
+    static func watch(_ onChange: @escaping () -> Void) -> DispatchSourceFileSystemObject? {
+        guard let folder else { return nil }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let descriptor = open(folder.path, O_EVTONLY)
+        guard descriptor >= 0 else { return nil }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: .main)
+        source.setEventHandler(handler: onChange)
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        return source
+    }
+}
+
 /// One invocation of the pipeline: its latest line, its JSON events, and how it ended.
 final class PipelineRun {
     var onLine: ((String) -> Void)?

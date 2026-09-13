@@ -242,6 +242,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             route(pendingSceneURL)
             self.pendingSceneURL = nil
         }
+        inboxWatch = LibraryInbox.watch { [weak self] in self?.adoptLibraryInbox() }
+        adoptLibraryInbox()
+    }
+
+    private var inboxWatch: DispatchSourceFileSystemObject?
+    /// Adds whatever the export pipeline installed from Terminal.
+    private func adoptLibraryInbox() {
+        guard !LibraryInbox.notes.isEmpty, (try? prepareLibrary()) != nil else { return }
+        library?.importInstalledMedia(LibraryInbox.take())
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

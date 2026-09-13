@@ -204,6 +204,14 @@ confirmation before the window passes `--yes`. Folder or ZIP… copies a lobby i
 paths `ingest.py` records in its defaults, or, for a build inside a checkout,
 beside the build. `--list` and `--json` are the machine-readable forms it uses.
 
+An install from Terminal joins the Library too. `ingest.py` leaves a one-line
+note in `~/Library/Application Support/Idlesse/Library/Inbox/`. Idlesse watches
+that folder and adds the file itself, or refreshes its preview if the Library
+already has it, as soon as it is running. Pass `--no-library` to skip the note.
+Never write Library bookmarks from another process. A security-scoped bookmark
+resolves only in the app that minted it, and the Library shows "Preview unavailable" for
+it until the app re-mints the bookmark.
+
 ### Re-rendering a crop
 
 A crop drawn in **Adjust Framing…** is a display-side zoom, so it enlarges the

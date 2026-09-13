@@ -1326,8 +1326,28 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         importScenes(urls)
         return true
     }
-    /// Adds a file the export pipeline just installed, as if it were imported by hand.
-    func importInstalledMedia(_ url: URL) { importScenes([url]) }
+    /// Adds files the export pipeline just installed, as if they were imported by
+    /// hand. Installs arrive one at a time and often while an earlier one is still
+    /// importing, so they queue rather than bounce. A file the Library already
+    /// has was re-rendered in place: its previews refresh and nothing is re-added.
+    func importInstalledMedia(_ urls: [URL]) {
+        let known = Set(store.catalog.entries.compactMap { entry in
+            entry.bookmark.flatMap { URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: $0)?.path }
+        })
+        for url in urls.map(\.standardizedFileURL) {
+            if known.contains(url.path) { mediaDidChange(url) }
+            else if !pendingInstalled.contains(url) { pendingInstalled.append(url) }
+        }
+        drainInstalled()
+    }
+    func importInstalledMedia(_ url: URL) { importInstalledMedia([url]) }
+    private var pendingInstalled: [URL] = []
+    private func drainInstalled() {
+        guard conversionTask == nil, !pendingInstalled.isEmpty else { return }
+        let next = pendingInstalled
+        pendingInstalled = []
+        importScenes(next)
+    }
     private func importScenes(_ urls: [URL]) {
         guard conversionTask == nil else {
             reportTask("An import is already running. Try again when it finishes.")
@@ -1335,7 +1355,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         conversionTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.conversionTask = nil }
+            defer { self.conversionTask = nil; self.drainInstalled() }
             var firstID: String?
             var failures: [String] = []
             for (index, source) in urls.enumerated() {

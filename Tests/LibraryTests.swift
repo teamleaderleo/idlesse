@@ -145,6 +145,25 @@ import Foundation
             access.close()
         }
 
+        // A bookmark minted without this app's scope (by a script, say) heals on first open.
+        do {
+            let foreignFile = folder.appendingPathComponent("Foreign/index.json")
+            let foreignMedia = folder.appendingPathComponent("Foreign Wallpaper.png")
+            try Data([7, 8, 9]).write(to: foreignMedia)
+            let plain = try foreignMedia.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            try FileManager.default.createDirectory(at: foreignFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(LegacyCatalog(entries: [LegacyEntry(id: "foreign", title: "Foreign", bookmark: plain)],
+                favorites: [], recent: [:], collections: nil)).write(to: foreignFile)
+            let foreign = try SceneLibraryStore(file: foreignFile)
+            let access = try foreign.access(foreign.catalog.entries[0])
+            precondition(access.url.standardizedFileURL == foreignMedia.standardizedFileURL)
+            access.close()
+            let healed = try SceneLibraryStore(file: foreignFile).catalog.entries[0].bookmark!
+            var stale = false
+            let scoped = try URL(resolvingBookmarkData: healed, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
+            precondition(scoped.standardizedFileURL == foreignMedia.standardizedFileURL && !stale, "A foreign bookmark must be re-minted with this app's scope")
+        }
+
         // First successful mutation performs the bounded v2 encode while preserving user state.
         try legacyStore.used(legacyID)
         let migratedObject = try JSONSerialization.jsonObject(with: Data(contentsOf: legacyFile)) as! [String: Any]

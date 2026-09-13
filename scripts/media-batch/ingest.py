@@ -76,6 +76,23 @@ def register_with_app(workspace):
         subprocess.run(['defaults', 'write', APP_DEFAULTS, key, '-string', value], check=False, capture_output=True)
 
 
+LIBRARY_INBOX = Path.home() / 'Library/Application Support/Idlesse/Library/Inbox'
+
+
+def queue_for_library(media, log):
+    """Leave a note for Idlesse to add `media` to the Library.
+
+    The app watches this folder and adds the file itself (or refreshes it, when it
+    is already there), so its bookmark is minted by the app that has to read it.
+    """
+    LIBRARY_INBOX.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S%f')
+    partial = LIBRARY_INBOX / f'.{stamp}-{os.getpid()}.partial'
+    partial.write_text(json.dumps({'media': str(media)}))
+    os.replace(partial, LIBRARY_INBOX / f'{stamp}-{os.getpid()}.json')
+    log('Idlesse adds it to the Library as soon as it is running.')
+
+
 def emit(enabled, event, **fields):
     """One machine-readable line for the app; plain logs stay human text."""
     if enabled:
@@ -531,6 +548,7 @@ def main():
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
     p.add_argument('--replace', action='store_true', help='Archive and replace an existing export of the same title')
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
+    p.add_argument('--no-library', action='store_true', help='Install the file without adding it to the Idlesse Library')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
     p.add_argument('--upscale', nargs='+', metavar='ASSET',
@@ -715,8 +733,8 @@ def main():
             log(f'Recorded the camera in {target.tracked.relative_to(REPO)}; commit it to keep the recipe.')
         log(f'\nInstalled {final}')
         emit(a.json, 'installed', path=str(final), camera=camera)
-        log('A Library source watching that folder picks it up; otherwise Import… it once. '
-            'If it is on the desktop now, it reloads the next time it is chosen.')
+        if not a.no_library:
+            queue_for_library(final, log)
     finally:
         server.shutdown(); server.server_close()
         if changed and not keep_camera:
