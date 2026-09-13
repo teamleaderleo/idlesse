@@ -919,6 +919,35 @@ struct SceneNode: Codable, Sendable {
     }
 }
 
+/// Highlight softening for a bright video, read from the same sidecar as framing.
+///
+/// Some lobby art is painted bright -- Seia's sunlit bedroom averages 224 of
+/// 255 and plays back exactly as rendered -- and reads as glaring on a desktop
+/// that is otherwise dim. This rolls the highlights off without touching the
+/// file, so deleting the sidecar restores the original.
+struct SceneTone: Codable, Sendable, Equatable {
+    /// 0 leaves the video untouched; 1 is the strongest roll-off.
+    var soften: Double = 0
+
+    init(soften: Double = 0) { self.soften = soften }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        soften = try container.decodeIfPresent(Double.self, forKey: .soften) ?? 0
+    }
+
+    var clamped: SceneTone { SceneTone(soften: soften.isFinite ? min(max(soften, 0), 1) : 0) }
+    var isNeutral: Bool { clamped.soften == 0 }
+
+    /// Points for a tone curve over sRGB-encoded values. Shadows and midtones
+    /// stay where they are; the curve bends only above the middle, so the
+    /// picture keeps its contrast and loses its glare.
+    var curve: [CGPoint] {
+        let amount = CGFloat(clamped.soften)
+        return [CGPoint(x: 0, y: 0), CGPoint(x: 0.25, y: 0.25), CGPoint(x: 0.5, y: 0.5 - 0.02 * amount),
+                CGPoint(x: 0.75, y: 0.75 - 0.08 * amount), CGPoint(x: 1, y: 1 - 0.18 * amount)]
+    }
+}
+
 /// Framing for a plain media file, read from `<name>.framing.json` beside it.
 ///
 /// An imported picture or video has nowhere to keep a focus or a bleed margin:
@@ -934,6 +963,7 @@ struct SceneNode: Codable, Sendable {
 struct SceneFraming: Decodable {
     var focus: SceneFocus?
     var bleed: SceneBleed?
+    var tone: SceneTone?
 
     static func url(for media: URL) -> URL {
         media.deletingPathExtension().appendingPathExtension("framing.json")

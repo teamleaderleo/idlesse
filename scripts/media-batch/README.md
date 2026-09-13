@@ -118,6 +118,18 @@ the band on screen; declared far too large it starts eating composition on
 every display. Confirm the geometry against the displays actually in use before
 settling on a number.
 
+### Softening a bright scene
+
+Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before softening anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
+
+To soften a scene that really is bright, add `tone` to its sidecar, next to any framing:
+
+```json
+{"bleed": {"right": 0.0029}, "tone": {"soften": 0.3}}
+```
+
+`soften` runs from 0 to 1. The wallpaper applies a tone curve at playback that leaves shadows and midtones alone and lowers the peak toward 0.82 at full strength; the video file is not touched, so deleting the key restores it. Keep it light. Around 0.25-0.35 takes the glare off; past about 0.4 whites turn grey and bright pastel art goes flat.
+
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 
 Dependencies retain their upstream licenses, especially the Spine runtimes. This operator harness does not establish redistribution rights for those runtimes or game assets.
