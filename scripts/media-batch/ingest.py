@@ -522,6 +522,8 @@ def main():
                    help='Unit box of the current frame to keep, from its top-left')
     p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Use this camera recipe (before --crop)')
     p.add_argument('--fit', action='store_true', help='Zoom and recentre the camera until the preview shows no matte')
+    p.add_argument('--fit-toward', type=float, nargs=2, default=[0.5, 0.5], metavar=('X', 'Y'),
+                   help='Where --fit leans when the painted area has room to spare; 0.5 0 keeps the top of a tall scene')
     p.add_argument('--trim-edges', action='store_true',
                    help='Keep the camera and crop thin matte strips at display time instead, through the framing sidecar')
     p.add_argument('--from-sidecar', action='store_true', help='With --reframe, use the crop box saved by the framing editor')
@@ -632,7 +634,8 @@ def main():
             with tempfile.TemporaryDirectory() as tmp:
                 _, meta = calibrate.render(target.workspace, server, target.asset_path, stem, animation, Path(tmp) / 'm', 64, 36, 0)
             boxed = calibrate.fit_to_painted_area(target.workspace, server, target.asset_path, stem, animation, duration,
-                                                  meta.get('bounds'), lambda recipe: target.apply(calibrate, recipe))
+                                                  meta.get('bounds'), lambda recipe: target.apply(calibrate, recipe),
+                                                  toward=tuple(a.fit_toward))
             if boxed:
                 camera = boxed
                 target.apply(calibrate, camera)

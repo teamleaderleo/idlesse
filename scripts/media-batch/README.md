@@ -170,7 +170,7 @@ python3 scripts/media-batch/ingest.py hanako_home --crop 0.1 0 0.8 0.8 --preview
 
 It renders a free preview from the original textures and measures matte across
 the loop before anything else; `--preview` stops there, and matte stops the run
-unless `--allow-matte`. `--fit` renders the whole scene zoomed out, marks the matte reachable from its edges in every sampled frame, and frames the largest box clear of it; the step solver only runs if that still leaves matte. The solver alone zoomed Hoshino (Swimsuit) to 1.81 and cut off her head chasing a notched corner, where the painted-area box frames the whole scene at 1.26. It also runs the camera solver on the preview first, so a
+unless `--allow-matte`. `--fit` renders the whole scene zoomed out, marks the matte reachable from its edges in every sampled frame, and frames the largest box clear of it; the step solver only runs if that still leaves matte. The solver alone zoomed Hoshino (Swimsuit) to 1.81 and cut off her head chasing a notched corner, where the painted-area box frames the whole scene at 1.26. When the painted area is taller or wider than the frame there is room to choose, and `--fit-toward X Y` says which way to lean: `0.5 0` keeps the top of a tall scene, where a lobby's face usually is (Saki's sits above the centred box). It also runs the camera solver on the preview first, so a
 lobby whose art leaves a wedge uncovered is zoomed just enough to cover the
 frame; `--camera Z CX CY` pins a recipe instead. `--trim-edges` keeps the camera and
 writes the matte depth on each edge into the sidecar as bleed, up to 15% of an

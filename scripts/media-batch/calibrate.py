@@ -184,12 +184,14 @@ def largest_box(masks, gw=192, gh=108, centre=(0.5, 0.5)):
     return None
 
 
-def fit_to_painted_area(workspace, server, asset, stem, animation, duration, bounds, apply, samples=8):
+def fit_to_painted_area(workspace, server, asset, stem, animation, duration, bounds, apply, samples=8, toward=(0.5, 0.5)):
     """A camera framing the largest matte-free box of the whole scene, or None.
 
     `apply(camera)` must install a recipe in the workspace. The scene is sampled
     with the skeleton's bounds contained in the frame rather than covering it,
     since the default cover fit already crops away art the box could use.
+    `toward` breaks ties when the painted area is taller or wider than the frame:
+    (0.5, 0) keeps the top of a tall scene, where a lobby's face usually is.
     """
     if not bounds or not bounds.get('width') or not bounds.get('height'):
         return None
@@ -201,7 +203,8 @@ def fit_to_painted_area(workspace, server, asset, stem, animation, duration, bou
         with tempfile.TemporaryDirectory() as tmp:
             im, _ = render(workspace, server, asset, stem, animation, Path(tmp) / 'f', 1920, 1080, duration * i / samples)
         masks.append(matte_mask(im))
-    box = largest_box(masks)
+    # `toward` is in the frame's units; the overview shows the scene around its centre.
+    box = largest_box(masks, centre=toward)
     if not box:
         return None
     zoom, cx, cy = overview
