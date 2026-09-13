@@ -57,12 +57,14 @@ are carried forward. A failed decode, semantic validation failure, future catalo
 version, oversized index, or failed save leaves the original index bytes in place and
 reports the error instead of replacing the file.
 
-Existing safety bounds remain in force: the JSON index is capped at 1 MiB; security
-bookmarks at 16 KiB; individual imports at 128; Sources at 32; favorites and recent
+Existing safety bounds remain in force: the JSON index is capped at 16 MiB; security
+bookmarks at 16 KiB; individual imports at 4,096; Sources at 32; favorites and recent
 state at 256; collections at 32 with 256 distinct scene references each. Source-backed
 entries have a separate 4,096-entry bound. Recent state is kept to its newest 256
-records as larger Source catalogs are used. The 1 MiB file cap can become the tighter
-limit when entries contain rich metadata.
+records as larger Source catalogs are used. Individual imports were once capped at
+128, which a large wallpaper folder imported file by file reaches quickly; a bookmark
+is under a kilobyte, so the count now matches Sources and the file cap does the
+bounding. That cap can become the tighter limit when entries contain rich metadata.
 
 Relative media and poster paths must be non-empty relative paths with no absolute
 prefix, empty component, `.` component, or `..` component. Resolution appends the
