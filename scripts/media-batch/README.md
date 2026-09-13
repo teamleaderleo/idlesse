@@ -84,7 +84,7 @@ So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the w
 
 For any imported picture or video, Library → More… → **Adjust Framing…** (or
 Wallpaper → Adjust Framing of a File…) opens the frame with a crop box, the
-focus point, a softening slider, and a dashed outline of what every connected
+focus point, picture adjustments, and a dashed outline of what every connected
 display actually shows. Save writes the same `<name>.framing.json` described
 below, and reloads the desktop once if that file is on it. Nothing is
 re-exported. The editor warns when a crop enlarges the picture well past its
@@ -130,17 +130,24 @@ the band on screen; declared far too large it starts eating composition on
 every display. Confirm the geometry against the displays actually in use before
 settling on a number.
 
-### Softening a bright scene
+### Adjusting a bright or flat scene
 
-Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before softening anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
+Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before adjusting anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
 
-To soften a scene that really is bright, use the editor's slider, or add `tone` to its sidecar next to any framing:
+Use the editor's sliders, or add `tone` to the sidecar next to any framing. Every field is optional and 0 is neutral:
 
 ```json
-{"bleed": {"right": 0.0029}, "tone": {"soften": 0.3}}
+{"bleed": {"right": 0.0029}, "tone": {"exposure": -0.45, "soften": 0.2, "contrast": 0.2, "saturation": 0.25}}
 ```
 
-`soften` runs from 0 to 1. The wallpaper applies a tone curve at playback that leaves shadows and midtones alone and lowers the peak toward 0.82 at full strength; the video file is not touched, so deleting the key restores it. Keep it light. Around 0.25-0.35 takes the glare off; past about 0.4 whites turn grey and bright pastel art goes flat.
+| Field | Range | Effect |
+|---|---|---|
+| `exposure` | -2 to 2 | stops of light, multiplied in linear light |
+| `soften` | 0 to 1 | rolls highlights off; the peak falls toward 0.82 at full strength |
+| `contrast` | -1 to 1 | around mid-grey |
+| `saturation` | -1 to 1 | -1 is greyscale |
+
+The wallpaper applies them to video at playback in Core Image's colour-managed working space, and the file is not touched, so deleting the key restores it. Overexposed art usually wants exposure down with a little contrast and saturation back, rather than heavy softening alone: softening past about 0.4 greys the whites and desaturates pastels. Stills are not adjusted yet.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 

@@ -3,7 +3,7 @@ import AVFoundation
 import CoreImage
 import UniformTypeIdentifiers
 
-/// Crops and softens a plain picture or video by writing its framing sidecar,
+/// Crops and adjusts a plain picture or video by writing its framing sidecar,
 /// without re-exporting anything.
 ///
 /// The crop box is the scene's bleed: everything outside it is never shown, and
@@ -20,8 +20,25 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private var saved: SceneFraming
     private var framing: SceneFraming { didSet { framingChanged() } }
     private let canvas = MediaFramingCanvas()
-    private let soften = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
-    private let softenValue = NSTextField(labelWithString: "Off")
+    /// One slider per picture adjustment, in the order they read best.
+    private let adjustments: [Adjustment] = [
+        Adjustment(title: "Exposure", key: \.exposure, range: -1.5...1, format: "%+.2f EV"),
+        Adjustment(title: "Highlights", key: \.soften, range: 0...1, format: "−%.2f"),
+        Adjustment(title: "Contrast", key: \.contrast, range: -1...1, format: "%+.2f"),
+        Adjustment(title: "Saturation", key: \.saturation, range: -1...1, format: "%+.2f")
+    ]
+    private let compare = NSButton(checkboxWithTitle: "Show original", target: nil, action: nil)
+    private final class Adjustment {
+        let title: String
+        let key: WritableKeyPath<SceneTone, Double>
+        let format: String
+        let slider: NSSlider
+        let value = NSTextField(labelWithString: "")
+        init(title: String, key: WritableKeyPath<SceneTone, Double>, range: ClosedRange<Double>, format: String) {
+            self.title = title; self.key = key; self.format = format
+            slider = NSSlider(value: 0, minValue: range.lowerBound, maxValue: range.upperBound, target: nil, action: nil)
+        }
+    }
     private let summary = NSTextField(wrappingLabelWithString: "")
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
@@ -79,21 +96,27 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         }
         canvas.translatesAutoresizingMaskIntoConstraints = false
 
-        soften.target = self
-        soften.action = #selector(softenMoved)
-        soften.isContinuous = true
-        soften.doubleValue = framing.tone?.clamped.soften ?? 0
-        tone.soften = soften.doubleValue
-        let softenLabel = NSTextField(labelWithString: "Soften highlights")
-        softenValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        softenValue.alignment = .right
-        let softenRow = NSStackView(views: [softenLabel, soften, softenValue])
-        softenRow.spacing = 8
-        soften.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        softenValue.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        let grid = NSGridView()
+        grid.columnSpacing = 10
+        grid.rowSpacing = 6
+        for adjustment in adjustments {
+            adjustment.slider.target = self
+            adjustment.slider.action = #selector(adjustmentMoved(_:))
+            adjustment.slider.isContinuous = true
+            adjustment.slider.widthAnchor.constraint(equalToConstant: 240).isActive = true
+            adjustment.value.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            adjustment.value.widthAnchor.constraint(equalToConstant: 72).isActive = true
+            grid.addRow(with: [NSTextField(labelWithString: adjustment.title), adjustment.slider, adjustment.value])
+        }
+        compare.target = self
+        compare.action = #selector(compareToggled)
+        compare.toolTip = "Preview without the adjustments; nothing is saved"
+        grid.addRow(with: [NSGridCell.emptyContentView, compare, NSGridCell.emptyContentView])
+        syncSliders()
+        let softenRow = grid
         if !isVideo {
-            // The wallpaper applies tone to video only; offering it for a still
-            // would preview a change that never reaches the desktop.
+            // The wallpaper applies adjustments to video only; offering them for
+            // a still would preview a change that never reaches the desktop.
             softenRow.isHidden = true
         }
 
@@ -110,7 +133,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
             button.bezelStyle = .rounded
         }
         saveButton.keyEquivalent = "\r"
-        resetButton.toolTip = "Remove the crop, focus and softening"
+        resetButton.toolTip = "Remove the crop, focus and adjustments"
         revertButton.toolTip = "Go back to the last saved framing"
         let buttons = NSStackView(views: [resetButton, revertButton, NSView(), saveButton])
         buttons.spacing = 10
@@ -162,15 +185,10 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
                 guard let self, !Task.isCancelled else { return }
                 let tone = self.tone
                 let item = AVPlayerItem(asset: asset)
-                // Reads the slider through the box on every frame, so dragging it
-                // re-tones the loop live with no composition rebuilt.
+                // Reads the sliders through the box on every frame, so dragging
+                // one re-adjusts the loop live with no composition rebuilt.
                 item.videoComposition = AVMutableVideoComposition(asset: asset) { request in
-                    let source = request.sourceImage
-                    let points = SceneTone(soften: tone.soften).curve.map { CIVector(x: $0.x, y: $0.y) }
-                    let toned = tone.soften <= 0 ? source : source.applyingFilter("CIToneCurve", parameters: [
-                        "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
-                        "inputPoint3": points[3], "inputPoint4": points[4]]).cropped(to: source.extent)
-                    request.finish(with: toned, context: nil)
+                    request.finish(with: tone.value.apply(to: request.sourceImage), context: nil)
                 }
                 let player = AVQueuePlayer()
                 player.isMuted = true
@@ -213,11 +231,23 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
 
     // MARK: Editing
 
-    @objc private func softenMoved() {
-        let value = (soften.doubleValue * 100).rounded() / 100
+    @objc private func adjustmentMoved(_ sender: NSSlider) {
+        guard let adjustment = adjustments.first(where: { $0.slider === sender }) else { return }
         if NSApp.currentEvent?.type == .leftMouseDown { registerUndo(from: framing) }
-        tone.soften = value
-        framing.tone = value > 0 ? SceneTone(soften: value) : nil
+        var value = framing.tone ?? SceneTone()
+        value[keyPath: adjustment.key] = (sender.doubleValue * 100).rounded() / 100
+        framing.tone = value.isNeutral ? nil : value
+    }
+
+    @objc private func compareToggled() { framingChanged() }
+
+    private func syncSliders() {
+        let value = framing.tone?.clamped ?? SceneTone()
+        for adjustment in adjustments {
+            let amount = value[keyPath: adjustment.key]
+            adjustment.slider.doubleValue = amount
+            adjustment.value.stringValue = amount == 0 ? "—" : String(format: adjustment.format, amount)
+        }
     }
 
     private func registerUndo(from previous: SceneFraming) {
@@ -231,8 +261,6 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
 
     private func apply(_ value: SceneFraming) {
         framing = value
-        soften.doubleValue = value.tone?.clamped.soften ?? 0
-        tone.soften = soften.doubleValue
     }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
@@ -240,8 +268,9 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private func framingChanged() {
         canvas.focus = framing.focus ?? .centre
         canvas.bleed = framing.bleed?.clamped ?? SceneBleed()
-        let amount = framing.tone?.clamped.soften ?? 0
-        softenValue.stringValue = amount > 0 ? String(format: "%.2f", amount) : "Off"
+        tone.value = compare.state == .on ? SceneTone() : (framing.tone ?? SceneTone())
+        syncSliders()
+        player.map { if $0.rate == 0 { $0.seek(to: $0.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero) } }
         summary.stringValue = describe()
         updateButtons()
     }
@@ -258,7 +287,8 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private func normalized(_ value: SceneFraming) -> [Double] {
         let focus = value.focus?.clamped ?? .centre
         let bleed = value.bleed?.clamped ?? SceneBleed()
-        return [focus.x, focus.y, bleed.top, bleed.left, bleed.bottom, bleed.right, value.tone?.clamped.soften ?? 0]
+        return [focus.x, focus.y, bleed.top, bleed.left, bleed.bottom, bleed.right, value.tone?.clamped.soften ?? 0, value.tone?.clamped.exposure ?? 0,
+                value.tone?.clamped.contrast ?? 0, value.tone?.clamped.saturation ?? 0]
             .map { ($0 * 10000).rounded() / 10000 }
     }
 
@@ -336,12 +366,13 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     deinit { withExtendedLifetime(access) {} }
 
     /// The slider's value as the composition handler reads it, off the main thread.
+    /// The adjustments as the composition handler reads them, off the main thread.
     private final class ToneBox: @unchecked Sendable {
         private let lock = NSLock()
-        private var value = 0.0
-        var soften: Double {
-            get { lock.lock(); defer { lock.unlock() }; return value }
-            set { lock.lock(); value = newValue; lock.unlock() }
+        private var stored = SceneTone()
+        var value: SceneTone {
+            get { lock.lock(); defer { lock.unlock() }; return stored }
+            set { lock.lock(); stored = newValue; lock.unlock() }
         }
     }
 
@@ -356,19 +387,40 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         try #"{"bleed":{"right":0.05},"note":"kept"}"#.data(using: .utf8)!.write(to: sidecar)
         var framing = try SceneFraming.beside(media)!
         framing.bleed = SceneBleed(top: 0.1, right: 0.05)
-        framing.tone = SceneTone(soften: 0.3)
+        framing.tone = SceneTone(soften: 0.3, exposure: -0.25)
         try framing.write(beside: media)
         let written = try JSONSerialization.jsonObject(with: Data(contentsOf: sidecar)) as! [String: Any]
         precondition(written["note"] as? String == "kept", "unknown sidecar keys must survive")
         precondition(written["focus"] == nil, "a centred focus is not written")
         let read = try SceneFraming.beside(media)!
-        precondition(read.bleed == SceneBleed(top: 0.1, right: 0.05) && read.tone == SceneTone(soften: 0.3))
+        precondition(read.bleed == SceneBleed(top: 0.1, right: 0.05) && read.tone == SceneTone(soften: 0.3, exposure: -0.25))
+        let tone = written["tone"] as! [String: Double]
+        precondition(tone.keys.sorted() == ["exposure", "soften"], "neutral adjustments are not written")
         // Resetting drops what it owns; a sidecar with nothing left goes away.
         try SceneFraming().write(beside: media)
         precondition(FileManager.default.fileExists(atPath: sidecar.path), "the foreign key keeps the file")
         try #"{"bleed":{"right":0.05}}"#.data(using: .utf8)!.write(to: sidecar)
         try SceneFraming(focus: .centre, bleed: SceneBleed(), tone: SceneTone(soften: 0)).write(beside: media)
         precondition(!FileManager.default.fileExists(atPath: sidecar.path), "a neutral framing removes the sidecar")
+
+        // Adjustments run in Core Image's linear working space, between the
+        // decode and encode the video handler performs; this context does the same.
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+        let grey = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1, colorSpace: srgb)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 2, height: 2))
+        let managed = CIContext(options: [.outputColorSpace: srgb])
+        func level(_ tone: SceneTone) -> Double {
+            var pixel = [Float](repeating: 0, count: 4)
+            managed.render(tone.apply(to: grey), toBitmap: &pixel, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                           format: .RGBAf, colorSpace: srgb)
+            return Double(pixel[0])
+        }
+        precondition(abs(level(SceneTone()) - 0.5) < 0.002, "neutral leaves pixels alone")
+        precondition(abs(level(SceneTone(exposure: -1)) - 0.3613) < 0.01, "one stop down halves linear light: \(level(SceneTone(exposure: -1)))")
+        precondition(abs(level(SceneTone(saturation: 1)) - 0.5) < 0.002, "grey has no saturation to change")
+        precondition(abs(level(SceneTone(soften: 1)) - 0.48) < 0.01, "soften barely moves mid-grey: \(level(SceneTone(soften: 1)))")
+        let decoded = try JSONDecoder().decode(SceneTone.self, from: #"{"exposure":-0.3,"contrast":9}"#.data(using: .utf8)!)
+        precondition(decoded.exposure == -0.3 && decoded.clamped.contrast == 1 && decoded.soften == 0 && !decoded.isNeutral)
 
         // The outline for a display is filledFrame read backwards.
         let content = CGSize(width: 3840, height: 2160)

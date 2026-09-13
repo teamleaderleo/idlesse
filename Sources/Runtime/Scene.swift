@@ -933,24 +933,50 @@ struct SceneNode: Codable, Sendable {
     }
 }
 
-/// Highlight softening for a bright video, read from the same sidecar as framing.
+/// Picture adjustments for a video, read from the same sidecar as framing.
 ///
 /// Some lobby art is painted bright -- Seia's sunlit bedroom averages 224 of
-/// 255 and plays back exactly as rendered -- and reads as glaring on a desktop
-/// that is otherwise dim. This rolls the highlights off without touching the
-/// file, so deleting the sidecar restores the original.
+/// 255 and plays back exactly as rendered -- and reads as overexposed on a
+/// desktop that is otherwise dim. These correct it at playback without touching
+/// the file, so deleting the sidecar restores the original. Every field is
+/// optional and neutral at 0, so `{"soften": 0.3}` still means what it did.
 struct SceneTone: Codable, Sendable, Equatable {
-    /// 0 leaves the video untouched; 1 is the strongest roll-off.
+    /// Rolls highlights off, 0...1; shadows and midtones are left alone.
     var soften: Double = 0
+    /// Stops of exposure, -2...2, applied to linear light like a camera would.
+    var exposure: Double = 0
+    /// -1...1 around mid-grey.
+    var contrast: Double = 0
+    /// -1 is greyscale, 1 doubles saturation.
+    var saturation: Double = 0
+    enum CodingKeys: String, CodingKey { case soften, exposure, contrast, saturation }
 
-    init(soften: Double = 0) { self.soften = soften }
+    init(soften: Double = 0, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0) {
+        self.soften = soften; self.exposure = exposure; self.contrast = contrast; self.saturation = saturation
+    }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         soften = try container.decodeIfPresent(Double.self, forKey: .soften) ?? 0
+        exposure = try container.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+        contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
+        saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
+    }
+    /// Neutral fields are left out, so a sidecar only says what was changed.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        let value = clamped
+        if value.soften != 0 { try container.encode(value.soften, forKey: .soften) }
+        if value.exposure != 0 { try container.encode(value.exposure, forKey: .exposure) }
+        if value.contrast != 0 { try container.encode(value.contrast, forKey: .contrast) }
+        if value.saturation != 0 { try container.encode(value.saturation, forKey: .saturation) }
     }
 
-    var clamped: SceneTone { SceneTone(soften: soften.isFinite ? min(max(soften, 0), 1) : 0) }
-    var isNeutral: Bool { clamped.soften == 0 }
+    var clamped: SceneTone {
+        func unit(_ v: Double, _ low: Double, _ high: Double) -> Double { v.isFinite ? min(max(v, low), high) : 0 }
+        return SceneTone(soften: unit(soften, 0, 1), exposure: unit(exposure, -2, 2),
+                         contrast: unit(contrast, -1, 1), saturation: unit(saturation, -1, 1))
+    }
+    var isNeutral: Bool { clamped == SceneTone() }
 
     /// Points for a tone curve over sRGB-encoded values. Shadows and midtones
     /// stay where they are; the curve bends only above the middle, so the
