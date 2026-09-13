@@ -61,9 +61,62 @@ def register_with_app(workspace):
     Only paths are recorded. The app runs --reframe without --yes, so it can never
     start a paid upscale: a lobby that still needs one stops at the quote.
     """
+    # An app launched from the Finder gets a minimal PATH without Homebrew's ffmpeg
+    # or a user-installed modal, so hand over the PATH this shell found them on.
     for key, value in (('IdlessePipelineInterpreter', sys.executable), ('IdlessePipelineScript', str(Path(__file__).resolve())),
-                       ('IdlessePipelineWorkspace', str(workspace))):
+                       ('IdlessePipelineWorkspace', str(workspace)), ('IdlessePipelinePath', os.environ.get('PATH', ''))):
         subprocess.run(['defaults', 'write', APP_DEFAULTS, key, '-string', value], check=False, capture_output=True)
+
+
+def emit(enabled, event, **fields):
+    """One machine-readable line for the app; plain logs stay human text."""
+    if enabled:
+        print('IDLESSE ' + json.dumps({'event': event, **fields}), flush=True)
+
+
+def known_titles(workspace, output):
+    """Titles already chosen for an asset: installed receipts first, then local plans."""
+    titles, installed = {}, {}
+    for plan in sorted(HERE.glob('plans/*.json')) + [HERE / 'batch.json']:
+        try:
+            for item in json.loads(plan.read_text())['items']:
+                titles.setdefault(item['id'], item['title'])
+        except (OSError, ValueError, KeyError):
+            continue
+    for receipt in output.glob('*-Restored-4K60.source.json'):
+        try:
+            data = json.loads(receipt.read_text())
+        except ValueError:
+            continue
+        if data.get('asset'):
+            titles[data['asset']] = data.get('title') or titles.get(data['asset'])
+            installed.setdefault(data['asset'], []).append(str(receipt.with_name(receipt.name.replace('.source.json', '.mp4'))))
+    return titles, installed
+
+
+def list_lobbies(workspace, output):
+    titles, installed = known_titles(workspace, output)
+    lobbies = []
+    for folder in sorted((workspace / 'assets-pc').iterdir()):
+        if not folder.is_dir() or not list(folder.glob('*.skel')):
+            continue
+        asset = folder.name
+        upscaled = restored_complete(workspace, asset)
+        entry = {'asset': asset, 'title': titles.get(asset) or default_title(asset), 'installed': installed.get(asset, []),
+                 'upscaled': upscaled}
+        if not upscaled:
+            entry['quote'] = quote(workspace, asset)
+        lobbies.append(entry)
+    return lobbies
+
+
+def find_modal():
+    found = shutil.which('modal')
+    if found:
+        return found
+    for candidate in sorted(Path.home().glob('Library/Python/*/bin/modal'), reverse=True):
+        return str(candidate)
+    return None
 
 
 def load(name):
@@ -304,6 +357,8 @@ def main():
     p.add_argument('--animation', default='Idle_01')
     p.add_argument('--crop', type=float, nargs=4, metavar=('X', 'Y', 'W', 'H'),
                    help='Unit box of the current frame to keep, from its top-left')
+    p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Use this camera recipe (before --crop)')
+    p.add_argument('--fit', action='store_true', help='Zoom and recentre the camera until the preview shows no matte')
     p.add_argument('--from-sidecar', action='store_true', help='With --reframe, use the crop box saved by the framing editor')
     p.add_argument('--preview', action='store_true', help='Render and measure the preview, then stop')
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
@@ -311,12 +366,17 @@ def main():
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
+    p.add_argument('--list', action='store_true', help='Print every extracted lobby as JSON, with install and upscale state')
+    p.add_argument('--json', action='store_true', help='Also print IDLESSE-prefixed JSON events, for the app')
     a = p.parse_args()
     workspace = a.workspace.expanduser().resolve()
     ensure_pillow(workspace)
     calibrate = load('calibrate')
     register_with_app(workspace)
     log = lambda message: print(message, flush=True)
+    if a.list:
+        print(json.dumps(list_lobbies(workspace, (a.output or DEFAULT_OUTPUT).expanduser().resolve()), indent=2))
+        return
 
     receipt = None
     if a.reframe:
@@ -353,10 +413,10 @@ def main():
             asset = adopt_source(a.source, workspace, a.asset)
         animation = a.animation
         title = a.title or default_title(asset)
-        if not title:
+        if not title and not a.preview:
             raise SystemExit(f'{asset} has no readable name; pass --title.')
         output = (a.output or DEFAULT_OUTPUT).expanduser().resolve()
-    title = safe_name(title)
+    title = safe_name(title) if title else None
     stem = stem_of(workspace, asset)
 
     # Camera: the recipe the installed export was rendered with when re-framing,
@@ -364,23 +424,37 @@ def main():
     cameras_path = workspace / 'cameras.json'
     cameras = json.loads(cameras_path.read_text()) if cameras_path.exists() else {}
     base = (receipt or {}).get('camera') or recipe_for(cameras, stem, animation)
+    if a.camera:
+        base = [round(v, 4) for v in a.camera]
     camera = crop_to_camera(base, a.crop) if a.crop else base
     original_cameras = cameras_path.read_text() if cameras_path.exists() else None
-    changed = a.crop is not None and camera != recipe_for(cameras, stem, animation)
+    changed = camera is not None and camera != recipe_for(cameras, stem, animation)
     job = workspace / f'ingest-{asset}-{datetime.datetime.now():%Y%m%d-%H%M%S}'
-    job.mkdir()
     keep_camera = False
     server = calibrate.serve(workspace)
     try:
-        if changed:
-            write_cameras(cameras_path, with_recipe(cameras, stem, animation, camera))
+        def use_camera(recipe):
+            write_cameras(cameras_path, with_recipe(cameras, stem, animation, recipe))
             calibrate.rebundle(workspace)
+        if changed:
+            use_camera(camera)
             log(f'Camera for {stem}/{animation}: {base or "fit"} -> {camera}')
 
         # Preview from the original textures: same skeleton, same framing, and free.
         preview_args = argparse.Namespace(asset=f'assets-pc/{asset}', stem=stem, animation=animation, seconds=0.0)
         edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
-        preview = job / 'preview.png'
+        if a.fit and duration:
+            for round_ in range(8):
+                if calibrate.clean(edges):
+                    break
+                camera = calibrate.next_camera(camera or [1.0, 0.5, 0.5], edges)
+                use_camera(camera)
+                changed = True
+                edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
+                log(f'  fit round {round_ + 1}: {camera} -> worst matte {edges["_native"]}px')
+        previews = workspace / 'ingest-previews'
+        previews.mkdir(exist_ok=True)
+        preview = previews / f'{asset}-{animation}.png'
         image.save(preview)
         if not duration:
             meta_animations = []
@@ -392,19 +466,27 @@ def main():
         log(f'Preview {preview}')
         log(f'  {animation}: {duration:.3f}s loop; worst matte over the loop {matte}px '
             + ('(clean)' if calibrate.clean(edges) else '(MATTE: the camera leaves part of the frame uncovered)'))
+        free = restored_complete(workspace, asset)
+        emit(a.json, 'preview', asset=asset, title=title, animation=animation, image=str(preview), seconds=duration,
+             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free,
+             quote=None if free else quote(workspace, asset), replaces=str(output / f'{title}-Restored-4K60.mp4')
+             if title and (output / f'{title}-Restored-4K60.mp4').exists() else None)
         if a.preview:
             log('Preview only: nothing exported, camera left as it was.')
             return
+        # Before anything slow or paid: an existing wallpaper is only replaced on request.
+        if (output / f'{title}-Restored-4K60.mp4').exists() and not a.replace:
+            raise SystemExit(f'{title}-Restored-4K60.mp4 already exists in {output}; pass --replace to archive it and install over it.')
         if not calibrate.clean(edges) and not a.allow_matte:
             raise SystemExit('Stopping before export because the preview shows matte; adjust the crop or pass --allow-matte.')
 
-        free = restored_complete(workspace, asset)
+        job.mkdir()
         if free:
             prepare_free_restore(workspace, asset, job)
             modal = '/usr/bin/false'
             log('Textures were upscaled before; this export is local and free.')
         else:
-            modal = shutil.which('modal')
+            modal = find_modal()
             if not modal:
                 raise SystemExit('This lobby needs upscaling, and the modal CLI is not installed.')
             confirm_paid(workspace, asset, a.yes)
@@ -423,6 +505,7 @@ def main():
             write_cameras(tracked, with_recipe(json.loads(tracked.read_text()), stem, animation, camera))
             log(f'Recorded the camera in {tracked.relative_to(REPO)}; commit it to keep the recipe.')
         log(f'\nInstalled {final}')
+        emit(a.json, 'installed', path=str(final), camera=camera)
         log('A Library source watching that folder picks it up; otherwise Import… it once. '
             'If it is on the desktop now, it reloads the next time it is chosen.')
     finally:
