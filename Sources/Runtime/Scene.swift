@@ -86,6 +86,20 @@ struct SceneFocus: Codable, Sendable, Equatable {
                                               lead: margin.bottom, trail: margin.top, t: 1 - point.y),
                       width: filled.width, height: filled.height)
     }
+
+    /// The part of the frame a display of `display` size actually shows, in unit
+    /// coordinates from the top-left: `filledFrame` read backwards, so an editor
+    /// can outline each display over the whole frame instead of guessing.
+    func visibleRegion(content: CGSize, display: CGSize, bleed: SceneBleed? = nil) -> CGRect {
+        let bounds = CGRect(origin: .zero, size: display)
+        let frame = filledFrame(content: content, in: bounds, bleed: bleed)
+        guard frame.width > 0, frame.height > 0 else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
+        let width = bounds.width / frame.width, height = bounds.height / frame.height
+        // Layer y runs bottom-up: the top of the display sits at maxY.
+        return CGRect(x: (bounds.minX - frame.minX) / frame.width,
+                      y: (frame.maxY - bounds.maxY) / frame.height,
+                      width: width, height: height)
+    }
 }
 
 /// Margin the artist painted past the intended composition so that a crop has
@@ -974,6 +988,30 @@ struct SceneFraming: Decodable {
         let data = try Data(contentsOf: path)
         guard data.count <= 4096 else { throw SceneError.invalid("Framing sidecar is too large.") }
         return try JSONDecoder().decode(SceneFraming.self, from: data)
+    }
+
+    /// Writes this framing beside `media`, leaving any keys it does not own in
+    /// place. Values that change nothing -- a centred focus, an empty margin, no
+    /// softening -- are dropped rather than written, and a sidecar left with
+    /// nothing in it is removed, so resetting a file really does restore it.
+    func write(beside media: URL) throws {
+        let path = SceneFraming.url(for: media)
+        var contents: [String: Any] = [:]
+        if let data = try? Data(contentsOf: path), data.count <= 4096,
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { contents = existing }
+        func object<T: Encodable>(_ value: T) throws -> Any {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+        }
+        let margin = bleed?.clamped
+        contents["focus"] = try focus.map(\.clamped).flatMap { $0 == .centre ? nil : try object($0) }
+        contents["bleed"] = try margin.flatMap { $0.isEmpty ? nil : try object($0) }
+        contents["tone"] = try tone.map(\.clamped).flatMap { $0.isNeutral ? nil : try object($0) }
+        if contents.isEmpty {
+            if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+            return
+        }
+        let data = try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: path, options: .atomic)
     }
 }
 

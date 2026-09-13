@@ -80,6 +80,18 @@ Do not crop bleed out at export to tidy a frame. Exports are 16:9 and displays a
 
 So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the widest display in use and let narrower ones spend the margin. Where a wide panel then shows bleed it cannot crop, that is a display-side crop to fix (#96), not a recipe to re-cut — one baked frame cannot be right for two aspects at once, because the narrow display's good view is a crop of the wide display's.
 
+### Framing in the app
+
+For any imported picture or video, Library → More… → **Adjust Framing…** (or
+Wallpaper → Adjust Framing of a File…) opens the frame with a crop box, the
+focus point, a softening slider, and a dashed outline of what every connected
+display actually shows. Save writes the same `<name>.framing.json` described
+below, and reloads the desktop once if that file is on it. Nothing is
+re-exported. The editor warns when a crop enlarges the picture well past its
+uncropped fit; that crop wants a re-rendered camera instead of a sidecar.
+
+Use `measure-bleed.py` when the edge is too subtle to place by eye.
+
 ### Measuring the bleed
 
 Do not eyeball the margin. `measure-bleed.py` profiles each edge across the
@@ -122,7 +134,7 @@ settling on a number.
 
 Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before softening anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
 
-To soften a scene that really is bright, add `tone` to its sidecar, next to any framing:
+To soften a scene that really is bright, use the editor's slider, or add `tone` to its sidecar next to any framing:
 
 ```json
 {"bleed": {"right": 0.0029}, "tone": {"soften": 0.3}}
