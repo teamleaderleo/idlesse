@@ -93,7 +93,7 @@ final class WallpaperSurface {
            let metal = renderer as? MetalSceneRenderer {
             let strip = MenuBarStrip(screen: screen)
             menuStrip = strip
-            strip.onFirstDrawable = { [weak metal] in metal?.refreshSceneTime() }
+            strip.onDrawableCatchUp = { [weak metal] in metal?.refreshSceneTime() }
             metal.mirrorFrame = { [weak strip] command, texture in strip?.copy(command: command, texture: texture) }
         }
         updateFrameRate()
@@ -590,7 +590,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         activeSharedVideoHub?.setPaused(CoverageRestPolicy.shouldRestSharedPlayback(
             globalPause: shouldPause, displayResting: resting))
     }
+    private var desktopRevealGraceUntil: TimeInterval = 0
+    private var desktopRevealPending = false
+
     private func pollCoverage() {
+        guard ProcessInfo.processInfo.systemUptime >= desktopRevealGraceUntil else { return }
         guard presentsWindows, coveragePauseEnabled, !surfaces.isEmpty, !suspended else { return }
         var own = Set<CGWindowID>()
         for surface in surfaces {
@@ -975,12 +979,27 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc func revealDesktop() {
+        // Wake covered surfaces before the system animation exposes them. This
+        // preserves explicit pause/bedtime state and avoids waiting for polling.
+        guard !desktopRevealPending else { return }
+        desktopRevealPending = true
+        let started = ProcessInfo.processInfo.systemUptime
+        desktopRevealGraceUntil = started + 1
+        coverageMonitor.reset()
+        for surface in surfaces { surface.setCovered(false) }
+        applySharedHubPause()
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = ["1"]
         configuration.activates = false
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
             configuration: configuration) { [weak self] _, error in
-                if let error { DispatchQueue.main.async { self?.showError(error.localizedDescription) } }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.desktopRevealPending = false
+                    let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000
+                    NSLog("Idlesse desktop reveal dispatch completed in %.1f ms", elapsed)
+                    if let error { self.showError(error.localizedDescription) }
+                }
             }
     }
 
@@ -1457,11 +1476,12 @@ private final class MenuBarStrip {
     private let layer = CAMetalLayer()
     private let height: CGFloat
     private(set) var frames = 0
-    var onFirstDrawable: (() -> Void)?
+    var onDrawableCatchUp: (() -> Void)?
     private let acquisition = DispatchQueue(label: "Idlesse.MenuStrip.Drawable", qos: .userInteractive)
     // Accessed only on the main thread. At most one ready drawable and one request.
     private var readyDrawable: CAMetalDrawable?
     private var acquiring = false
+    private var needsCatchUp = false
     private func requestDrawable() {
         guard !acquiring, readyDrawable == nil else { return }
         acquiring = true
@@ -1471,7 +1491,10 @@ private final class MenuBarStrip {
                 guard let self else { return }
                 self.acquiring = false
                 self.readyDrawable = drawable
-                if drawable != nil && self.frames == 0 { self.onFirstDrawable?() }
+                if drawable != nil && (self.frames == 0 || self.needsCatchUp) {
+                    self.needsCatchUp = false
+                    self.onDrawableCatchUp?()
+                }
             }
         }
     }
@@ -1510,10 +1533,10 @@ private final class MenuBarStrip {
         let size = CGSize(width: texture.width, height: rows)
         if layer.device == nil { layer.device = texture.device }
         if layer.drawableSize != size { layer.drawableSize = size }
-        guard let target = readyDrawable else { requestDrawable(); return }
+        guard let target = readyDrawable else { needsCatchUp = true; requestDrawable(); return }
         readyDrawable = nil
         guard target.texture.width == texture.width, target.texture.height == rows,
-              let blit = command.makeBlitCommandEncoder() else { requestDrawable(); return }
+              let blit = command.makeBlitCommandEncoder() else { needsCatchUp = true; requestDrawable(); return }
         blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
             sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
             sourceSize: MTLSize(width: texture.width, height: rows, depth: 1),

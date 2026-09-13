@@ -187,3 +187,15 @@ Installed build 15 verification: after Show / Restore Windows, both wallpaper
 surfaces were at -2147483600, above Forecast and Month at -2147483601.
 The smoke suite checks same-renderer retention and click handling through the
 widget-hidden transition. Wallpaper/Library/export/resume checks passed.
+
+### Reveal and menu-strip recovery
+
+Show / Restore Windows wakes coverage-resting surfaces immediately, preserving
+explicit pause state, and gives the system animation a one-second grace period
+before coverage sampling resumes. Concurrent launch requests are coalesced. The
+Mission Control completion log measures dispatch only, not visible animation latency.
+
+The menu strip requests a fresh shared compositor frame after any missed drawable,
+including resize/pause transitions, rather than recovering only on its first frame.
+This does not establish atomic presentation between the two windows or remove
+macOS menu-bar material effects. Visual hitch/blur qualification remains open.
