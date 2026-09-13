@@ -474,6 +474,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
 let app = NSApplication.shared
 
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-video-preparation"), CommandLine.arguments.count > index + 1 {
+    do { try WallpaperController.smokeVideoPreparation(url: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(EXIT_SUCCESS) }
+    catch { fputs("Video preparation checks failed: \(error)\n", stderr); exit(EXIT_FAILURE) }
+}
+
 if CommandLine.arguments.contains("--smoke-selection-transactions") {
     do { try WallpaperController.smokeSelectionTransactions(); exit(EXIT_SUCCESS) }
     catch { fputs("Selection transaction checks failed: \(error)\n", stderr); exit(EXIT_FAILURE) }

@@ -435,6 +435,44 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         print("Selection transactions passed: retain active surface, latest wins, late cancellation, failed load")
     }
 
+    static func smokeVideoPreparation(url: URL) throws {
+        guard let screen = NSScreen.main else { throw SceneError.invalid("A display is required for preparation checks") }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(12)
+            while !condition() && Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            precondition(condition(), "Video preparation timed out")
+        }
+        var errors = [String]()
+        let scene = try LocalSceneSource.read(url)
+        let clock = SceneClock()
+        let hub = SharedVideoHub(scene: scene, clock: clock) { errors.append($0) }
+        let candidate = try WallpaperSurface(screen: screen, playable: scene, clock: clock, sharedHub: hub) { errors.append($0) }
+        defer { candidate.close(); hub.close() }
+        hub.setMuted(true); hub.setPaused(false)
+        candidate.prepareForDisplay()
+        wait { candidate.isReadyForDisplay || !errors.isEmpty }
+        precondition(errors.isEmpty && candidate.isReadyForDisplay, "Real video must prepare a complete frame")
+        precondition(candidate.window.alphaValue == 0 && candidate.window.ignoresMouseEvents,
+                     "Preparation must remain invisible and noninteractive")
+        candidate.close(); hub.close()
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".mp4")
+        let badScene = SceneDescriptor(title: "Missing media", nodes: [SceneNode(content: .video(missing))])
+        let badClock = SceneClock()
+        let badHub = SharedVideoHub(scene: badScene, clock: badClock) { errors.append($0) }
+        let failed = try WallpaperSurface(screen: screen, playable: badScene, clock: badClock, sharedHub: badHub) { errors.append($0) }
+        defer { failed.close(); badHub.close() }
+        badHub.setMuted(true); badHub.setPaused(false)
+        failed.prepareForDisplay()
+        wait { !errors.isEmpty }
+        precondition(!failed.isReadyForDisplay && failed.window.alphaValue == 0,
+                     "A decoder failure must never reveal the candidate")
+        failed.close(); badHub.close()
+        precondition(!failed.window.isVisible, "Cancelled or failed candidate windows must close")
+        print("Video preparation passed: shared decoder first frame, invisible preparation, decoder failure, teardown")
+    }
+
     static func smokeResume(url: URL) throws {
         let suite = "Idlesse.ResumeTest." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

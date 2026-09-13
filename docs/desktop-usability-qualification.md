@@ -69,3 +69,21 @@ The rebuilt app restored Hina, then completed Library selection Hina → Tiger �
 `--smoke-selection-transactions` now exercises the real selection controller with a deliberately delayed source that ignores cancellation. It verifies active surface identity is retained during loading, the newer request wins even when the old provider returns late, and a failed load retains the selected scene and surface while reporting exactly one error. It runs without presenting test wallpaper windows or persisting selection. This does not yet qualify decoder failure after render preparation begins.
 
 Preparation also checks the surface generation, so display rebuilds invalidate pending candidates. Lifecycle cancellation restores the active package watcher and exits without an error dialog. Home shows a compact Loading indicator beside the current display status while preparation runs.
+
+### Launch and replacement goal audit — September 13
+
+| Requirement | Evidence |
+| --- | --- |
+| Keep backdrop visible during startup | Metal surface and menu strip stay transparent until successful GPU completion; rebuilt app restores Hina and reports it playing. |
+| Keep active scene until replacement is ready | Adoption and crossfade begin only after all candidate surfaces report ready. Live Library Hina → Tiger → Hina completed. |
+| Real first-frame readiness | `--smoke-video-preparation` with the existing Hina video passed shared-decoder preparation while candidate opacity remained zero and mouse interaction disabled. |
+| Failed decoder stays invisible and cleans up | The same test gives the decoder a missing video; it reports failure without readiness or visibility, then closes candidate and hub. |
+| Failed load preserves working scene | `--smoke-selection-transactions` checks selected URL and surface identity survive failure and only the current error is reported. |
+| Rapid selection / late cancellation | The transaction test deliberately lets a cancelled source return after the latest selection; it cannot replace the active scene or report a stale error. |
+| Loading feedback | Home keeps the active title and transport available, adding Loading… to destination status only while loading. Home smoke passes. |
+| Preserve user state | Final native UI shows Hina On Desktop, Pause available, All Displays, and Wallpaper Sound unchecked. No display settings or source media were changed. |
+| PR separation | #101 remains the product PR based on #113; the independent native provider experiment remains draft #114. |
+
+Commands run on the final build: `--smoke-video-preparation <existing Hina.mp4>`, `--smoke-selection-transactions`, and `--smoke-home`. All passed. The earlier full suite also passed after main reconciliation.
+
+Limits: readiness uses GPU command completion for Metal and AVPlayerLayer readiness for Standard; this is not a physical scanout synchronization guarantee. Keeping old and new decoders alive briefly increases transient memory. A preparation timeout preserves the previous selection rather than forcing an unready surface visible. Per-monitor hotplug and sleep behavior are guarded by generation/suspension checks but were not physically disturbed during this qualification. No universal load-time, energy, or frame-rate improvement is claimed.
