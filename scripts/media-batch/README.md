@@ -44,7 +44,7 @@ Camera recipes live in `cameras.json`, as `[zoom, cx, cy]` under the skeleton st
 "CH0179_home": {"default": [2.0, 0.93, 0.33], "Start_Idle_01": [2.3, 0.22, 0.27]}
 ```
 
-The camera actually used is recorded per export in `.source.json` and `state.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Saved video checkpoints deliberately do not regenerate just because renderer code changed. `verify.py` exits non-zero when an export has dead edges wider than 2 sample pixels; `--allow-bars` downgrades that to a warning. It reads the matte colour from each edge rather than assuming black, so it catches a renderer background left visible around the art as well as letterboxing.
+The camera actually used is recorded per export in `.source.json` and `state.json`. Akari uses both foreground and background skeletons, so its plan covers the complete background loop plus integral foreground loops. Saved video checkpoints deliberately do not regenerate just because renderer code changed. `verify.py` exits non-zero when an export shows more than 3px of renderer matte on any edge, at full resolution and worst across the sampled frames; `--allow-bars` downgrades that to a warning. It measures line by line, so a wedge or a strip down part of one edge fails as surely as letterboxing does, and it looks for both renderers' clear colours, black and the Azur adapter's `0x18202b`. An earlier version only failed an edge when a whole row or column was matte, checked a 512px downscale, and looked only at the first frame; it passed 40 of 117 exports with visible gaps, including Ibuki's 106px strip, which `calibrate.py --solve` had reported as clean for the same reason. The colour tolerance is deliberately tight (3): a clear colour survives encoding almost exactly, while very dark painted texture does not, and a looser tolerance misread Sakurako's shadowed stone as a 293px bar and five other dark scenes as matte.
 
 ### Calibrating a camera
 
@@ -79,6 +79,56 @@ These look identical to the edge check and want opposite treatment.
 Do not crop bleed out at export to tidy a frame. Exports are 16:9 and displays are not: a 16:9 frame filling a 1.545 panel is trimmed 13% on the sides, which spends the bleed and lands on a good composition for free. Cropping the bleed away at export removes that margin from every narrower display, which is a real regression in exchange for a tidier 16:9 frame. Hina was cropped this way and reverted for exactly this reason; her camera keeps the bleed deliberately.
 
 So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the widest display in use and let narrower ones spend the margin. Where a wide panel then shows bleed it cannot crop, that is a display-side crop to fix (#96), not a recipe to re-cut — one baked frame cannot be right for two aspects at once, because the narrow display's good view is a crop of the wide display's.
+
+### Measuring the bleed
+
+Do not eyeball the margin. `measure-bleed.py` profiles each edge across the
+loop and reports where the composition actually ends:
+
+```sh
+python3 scripts/media-batch/measure-bleed.py \
+  "$HOME/Pictures/Wallpapers/<collection>/<Name>.mp4" --edges left,right
+```
+
+It prints a brightness profile inward from each edge and lists candidate
+boundaries -- every strong step, with its size and the margin it would imply.
+It deliberately does not pick one. Interior art detail produces steps as large
+as a band edge does, so an automatic choice is wrong about as often as it is
+right; an early version of this script confidently reported Haruka's margin as
+849px, which was a highlight in the middle of her dress.
+
+Read the profile: **a flat plateau is margin, a smooth ramp is painted art.**
+Bleed shows up as a staircase of constant-brightness bands, because the margin
+is the composition's edge extended rather than drawn. A hard dead edge is
+unmistakable -- Haruka's black left edge steps by +105 where interior detail
+never exceeds 52. Then pass your choice back:
+
+```sh
+python3 scripts/media-batch/measure-bleed.py "<...>.mp4" \
+  --edges left,right --margin right=256 --margin left=9 --write
+```
+
+That writes `<name>.framing.json` beside the media. It needs only ffmpeg and
+the standard library, so it runs outside the study venv, and it never touches
+the video.
+
+The reason to measure rather than guess is that a value which is merely *close*
+does nothing useful. A margin declared slightly too small still leaves part of
+the band on screen; declared far too large it starts eating composition on
+every display. Confirm the geometry against the displays actually in use before
+settling on a number.
+
+### Softening a bright scene
+
+Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before softening anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
+
+To soften a scene that really is bright, add `tone` to its sidecar, next to any framing:
+
+```json
+{"bleed": {"right": 0.0029}, "tone": {"soften": 0.3}}
+```
+
+`soften` runs from 0 to 1. The wallpaper applies a tone curve at playback that leaves shadows and midtones alone and lowers the peak toward 0.82 at full strength; the video file is not touched, so deleting the key restores it. Keep it light. Around 0.25-0.35 takes the glare off; past about 0.4 whites turn grey and bright pastel art goes flat.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 

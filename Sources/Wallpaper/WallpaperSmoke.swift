@@ -95,6 +95,21 @@ enum WallpaperSmoke {
         let read = try SceneFraming.beside(media)
         precondition(read?.bleed == SceneBleed(right: 0.052), "sidecar bleed must load")
         precondition(read?.focus == SceneFocus(x: 0.25, y: 0.5), "sidecar focus must load")
+        // Tone rides in the same sidecar, alongside framing rather than instead of it.
+        try #"{"bleed":{"right":0.052},"tone":{"soften":0.35}}"#
+            .data(using: .utf8)!.write(to: SceneFraming.url(for: media))
+        let toned = try SceneFraming.beside(media)
+        precondition(toned?.bleed == SceneBleed(right: 0.052) && toned?.tone == SceneTone(soften: 0.35),
+            "tone must load without displacing framing")
+        precondition(SceneTone.beside(media)?.soften == 0.35, "the renderer's read must find it")
+        precondition(SceneTone(soften: 4).clamped.soften == 1 && SceneTone(soften: -1).clamped.soften == 0
+            && SceneTone(soften: .nan).clamped.soften == 0, "soften stays within 0...1")
+        let curve = SceneTone(soften: 1).curve
+        precondition(curve[0] == .zero && curve[1] == CGPoint(x: 0.25, y: 0.25),
+            "shadows are left alone")
+        precondition(abs(curve[4].y - 0.82) < 1e-9, "full softening lowers the peak to 0.82")
+        try #"{"tone":{"soften":0}}"#.data(using: .utf8)!.write(to: SceneFraming.url(for: media))
+        precondition(SceneTone.beside(media) == nil, "a neutral tone builds no composition")
         try "not json at all".data(using: .utf8)!.write(to: SceneFraming.url(for: media))
         precondition((try? SceneFraming.beside(media)) == nil,
             "a malformed sidecar must fail rather than pretend to a framing")

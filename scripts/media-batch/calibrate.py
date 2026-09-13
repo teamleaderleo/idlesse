@@ -24,6 +24,10 @@ verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
 from PIL import Image
 
 
+# Largest zoom change the solver makes in one round.
+MAX_ZOOM_STEP = 1.15
+
+
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args): pass
 
@@ -68,20 +72,31 @@ def worst_edges(workspace, server, args, width, height, samples):
             with tempfile.TemporaryDirectory() as tmp:
                 im, _ = render(workspace, server, args.asset, args.stem, args.animation,
                                Path(tmp) / 'f', width, height, t)
-        e = verify.bars(im.resize((512, 288), Image.LANCZOS))
+        # Measured at the render's own size and then expressed in the 512x288
+        # sample space the solver works in. Downscaling first smeared thin
+        # strips below the gate, which is how this approved Ibuki's 106px gap.
+        native = verify.bars(im)
+        sx, sy = 512 / im.width, 288 / im.height
+        e = {k: (v * sx if k in ('left', 'right') else v * sy) for k, v in native.items()}
+        e['_native'] = max(native.values())
         if worst is None:
             worst = e
         else:
-            if max(e.values()) > max(worst.values()):
+            if e['_native'] > worst['_native']:
                 shown = im
             worst = {k: max(worst[k], e[k]) for k in worst}
     return worst, shown, duration
 
 
+def clean(edges):
+    return edges['_native'] <= verify.MATTE_TOLERANCE
+
+
 def report(edges, label):
-    worst = max(edges.values())
+    worst = edges['_native']
+    edges = {k: round(v, 1) for k, v in edges.items() if k != '_native'}
     covered = 100 * (1 - (edges['left'] + edges['right']) / 512) * (1 - (edges['top'] + edges['bottom']) / 288)
-    status = 'OK  ' if worst <= 2 else 'MATTE'
+    status = 'OK  ' if worst <= verify.MATTE_TOLERANCE else 'MATTE'
     print(f'  {status} {label:22s} edges={edges}  art covers ~{covered:.0f}% of frame')
     return worst
 
@@ -152,26 +167,36 @@ def main():
                 patch_cameras(workspace, a.stem, camera)
                 rebundle(workspace)
                 e, im, _ = worst_edges(workspace, server, a, width, height, a.samples)
-                print(f'  round {round_+1}: [{camera[0]:g}, {camera[1]:.4g}, {camera[2]:.4g}] -> {e}')
-                if max(e.values()) <= 2:
+                shown = {k: round(v, 1) for k, v in e.items() if k != '_native'}
+                print(f'  round {round_+1}: [{camera[0]:g}, {camera[1]:.4g}, {camera[2]:.4g}] -> {shown}, worst {e["_native"]}px')
+                if clean(e):
                     im.save(out_root / f'{a.stem}-{a.animation}-solved.png')
                     print(f'\nsolved: [{camera[0]:g}, {camera[1]:.4g}, {camera[2]:.4g}]')
                     print(f'  preview {out_root}/{a.stem}-{a.animation}-solved.png')
                     print('  Look at it: zero matte means the frame is covered, not that the crop is good.')
                     break
                 zoom, cx, cy = camera
+                start = zoom
                 # Matte on one side alone is off-centre art and shifts away; matte
                 # summed across both sides is art too small for the frame, which no
                 # amount of shifting fixes. Zoom to close the total, then recentre on
                 # the imbalance. Shifting cx by d moves the art 512*zoom sample px.
+                # Any remaining matte gets corrected: the clean check above is in
+                # native pixels, and a gap under two sample pixels is still a gap.
                 span = e['left'] + e['right']
-                if span > 2:
+                if span > 0:
                     zoom *= 512 / max(512 - span - 2, 1)
                     cx += ((e['left'] - e['right']) / 2) / (512 * zoom)
                 span = e['top'] + e['bottom']
-                if span > 2:
+                if span > 0:
                     zoom *= 288 / max(288 - span - 2, 1)
                     cy += ((e['top'] - e['bottom']) / 2) / (288 * zoom)
+                # A wedge in a corner measures nearly the whole edge as depth, and
+                # the bar formula divides by what is left: it once "solved" Saori at
+                # zoom 302, a patch of art with no matte in it. Step instead, so the
+                # first clean round is the smallest zoom that covers the frame.
+                if zoom > start * MAX_ZOOM_STEP:
+                    zoom = start * MAX_ZOOM_STEP
                 camera = [round(zoom, 4), round(cx, 4), round(cy, 4)]
             else:
                 print(f'\nno clean recipe within {a.rounds} rounds; last was {camera}')

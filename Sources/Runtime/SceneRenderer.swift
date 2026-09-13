@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreImage
 import Metal
 import CoreVideo
 import IOKit.ps
@@ -391,6 +392,7 @@ final class SharedVideoHub {
             guard case .video(let url) = node.content else { continue }
             let item = AVPlayerItem(url: url)
             item.preferredForwardBufferDuration = 0.5
+            if let tone = SceneTone.beside(url) { item.videoComposition = tone.videoComposition(for: item.asset) }
             let player = AVQueuePlayer()
             player.isMuted = true
             player.preventsDisplaySleepDuringVideoPlayback = false
@@ -547,6 +549,8 @@ final class VideoRenderer: SceneRenderer {
         queue.preventsDisplaySleepDuringVideoPlayback = false
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = 0.5
+        // Set on the template before the looper copies it for each cycle.
+        if let tone = SceneTone.beside(url) { item.videoComposition = tone.videoComposition(for: item.asset) }
         let loop = AVPlayerLooper(player: queue, templateItem: item)
         view.playerLayer.player = queue
         self.view = view
@@ -711,4 +715,31 @@ final class LayeredSceneRenderer: SceneRenderer {
         view.subviews.forEach { $0.removeFromSuperview() }
     }
     deinit { releaseResources() }
+}
+
+extension SceneTone {
+    /// The softening named in a media file's sidecar, if it has one.
+    static func beside(_ media: URL) -> SceneTone? {
+        guard let tone = (try? SceneFraming.beside(media))??.tone, !tone.isNeutral else { return nil }
+        return tone
+    }
+
+    /// A composition applying the tone curve, or nil when there is nothing to do.
+    /// The curve is applied directly: this handler hands over display-encoded
+    /// values, and wrapping it in a linear-to-sRGB encode and decode, as Core Image
+    /// normally wants, applied it to double-encoded values and pulled the peak of
+    /// full softening down to 162 instead of 209.
+    func videoComposition(for asset: AVAsset) -> AVVideoComposition? {
+        guard !isNeutral else { return nil }
+        let points = curve.map { CIVector(x: $0.x, y: $0.y) }
+        return AVMutableVideoComposition(asset: asset) { request in
+            let source = request.sourceImage
+            let toned = source
+                .applyingFilter("CIToneCurve", parameters: [
+                    "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
+                    "inputPoint3": points[3], "inputPoint4": points[4]])
+                .cropped(to: source.extent)
+            request.finish(with: toned, context: nil)
+        }
+    }
 }

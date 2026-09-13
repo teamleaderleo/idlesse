@@ -3,6 +3,22 @@
 import argparse,fcntl,importlib.util,json,re,subprocess,time
 from pathlib import Path
 
+def idle_loops(folder,animation):
+ """Idle repeats needed to hold the ambient motion near its authored speed.
+
+ Mirrors live2d/render.js, which applies it; this side needs it first because
+ the frame count is fixed before encoding. JavaScript's Math.round rounds halves
+ up and Python's round() rounds them to even, so it is spelled out here.
+ """
+ import math
+ settings=json.loads(next(folder.glob('*.model3.json')).read_text());motions=settings['FileReferences']['Motions']
+ group=next((g for g in motions if g!=animation and re.search('effect|ambient',g,re.I)),None)
+ if not group:return 1
+ idle=json.loads((folder/motions[animation][0]['File']).read_text());amb=json.loads((folder/motions[group][0]['File']).read_text())
+ shared={c['Id'] for c in idle['Curves'] if c['Target']=='Parameter'}
+ if not any(c['Target']=='Parameter' and c['Id'] not in shared for c in amb['Curves']):return 1
+ return max(1,math.floor(amb['Meta']['Duration']/idle['Meta']['Duration']+0.5))
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--plan',type=Path,required=True);p.add_argument('--live2d-root',type=Path,required=True);p.add_argument('--spine-root',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--job',type=Path,required=True);a=p.parse_args()
  scripts=Path(__file__).resolve().parents[1]/'media-batch';spec=importlib.util.spec_from_file_location('batch',scripts/'run.py');batch=importlib.util.module_from_spec(spec);spec.loader.exec_module(batch)
@@ -19,6 +35,8 @@ def main():
     raise RuntimeError('Changed completed output: '+key)
    if final.exists():raise RuntimeError('Untracked output: '+str(final))
    meta=json.loads((root/'final-previews'/(key+'.json')).read_text());duration=next(x['duration'] for x in meta['animations'] if x['name']==item['animation']);frames=round(duration*60)
+   loops=idle_loops(root/'models'/key,item['animation']) if item['kind']=='live2d' else 1
+   duration*=loops;frames=round(duration*60)
    if not 1<=frames<=5400:raise ValueError('Loop exceeds export budget')
    if item['kind']=='spine':
     for layer in meta['layerAnimations']:
@@ -29,11 +47,12 @@ def main():
    start=time.monotonic()
    with (a.job/(key+'.log')).open('w') as log:
     subprocess.run(['python3',str(scripts/'encode.py'),str(temp),str(frames),'3840','2160','models/'+key,key,item['animation']],cwd=root,stdout=log,stderr=log,check=True,timeout=1900)
-   verified=batch.probe(temp);stream=verified['streams'][0]
+   batch.normalize_colour(temp,a.job/(key+'.log'));verified=batch.probe(temp);stream=verified['streams'][0]
    rendered=json.loads(Path(str(temp)+'.json').read_text()) if Path(str(temp)+'.json').exists() else {}
    assert (stream['width'],stream['height'],stream['r_frame_rate'],int(stream['nb_read_frames']))==(3840,2160,'60/1',frames)
+   if item['kind']=='live2d' and rendered.get('idleLoops',1)!=loops:raise RuntimeError(f"Renderer chose {rendered.get('idleLoops')} idle loops, export planned {loops}")
    poster=a.output/(title+'.jpg');subprocess.run(['ffmpeg','-v','error','-y','-ss',str(min(2,duration/2)),'-i',str(temp),'-frames:v','1','-vf','scale=1024:-2','-q:v','3',str(poster)],check=True)
    temp.replace(final)
-   receipt={**item,'path':str(final.resolve()),'poster':str(poster.resolve()),'sha256':batch.digest(final),'probe':verified,'camera':rendered.get('camera'),'seconds':round(time.monotonic()-start,2),'source':'Game assets mirrored by azurlane.nagami.moe; not an official wallpaper download','sourceAssetResolution':'Original downloaded textures, rendered at 4K; not AI-upscaled','limitations':'Idle only; no interactive gestures, audio or Unity-specific effects. Visual loop review required.'}
+   receipt={**item,'path':str(final.resolve()),'poster':str(poster.resolve()),'sha256':batch.digest(final),'probe':verified,'camera':rendered.get('camera'),'ambient':rendered.get('ambient'),'seconds':round(time.monotonic()-start,2),'source':'Game assets mirrored by azurlane.nagami.moe; not an official wallpaper download','sourceAssetResolution':'Original downloaded textures, rendered at 4K; not AI-upscaled','limitations':'Idle only; no interactive gestures, audio or Unity-specific effects. Visual loop review required.'}
    batch.save(final.with_suffix('.source.json'),receipt);state['items'][key]=receipt;batch.save(state_path,state);print('Completed',item['title'],frames,'frames',receipt['seconds'],'seconds',flush=True)
 if __name__=='__main__':main()

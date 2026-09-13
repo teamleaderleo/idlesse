@@ -47,6 +47,38 @@ def probe(path):
     return result
 
 
+def normalize_colour(path, log):
+    """Record how the pixels are encoded, without re-encoding them.
+
+    Both encoders leave colour metadata to chance. The frame encoder's FFmpeg
+    call set none at all, and WebCodecs tagged some exports fully and others
+    with no transfer function. macOS reads a missing transfer as video gamma and
+    lifts midtones about ten levels, so 38 of 96 lobby exports showed washed
+    out and desaturated against their own renders -- Hina's median rendered at
+    74 and displayed at 84, Shiroko's at 143 and 154. Rewriting the tags alone
+    made both display exactly as rendered.
+
+    The renderer draws sRGB, so transfer and primaries are always sRGB/BT.709.
+    Range and any matrix the stream declares are kept; an undeclared matrix is
+    BT.601, FFmpeg's default RGB conversion, which matched both untagged
+    families on saturation where BT.709 overshot.
+    """
+    tags = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=color_range,color_space,color_transfer,color_primaries', '-of', 'json', str(path)]))['streams'][0]
+    colour_range = tags.get('color_range') if tags.get('color_range') in ('tv', 'pc') else 'tv'
+    matrix = tags.get('color_space') if tags.get('color_space') in ('bt709', 'smpte170m') else 'smpte170m'
+    if (tags.get('color_transfer'), tags.get('color_primaries'), tags.get('color_space'), tags.get('color_range')) == ('iec61966-2-1', 'bt709', matrix, colour_range):
+        return False
+    codes = {'bt709': 1, 'smpte170m': 6}
+    retagged = path.with_name(path.stem + '.colour' + path.suffix)
+    run(['ffmpeg', '-v', 'error', '-y', '-i', str(path), '-map', '0', '-c', 'copy',
+         '-bsf:v', f"hevc_metadata=colour_primaries=1:transfer_characteristics=13:matrix_coefficients={codes[matrix]}:video_full_range_flag={int(colour_range == 'pc')}",
+         '-color_primaries', 'bt709', '-color_trc', 'iec61966-2-1', '-colorspace', matrix, '-color_range', colour_range,
+         '-tag:v', 'hvc1', '-movflags', '+faststart+write_colr', str(retagged)], log)
+    retagged.replace(path)
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, required=True, help='Prepared Spine render workspace')
@@ -151,6 +183,7 @@ def main():
                         Path(str(temporary) + '.json').unlink(missing_ok=True)
                         run([str(root / 'render')] + frame_args, job / (title + '.log'), root, 1900,
                             env={**os.environ, 'IDLESSE_RENDER_PORT': str(server.server_port)})
+            normalize_colour(temporary, job / (title + '.log'))
             result = probe(temporary); v = result['streams'][0]
             if (v['width'], v['height'], v['r_frame_rate'], int(v['nb_read_frames'])) != (3840, 2160, '60/1', frames):
                 raise RuntimeError('Invalid encoded stream: ' + title)
