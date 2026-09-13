@@ -274,3 +274,8 @@ Refresh Preview also invalidates the selected gallery/list thumbnail. Revision-t
 requests prevent older queued results from overwriting the refresh. Still thumbnails
 use ImageIO's 320-pixel thumbnail path only; failed decoding leaves the placeholder
 rather than falling back to allocating a full-resolution bitmap.
+
+The current-wallpaper popover follows live playback changes while open, including
+title, destination, pause state, sound, and availability of scene controls. Pause
+availability matches the menu extra (animated playback only). Authored package
+titles appear in Home; raw media keeps its cleaned display filename.

@@ -1415,6 +1415,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         surfaces.forEach { _ = $0.updateScene(playable) }
         updateMenu()
     }
+    var currentSceneTitle: String? {
+        selectedURL?.pathExtension.lowercased() == "idlesse" ? playable?.title : nil
+    }
+    var canPausePlayback: Bool { isRunning && selectedIsAnimated }
     var hasSceneControls: Bool { playable?.parameters.isEmpty == false && !isLoading }
     var hasVideoContent: Bool { playable?.allNodes.contains { $0.kind == .video } == true }
     @objc func editControls() {

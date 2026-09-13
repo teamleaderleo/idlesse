@@ -66,6 +66,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let pauseButton = NSButton(frame: .zero)
     private let nextButton = NSButton(frame: .zero)
     private var nowPlayingPopover: NSPopover?
+    private var refreshPlaybackPopover: (() -> Void)?
     private var cachedThumbnailURL: URL?
     private var cachedThumbnail: NSImage?
 
@@ -516,6 +517,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func togglePause() { wallpaper.togglePause(); refreshState() }
 
     @objc private func showNowPlaying() {
+        nowPlayingPopover?.close()
         let popover = NSPopover()
         let controller = NSViewController()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: wallpaper.hasSceneControls ? 180 : 142))
@@ -527,7 +529,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         stop.bezelStyle = .rounded
         stop.isEnabled = wallpaper.selectedURL != nil
         let pause = NSButton(title: wallpaper.pausedByUser ? "Resume" : "Pause", target: self, action: #selector(togglePopoverPause))
-        pause.isEnabled = wallpaper.selectedURL != nil
+        pause.isEnabled = wallpaper.canPausePlayback
         let sound = NSButton(checkboxWithTitle: "Wallpaper Sound", target: self, action: #selector(togglePopoverSound))
         sound.state = wallpaper.soundEnabled ? .on : .off
         sound.isEnabled = wallpaper.hasVideoContent
@@ -550,6 +552,18 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         popover.contentViewController = controller
         popover.behavior = .transient
         nowPlayingPopover = popover
+        refreshPlaybackPopover = { [weak self, weak popover, weak title, weak destination, weak pause, weak stop, weak sound, weak controls] in
+            guard let self, let popover, popover.isShown else { return }
+            title?.stringValue = self.nowPlayingButton.title
+            destination?.stringValue = self.destinationLabel.stringValue
+            pause?.title = self.wallpaper.pausedByUser ? "Resume" : "Pause"
+            pause?.isEnabled = self.wallpaper.canPausePlayback
+            stop?.isEnabled = self.wallpaper.selectedURL != nil
+            sound?.state = self.wallpaper.soundEnabled ? .on : .off
+            sound?.isEnabled = self.wallpaper.hasVideoContent
+            controls?.isHidden = !self.wallpaper.hasSceneControls
+            popover.contentSize = NSSize(width: 320, height: self.wallpaper.hasSceneControls ? 180 : 142)
+        }
         popover.show(relativeTo: nowPlayingButton.bounds, of: nowPlayingButton, preferredEdge: .maxY)
     }
 
@@ -575,7 +589,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private func refreshState() {
         let url = wallpaper.selectedURL
         library.updatePlayingURL(url)
-        let title = url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
+        let title = wallpaper.currentSceneTitle ?? url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
         nowPlayingButton.title = title
         let standardized = url?.standardizedFileURL
         if standardized != cachedThumbnailURL {
@@ -587,7 +601,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
         pauseButton.toolTip = wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper"
         pauseButton.setAccessibilityLabel(pauseButton.toolTip)
-        pauseButton.isEnabled = url != nil
+        pauseButton.isEnabled = wallpaper.canPausePlayback
         previousButton.isEnabled = library.hasCycleCandidates
         nextButton.isEnabled = library.hasCycleCandidates
         previousButton.toolTip = library.hasCycleCandidates ? "Previous wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
@@ -596,6 +610,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
         if let rotation = rotationSummary() { parts.append(rotation) }
         destinationLabel.stringValue = parts.joined(separator: " · ")
+        refreshPlaybackPopover?()
         refreshDisplaysSummary()
     }
 
