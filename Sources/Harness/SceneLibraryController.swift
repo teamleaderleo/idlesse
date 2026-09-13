@@ -133,6 +133,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
     private let apply = NSButton(title: "Set Wallpaper", target: nil, action: nil)
     private let edit = NSButton(title: "Edit in Studio", target: nil, action: nil)
+    private let adjust = NSButton(title: "Adjust…", target: nil, action: nil)
     private let clearSearchButton = NSButton(title: "Clear search", target: nil, action: nil)
     private let more = NSPopUpButton(frame: .zero, pullsDown: true)
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
@@ -348,12 +349,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let menu = NSMenu()
             guard let self else { return menu }
             self.selected = item
-            for (title, action) in [("Set Wallpaper", #selector(useScene)),
+            menu.autoenablesItems = false
+            for (title, action) in [(self.apply.isEnabled ? "Set Wallpaper" : "On Desktop", #selector(useScene)),
+                                    ("Adjust…", #selector(frameScene)),
                                     ("Edit in Studio", #selector(editScene)),
                                     ("Make a Copy in Studio", #selector(duplicateScene)),
                                     (self.store.catalog.favorites.contains(item.id) ? "Remove Favorite" : "Add Favorite", #selector(toggleFavorite))] {
                 let entry = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
                 entry.target = self
+                if action == #selector(useScene) { entry.isEnabled = self.apply.isEnabled }
+                if action == #selector(frameScene) { entry.isEnabled = self.canAdjustSelection }
             }
             return menu
         }
@@ -373,6 +378,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.target = self; favorite.action = #selector(toggleFavorite)
         apply.target = self; apply.action = #selector(useScene)
         edit.target = self; edit.action = #selector(editScene)
+        adjust.target = self; adjust.action = #selector(frameScene)
+        adjust.bezelStyle = .rounded
+        adjust.toolTip = "Adjust crop and picture settings without changing the source file"
         clearSearchButton.target = self; clearSearchButton.action = #selector(clearSearch)
         clearSearchButton.bezelStyle = .rounded
         clearSearchButton.isHidden = true
@@ -389,9 +397,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         livePreviewButton.toolTip = "Play a muted preview here without changing the desktop"
         let playbackActions = NSStackView(views: [apply, livePreviewButton])
         playbackActions.spacing = 8
-        let editingActions = NSStackView(views: [edit, more])
+        let editingActions = NSStackView(views: [adjust, more])
+        let studioActions = NSStackView(views: [edit])
         editingActions.spacing = 8
-        let primary = NSStackView(views: [playbackActions, editingActions, clearSearchButton])
+        let primary = NSStackView(views: [playbackActions, editingActions, studioActions, clearSearchButton])
         primary.spacing = 8
         for button in [importButton, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
@@ -977,7 +986,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
         more.item(at: 3)?.isEnabled = selected?.entry != nil
-        more.item(at: 4)?.isEnabled = selected?.entry != nil && selected?.entry?.mediaType != "scene"
+        adjust.isEnabled = canAdjustSelection
+        more.item(at: 4)?.isEnabled = canAdjustSelection
         collectionActions.removeAllItems()
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
@@ -1557,6 +1567,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         act(editing: false)
     }
     @objc private func editScene() { act(editing: true) }
+    private var canAdjustSelection: Bool {
+        selected?.entry != nil && selected?.entry?.mediaType != "scene"
+    }
+
     @objc private func frameScene() {
         guard let selected, selected.entry != nil else { return }
         do {
@@ -1720,6 +1734,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.poster.image != nil, controller.detail.stringValue)
         controller.updatePlayingURL(try controller.open(controller.selected!).url)
         precondition(controller.apply.title == "On Desktop" && !controller.apply.isEnabled)
+        let playingMenu = controller.gridView.onMenu!(controller.selected!)
+        precondition(playingMenu.item(at: 0)?.title == "On Desktop" && playingMenu.item(at: 0)?.isEnabled == false)
+        precondition(!controller.adjust.isEnabled && playingMenu.item(at: 1)?.isEnabled == false,
+                     "Package scenes use Studio, not raw-media adjustments")
         controller.updatePlayingURL(nil)
         precondition(controller.apply.title == "Set Wallpaper" && controller.apply.isEnabled)
 
