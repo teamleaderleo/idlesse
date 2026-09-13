@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 import ImageIO
+import CoreImage
 
 /// Native reference library with one on-demand poster, never a grid of live renderers.
 final class SceneLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
@@ -93,6 +94,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
     private var pendingThumbnails: [String: [(NSImage) -> Void]] = [:]
+    private var resolvedMediaURLs: [String: URL] = [:]
     private var thumbnailRevisions: [String: UInt] = [:]
     private var thumbnailJobsStarted = 0
     private let scroll = NSScrollView()
@@ -136,13 +138,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
     private enum PosterRevision: Equatable, Sendable {
         case package(ScenePackageWriter.Revision)
-        case file(Date?, Int?)
+        case file(Date?, Int?, Data?)
         static func read(_ source: URL) throws -> PosterRevision {
             var url = source
             url.removeAllCachedResourceValues()
             if url.pathExtension.lowercased() == "idlesse" { return .package(try ScenePackageWriter.revision(of: url)) }
             let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            return .file(values.contentModificationDate, values.fileSize)
+            // A crop/color save changes the sidecar, not the movie. Keep the
+            // bounded sidecar bytes in the revision so even same-size edits
+            // invalidate a previously rendered preview.
+            let handle = try? FileHandle(forReadingFrom: SceneFraming.url(for: url))
+            defer { try? handle?.close() }
+            let framing = try handle?.read(upToCount: 4097)
+            return .file(values.contentModificationDate, values.fileSize, framing)
         }
     }
     private var cache: [String: (image: NSImage, note: String, revision: PosterRevision)] = [:]
@@ -234,6 +242,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         } catch { reportTask("Rotation: " + error.localizedDescription) }
     }
     private var onUse: (URL) -> Void
+    /// Opens the framing editor for an imported picture or video, handing over
+    /// the access that keeps its folder readable and writable while it is open.
+    var onFrame: ((URL, AnyObject?) -> Void)?
     private var onEdit: (URL, Bool) -> Void
 
     init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
@@ -366,7 +377,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         clearSearchButton.bezelStyle = .rounded
         clearSearchButton.isHidden = true
         remove.target = self; remove.action = #selector(removeScene)
-        more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library"])
+        more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library", "Adjust Framing…"])
         more.menu?.autoenablesItems = false
         more.target = self; more.action = #selector(moreAction)
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
@@ -742,7 +753,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let self else { return }
             let source = opened.url
             let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+            let framingData = Self.thumbnailFramingData(source)
+            let framing = framingData.flatMap { try? JSONDecoder().decode(SceneFraming.self, from: $0) }
+            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)|\(framingData?.base64EncodedString() ?? "")" as NSString
             if let image = self.thumbnails.object(forKey: key) {
                 finish(image)
                 return
@@ -766,11 +779,44 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
             } else { image = nil }
             guard let image else { finish(nil); return }
-            let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-            self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
+            let rendered = Self.framedThumbnail(image, framing: framing,
+                video: ["mp4", "mov", "m4v"].contains(source.pathExtension.lowercased())) ?? image
+            let result = NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height))
+            self.thumbnails.setObject(result, forKey: key, cost: Int(rendered.width * rendered.height * 4))
             finish(result)
         }
     }
+    private static let thumbnailColorContext = CIContext(options: [.cacheIntermediates: false])
+
+    private static func thumbnailFramingData(_ media: URL) -> Data? {
+        guard media.pathExtension.lowercased() != "idlesse",
+              let handle = try? FileHandle(forReadingFrom: SceneFraming.url(for: media)) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 4097), data.count <= 4096 else { return nil }
+        return data
+    }
+
+    /// Work on the bounded poster, never a second live renderer or full video decode.
+    /// Gallery cards use a 16:9 viewport; each actual display can crop differently.
+    private static func framedThumbnail(_ original: CGImage, framing: SceneFraming?, video: Bool) -> CGImage? {
+        guard let framing else { return original }
+        var image = original
+        if video, let tone = framing.tone, !tone.isNeutral {
+            let source = CIImage(cgImage: image)
+            image = thumbnailColorContext.createCGImage(tone.apply(to: source), from: source.extent) ?? image
+        }
+        guard framing.focus != nil || framing.bleed?.isEmpty == false else { return image }
+        guard let context = CGContext(data: nil, width: 320, height: 180, bitsPerComponent: 8,
+            bytesPerRow: 1280, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let frame = (framing.focus ?? .centre).filledFrame(
+            content: CGSize(width: image.width, height: image.height), in: bounds, bleed: framing.bleed)
+        context.interpolationQuality = .high
+        context.draw(image, in: frame)
+        return context.makeImage()
+    }
+
     private static func listThumbnail(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -823,21 +869,35 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         preview()
     }
     private func open(_ item: Item) throws -> OpenedItem {
-        if let builtin = item.builtin { return OpenedItem(url: builtin, access: nil) }
+        if let builtin = item.builtin {
+            resolvedMediaURLs[item.id] = builtin.standardizedFileURL
+            return OpenedItem(url: builtin, access: nil)
+        }
         guard let entry = item.entry else { throw CocoaError(.fileNoSuchFile) }
         let access = try store.access(entry)
+        resolvedMediaURLs[item.id] = access.url.standardizedFileURL
         return OpenedItem(url: access.url, access: access)
     }
-    @objc private func refreshPreview() {
-        if let selected {
-            cache.removeValue(forKey: selected.id)
-            cacheOrder.removeAll { $0 == selected.id }
-            thumbnailRevisions[selected.id, default: 0] &+= 1
-            gridView.refreshThumbnail(id: selected.id)
-            if let index = items.firstIndex(where: { $0.id == selected.id }) {
-                table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
-            }
+    private func invalidatePreview(id: String) {
+        cache.removeValue(forKey: id)
+        cacheOrder.removeAll { $0 == id }
+        thumbnailRevisions[id, default: 0] &+= 1
+        gridView.refreshThumbnail(id: id)
+        if let index = items.firstIndex(where: { $0.id == id }) {
+            table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
         }
+    }
+
+    /// Refresh already visited rows without resolving every bookmark or mounting sources.
+    func mediaDidChange(_ url: URL) {
+        let key = url.standardizedFileURL
+        let ids = resolvedMediaURLs.compactMap { $0.value == key ? $0.key : nil }
+        for id in ids { invalidatePreview(id: id) }
+        if let selected, ids.contains(selected.id) { preview() }
+    }
+
+    @objc private func refreshPreview() {
+        if let selected { invalidatePreview(id: selected.id) }
         preview()
     }
     @objc private func clearTaskStatus() { reportTask("") }
@@ -917,6 +977,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
         more.item(at: 3)?.isEnabled = selected?.entry != nil
+        more.item(at: 4)?.isEnabled = selected?.entry != nil && selected?.entry?.mediaType != "scene"
         collectionActions.removeAllItems()
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
@@ -1255,6 +1316,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         importScenes(urls)
         return true
     }
+    /// Adds a file the export pipeline just installed, as if it were imported by hand.
+    func importInstalledMedia(_ url: URL) { importScenes([url]) }
     private func importScenes(_ urls: [URL]) {
         guard conversionTask == nil else {
             reportTask("An import is already running. Try again when it finishes.")
@@ -1302,6 +1365,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         case 1: refreshPreview()
         case 2: duplicateScene()
         case 3: removeScene()
+        case 4: frameScene()
         default: break
         }
     }
@@ -1493,6 +1557,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         act(editing: false)
     }
     @objc private func editScene() { act(editing: true) }
+    @objc private func frameScene() {
+        guard let selected, selected.entry != nil else { return }
+        do {
+            let opened = try open(selected)
+            guard MediaFramingController.canFrame(opened.url) else {
+                opened.access?.close()
+                detail.stringValue = "Framing applies to imported pictures and videos. Scenes keep theirs in Studio."
+                return
+            }
+            onFrame?(opened.url, opened.access)
+        } catch { detail.stringValue = error.localizedDescription }
+    }
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }
@@ -1555,6 +1631,35 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         try Data([1, 2]).write(to: raw)
         let newRevision = try PosterRevision.read(raw)
         precondition(oldRevision != newRevision)
+        try Data(#"{"focus":{"x":0.2,"y":0.5}}"#.utf8).write(to: SceneFraming.url(for: raw))
+        let croppedRevision = try PosterRevision.read(raw)
+        precondition(croppedRevision != newRevision, "Sidecar creation must invalidate posters")
+        try Data(#"{"focus":{"x":0.8,"y":0.5}}"#.utf8).write(to: SceneFraming.url(for: raw))
+        let changedCropRevision = try PosterRevision.read(raw)
+        precondition(changedCropRevision != croppedRevision, "Same-size framing edits must invalidate posters")
+        try FileManager.default.removeItem(at: SceneFraming.url(for: raw))
+        let resetCropRevision = try PosterRevision.read(raw)
+        precondition(resetCropRevision == newRevision, "Resetting framing must invalidate the cropped poster")
+        let pixels = CGContext(data: nil, width: 320, height: 180, bitsPerComponent: 8,
+            bytesPerRow: 1280, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        pixels.setFillColor(CGColor(red: 0.5, green: 0, blue: 0, alpha: 1))
+        pixels.fill(CGRect(x: 0, y: 0, width: 160, height: 180))
+        pixels.setFillColor(CGColor(red: 0, green: 0.5, blue: 0, alpha: 1))
+        pixels.fill(CGRect(x: 160, y: 0, width: 160, height: 180))
+        let original = pixels.makeImage()!
+        let cropped = framedThumbnail(original, framing: SceneFraming(bleed: SceneBleed(left: 0.4)), video: false)!
+        let cropBytes = Array((cropped.dataProvider!.data!) as Data)
+        let originalBytes = Array((original.dataProvider!.data!) as Data)
+        let sample = (90 * 320 + 120) * 4
+        precondition(originalBytes[sample] > originalBytes[sample + 1])
+        precondition(cropBytes[sample + 1] > cropBytes[sample], "Gallery crop must hide the declared left margin")
+        let darker = framedThumbnail(original, framing: SceneFraming(tone: SceneTone(exposure: -1)), video: true)!
+        let darkBytes = Array((darker.dataProvider!.data!) as Data)
+        precondition(darker.width == 320 && darker.height == 180)
+        precondition(darkBytes != originalBytes, "Video tone must change the bounded poster")
+        let untouched = framedThumbnail(original, framing: SceneFraming(tone: SceneTone(exposure: -1)), video: false)!
+        precondition(untouched === original, "Image thumbnails must match the video-only tone policy")
         var copied = false
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
@@ -1629,6 +1734,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         while thumbnailCompletions < 2 && Date() < thumbDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         precondition(thumbnailCompletions == 2 && controller.pendingThumbnails[duplicateRequest.id] == nil)
         print("Shared thumbnail: 2 consumers, 1 job, \(Int((ProcessInfo.processInfo.systemUptime - thumbnailStart) * 1000)) ms")
+
+        let beforeSaveRevision = controller.thumbnailRevisions[duplicateRequest.id, default: 0]
+        let selectedBeforeSave = controller.selected?.id
+        controller.mediaDidChange(controller.resolvedMediaURLs[duplicateRequest.id]!)
+        precondition(controller.thumbnailRevisions[duplicateRequest.id] == beforeSaveRevision + 1)
+        precondition(controller.selected?.id == selectedBeforeSave && !applied,
+                     "Saving framing refreshes previews without selecting or applying a wallpaper")
 
         var staleDelivered = false
         var refreshedThumbnail: NSImage?

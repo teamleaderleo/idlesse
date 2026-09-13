@@ -189,6 +189,19 @@ private final class VideoWallpaperView: NSView {
 /// Anything single-frame (or undecodable) throws and the caller falls back to
 /// StaticImageRenderer. Metal scenes show the first frame; animation lives in
 /// the Standard compositor.
+extension ImageCanvasView {
+    func setSceneFraming(focus: SceneFocus?, bleed: SceneBleed?) {
+        fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
+        if focus != nil || bleed?.isEmpty == false {
+            fillFrame = { content, bounds in
+                (focus ?? .centre).filledFrame(content: content, in: bounds, bleed: bleed)
+            }
+        } else {
+            fillFrame = nil
+        }
+    }
+}
+
 final class AnimatedImageRenderer: SceneRenderer {
     let view: NSView
     private let canvas = ImageCanvasView()
@@ -206,7 +219,7 @@ final class AnimatedImageRenderer: SceneRenderer {
             loopCount: loops, frameCount: frames)
     }
 
-    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil) throws {
+    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 1 else {
             throw SceneError.invalid("Not an animated image.")
@@ -221,7 +234,7 @@ final class AnimatedImageRenderer: SceneRenderer {
         self.count = count
         self.delays = delays
         view = canvas
-        canvas.fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
+        canvas.setSceneFraming(focus: focus, bleed: bleed)
         canvas.frame = bounds
         canvas.scalingMode = .fill
         canvas.backdropColor = .clear
@@ -293,7 +306,7 @@ final class StaticImageRenderer: SceneRenderer {
         }
         let canvas = ImageCanvasView(frame: bounds)
         canvas.scalingMode = .fill
-        canvas.fillFocus = playable.focus.map { CGPoint(x: $0.x, y: $0.y) }
+        canvas.setSceneFraming(focus: playable.focus, bleed: playable.bleed)
         canvas.currentImage = image
         view = canvas
     }
@@ -634,10 +647,10 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds, focus: playable.focus) {
+                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed) {
                         child = animated
                     } else {
-                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, nodes: [node], focus: playable.focus), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
+                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, nodes: [node], focus: playable.focus, bleed: playable.bleed), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed, onError: onError)
@@ -685,9 +698,9 @@ final class LayeredSceneRenderer: SceneRenderer {
         let bounds = view.bounds
         for (index, node) in nodes.enumerated() {
             if let canvas = children[index].view as? ImageCanvasView {
-                canvas.fillFocus = scene.focus.map { CGPoint(x: $0.x, y: $0.y) }
+                canvas.setSceneFraming(focus: scene.focus, bleed: scene.bleed)
             }
-            if let video = children[index].view as? VideoWallpaperView { video.focus = scene.focus }
+            if let video = children[index].view as? VideoWallpaperView { video.focus = scene.focus; video.bleed = scene.bleed }
             children[index].view.alphaValue = node.visible ? node.opacity : 0
             let t = node.transform
             var matrix = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,
@@ -728,22 +741,41 @@ extension SceneTone {
         return tone
     }
 
-    /// A composition applying the tone curve, or nil when there is nothing to do.
-    /// The curve is applied directly: this handler hands over display-encoded
-    /// values, and wrapping it in a linear-to-sRGB encode and decode, as Core Image
-    /// normally wants, applied it to double-encoded values and pulled the peak of
-    /// full softening down to 162 instead of 209.
+    /// A composition applying these adjustments, or nil when there is nothing to do.
     func videoComposition(for asset: AVAsset) -> AVVideoComposition? {
         guard !isNeutral else { return nil }
-        let points = curve.map { CIVector(x: $0.x, y: $0.y) }
+        let tone = self
         return AVMutableVideoComposition(asset: asset) { request in
-            let source = request.sourceImage
-            let toned = source
-                .applyingFilter("CIToneCurve", parameters: [
-                    "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
-                    "inputPoint3": points[3], "inputPoint4": points[4]])
-                .cropped(to: source.extent)
-            request.finish(with: toned, context: nil)
+            request.finish(with: tone.apply(to: request.sourceImage), context: nil)
         }
+    }
+
+    /// Adjusts a frame inside Core Image's colour-managed working space, which
+    /// is linear: the composition handler decodes the video into it and encodes
+    /// the result again. Exposure is therefore a plain multiplication of light,
+    /// and CIToneCurve converts to sRGB internally to apply its points, so the
+    /// soften curve is quoted in display values. Wrapping either in a manual
+    /// linear-to-sRGB encode and decode converts twice, which is how full
+    /// softening once pulled the peak down to 162 instead of 209.
+    func apply(to source: CIImage) -> CIImage {
+        let value = clamped
+        guard !value.isNeutral else { return source }
+        var image = source
+        if value.exposure != 0 {
+            image = image.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: value.exposure])
+        }
+        if value.contrast != 0 || value.saturation != 0 {
+            image = image.applyingFilter("CIColorControls", parameters: [
+                kCIInputContrastKey: 1 + value.contrast * 0.5,
+                kCIInputSaturationKey: 1 + value.saturation,
+                kCIInputBrightnessKey: 0])
+        }
+        if value.soften != 0 {
+            let points = value.curve.map { CIVector(x: $0.x, y: $0.y) }
+            image = image.applyingFilter("CIToneCurve", parameters: [
+                "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
+                "inputPoint3": points[3], "inputPoint4": points[4]])
+        }
+        return image.cropped(to: source.extent)
     }
 }
