@@ -3,6 +3,24 @@ import AppKit
 @main
 enum WallpaperPolicyTests {
     static func main() {
+        let mirror = MirrorPresentationTiming()
+        let lateSource = mirror.makePair()
+        lateSource.record(source: false, time: 1.02)
+        precondition(mirror.summary.contains("no presented pairs"))
+        lateSource.record(source: true, time: 1)
+        lateSource.record(source: true, time: 9)
+        let earlySource = mirror.makePair()
+        earlySource.record(source: true, time: 2)
+        earlySource.record(source: false, time: 1.99)
+        let invalid = mirror.makePair()
+        invalid.record(source: true, time: .nan)
+        invalid.record(source: false, time: 0)
+        mirror.recordMiss()
+        precondition(mirror.summary.contains("2 pairs"))
+        precondition(mirror.summary.contains("15.00 ms"))
+        precondition(mirror.summary.contains("max 20.00 ms"))
+        precondition(mirror.summary.contains("1 missed copies"))
+
         var reveal = DesktopRevealPolicy()
         precondition(reveal.allowsCoverage(at: 0))
         precondition(reveal.begin())

@@ -200,3 +200,13 @@ The menu strip requests a fresh shared compositor frame after any missed drawabl
 including resize/pause transitions, rather than recovering only on its first frame.
 This does not establish atomic presentation between the two windows or remove
 macOS menu-bar material effects. Visual hitch/blur qualification remains open.
+
+Copy Diagnostics includes menu-strip presentation timing per surface: matched
+source/mirror drawable pairs, mean absolute skew, maximum skew, and missed copies.
+Callbacks may arrive in either order; invalid/unpresented timestamps are excluded.
+Metrics retain counters only. These timestamps measure reported presentation, not
+physical panel scanout or menu-bar blur. A disabled entry means no strip exists.
+
+A live check on the existing two-surface Hina video returned disabled for both
+strips. Plain video can currently use Standard even when menu animation is enabled;
+the renderer-selection condition still needs reconciliation before timing that path.

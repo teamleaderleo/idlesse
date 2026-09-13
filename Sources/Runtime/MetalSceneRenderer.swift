@@ -181,7 +181,7 @@ extension SceneNode.Shader {
 /// Keep the layer renderer as the default until color and power parity are measured.
 final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     // Optional GPU-only presentation consumer; it must not retain the source drawable.
-    var mirrorFrame: ((MTLCommandBuffer, MTLTexture) -> Void)? {
+    var mirrorFrame: ((MTLCommandBuffer, CAMetalDrawable) -> Void)? {
         didSet { metal.framebufferOnly = mirrorFrame == nil }
     }
 
@@ -781,7 +781,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         drawable.addPresentedHandler { drawable in
             presentations.record(presentedTime: drawable.presentedTime)
         }
-        mirrorFrame?(command, drawable.texture)
+        mirrorFrame?(command, drawable)
         command.present(drawable)
         command.commit()
         needsFrame = false

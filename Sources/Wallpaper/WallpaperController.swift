@@ -51,6 +51,7 @@ final class WallpaperSurface {
     var presentedFrameCount: Int? { renderer.presentedFrameCount }
     var gpuTotals: (seconds: Double, frames: Int)? { renderer.gpuTotals }
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
+    var menuStripTiming: String { menuStrip?.timing.summary ?? "disabled" }
     var menuStripWindowNumber: Int? { menuStrip?.window.windowNumber }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
@@ -94,7 +95,7 @@ final class WallpaperSurface {
             let strip = MenuBarStrip(screen: screen)
             menuStrip = strip
             strip.onDrawableCatchUp = { [weak metal] in metal?.refreshSceneTime() }
-            metal.mirrorFrame = { [weak strip] command, texture in strip?.copy(command: command, texture: texture) }
+            metal.mirrorFrame = { [weak strip] command, drawable in strip?.copy(command: command, source: drawable) }
         }
         updateFrameRate()
     }
@@ -467,6 +468,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         Coverage rest/resume thresholds: \(coverageMonitor.policy.restThreshold) / \(coverageMonitor.policy.resumeThreshold)
         Coverage stable samples: \(coverageMonitor.policy.stableSamples)
         Covered surfaces: \(surfaces.filter(\.isCovered).count)
+        Menu strip timing: \(surfaces.map { "\($0.displayID): \($0.menuStripTiming)" }.joined(separator: "; "))
         Crossfade seconds: \(transitionDuration)
         """
     }
@@ -1477,6 +1479,7 @@ private final class MenuBarStrip {
     private let layer = CAMetalLayer()
     private let height: CGFloat
     private(set) var frames = 0
+    let timing = MirrorPresentationTiming()
     var onDrawableCatchUp: (() -> Void)?
     private let acquisition = DispatchQueue(label: "Idlesse.MenuStrip.Drawable", qos: .userInteractive)
     // Accessed only on the main thread. At most one ready drawable and one request.
@@ -1527,14 +1530,15 @@ private final class MenuBarStrip {
         view.layer = layer
         window.contentView = view
     }
-    func copy(command: MTLCommandBuffer, texture: MTLTexture) {
+    func copy(command: MTLCommandBuffer, source: CAMetalDrawable) {
         guard window.isVisible else { return }
+        let texture = source.texture
         let scale = CGFloat(texture.width) / max(1, window.frame.width)
         let rows = min(texture.height, max(1, Int((height * scale).rounded())))
         let size = CGSize(width: texture.width, height: rows)
         if layer.device == nil { layer.device = texture.device }
         if layer.drawableSize != size { layer.drawableSize = size }
-        guard let target = readyDrawable else { needsCatchUp = true; requestDrawable(); return }
+        guard let target = readyDrawable else { timing.recordMiss(); needsCatchUp = true; requestDrawable(); return }
         readyDrawable = nil
         guard target.texture.width == texture.width, target.texture.height == rows,
               let blit = command.makeBlitCommandEncoder() else { needsCatchUp = true; requestDrawable(); return }
@@ -1544,6 +1548,9 @@ private final class MenuBarStrip {
             to: target.texture, destinationSlice: 0, destinationLevel: 0,
             destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
         blit.endEncoding()
+        let pair = timing.makePair()
+        source.addPresentedHandler { drawable in pair.record(source: true, time: drawable.presentedTime) }
+        target.addPresentedHandler { drawable in pair.record(source: false, time: drawable.presentedTime) }
         command.present(target)
         frames += 1
         requestDrawable()
