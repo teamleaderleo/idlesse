@@ -210,3 +210,11 @@ physical panel scanout or menu-bar blur. A disabled entry means no strip exists.
 A live check on the existing two-surface Hina video returned disabled for both
 strips. Plain video can currently use Standard even when menu animation is enabled;
 the renderer-selection condition still needs reconciliation before timing that path.
+
+The renderer-selection mismatch is fixed: enabled menu animation selects Metal
+for plain images/videos as well as creative scenes, and shared video preparation
+uses the same selection predicate. Home smoke covers both plain media types with
+the setting on/off. With the existing Hina wallpaper, a local sample reported
+1,330 paired frames at 1.06 ms mean absolute skew (12.50 ms maximum, 2 misses)
+on display 3, and 1,166 pairs at 3.96 ms (16.67 ms maximum, 246 misses) on display 1.
+This is one sample, not atomic synchronization or a hardware scanout guarantee.

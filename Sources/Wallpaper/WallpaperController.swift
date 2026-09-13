@@ -42,6 +42,10 @@ final class WallpaperSurface {
         ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" ||
             UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip")
     }
+    static func usesMetal(_ scene: SceneDescriptor, menuAnimation: Bool) -> Bool {
+        menuAnimation || scene.canvas == .desktopSpan || scene.requiresMetal ||
+            ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1"
+    }
     let window: NSWindow
     let displayID: UInt32
     private let renderer: SceneRenderer
@@ -75,10 +79,7 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient, .shader].contains($0.kind) || $0.needsComposition }
-        if playable.canvas == .desktopSpan || playable.requiresMetal ||
-           ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" ||
-           (Self.liveMenuStripEnabled && hasCreativeLayers) {
+        if Self.usesMetal(playable, menuAnimation: Self.liveMenuStripEnabled) {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError, sharedHub: sharedHub)
         } else {
@@ -817,11 +818,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         let hasVideo = playable.allNodes.contains { $0.kind == .video }
-        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient, .shader].contains($0.kind) || $0.needsComposition }
         let sharesSceneAcrossDisplays = sameWallpaperOnAllDisplays || playable.canvas == .desktopSpan
-        let needsMetal = playable.canvas == .desktopSpan || playable.requiresMetal ||
-            ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" ||
-            (WallpaperSurface.liveMenuStripEnabled && hasCreativeLayers)
+        let needsMetal = WallpaperSurface.usesMetal(playable, menuAnimation: WallpaperSurface.liveMenuStripEnabled)
         let sharedHub = (sharesSceneAcrossDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }

@@ -646,6 +646,15 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         defer { try? FileManager.default.removeItem(at: folder) }
         let index = folder.appendingPathComponent("index.json")
         let library = try SceneLibraryController(indexURL: index, onUse: { _ in }, onEdit: { _, _ in })
+        for content in [SceneNode.Content.image(URL(fileURLWithPath: "/image.png")),
+                        .video(URL(fileURLWithPath: "/video.mp4"))] {
+            let plain = SceneDescriptor(title: "Plain", nodes: [SceneNode(content: content)])
+            precondition(WallpaperSurface.usesMetal(plain, menuAnimation: true),
+                         "Menu animation must select Metal for plain images and videos")
+            if ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] != "1" {
+                precondition(!WallpaperSurface.usesMetal(plain, menuAnimation: false))
+            }
+        }
         let wallpaper = WallpaperController()
         wallpaper.presentsWindows = false
         let comfort = DesktopComfortController()
