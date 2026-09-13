@@ -214,3 +214,16 @@ continues to include canceled preview loading and muted video setup/teardown.
 The development window was also checked with an existing video: successive
 screenshots showed advancing preview frames, followed by a successful Stop
 Preview. This is a functional UI check, not a frame-rate or energy measurement.
+
+### Browsing continuity
+
+Home remembers the selected wallpaper separately for each scope during the
+session. Returning from an empty scope restores the previous selection. Switching
+List/Grid reveals the selection in the destination layout without applying it.
+Empty Favorites, Recent, and media filters use their own guidance.
+
+Older individually bookmarked entries can omit media type. Badges and filters
+now share classification from the bookmark's embedded path or the catalog's
+relative path, with explicit catalog types taking precedence. This does not
+resolve, mount, or decode the referenced file. Unknown formats display “Media”.
+Regression checks include legacy video/image bookmarks and scope restoration.

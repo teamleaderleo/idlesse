@@ -32,6 +32,22 @@ final class SceneLibraryStore {
         var availability: EntryAvailability = .present
         var observation: ReconciliationObservation?
 
+        /// Older individually imported entries have only a bookmark. Read its
+        /// embedded path without resolving/mounting the source or decoding media.
+        var inferredMediaType: String? {
+            if let mediaType { return mediaType }
+            let bookmarkPath = bookmark.flatMap {
+                URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: $0)?.path
+            }
+            let path = relativeMediaPath ?? bookmarkPath ?? ""
+            switch (path as NSString).pathExtension.lowercased() {
+            case "mp4", "mov", "m4v", "webm", "mkv", "avi": return "video"
+            case "idlesse": return "scene"
+            case "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "bmp", "avif": return "image"
+            default: return nil
+            }
+        }
+
         init(id: String, title: String, bookmark: Data? = nil, catalogID: String? = nil,
              sourceID: String? = nil, relativeMediaPath: String? = nil,
              relativePosterPath: String? = nil, series: String? = nil,

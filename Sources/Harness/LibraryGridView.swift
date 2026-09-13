@@ -117,6 +117,16 @@ final class LibraryGridView: NSView {
         }
     }
 
+    /// Reveal the same item when switching layouts or restoring a scope.
+    /// This changes only scroll position; it never selects or applies a wallpaper.
+    func revealSelection() {
+        guard let selectedID, let index = items.firstIndex(where: { $0.id == selectedID }) else { return }
+        relayout()
+        if let frame = layoutPlan?.frame(for: index) {
+            scrollToVisible(frame.insetBy(dx: 0, dy: -8))
+        }
+    }
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         attachScrollObserverIfNeeded()
@@ -329,13 +339,12 @@ final class LibraryCardView: NSView {
             self.item = item
         }
         titleLabel.stringValue = SceneLibraryController.displayTitle(item.title)
-        let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
-        if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
-            badgeLabel.stringValue = "Video"
-        } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
-            badgeLabel.stringValue = "Scene"
-        } else {
-            badgeLabel.stringValue = "Image"
+        let mediaType = item.builtin != nil ? "scene" : item.entry?.inferredMediaType
+        switch mediaType {
+        case "video": badgeLabel.stringValue = "Video"
+        case "scene": badgeLabel.stringValue = "Scene"
+        case "image": badgeLabel.stringValue = "Image"
+        default: badgeLabel.stringValue = "Media"
         }
         return changed
     }

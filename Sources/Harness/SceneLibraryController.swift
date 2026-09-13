@@ -15,10 +15,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let url: URL
         let access: SceneLibraryStore.Access?
     }
-    enum Scope: Equatable {
+    enum Scope: Hashable {
         case library, favorites, recent, collection(String)
     }
     private(set) var scope: Scope = .library
+    private var selectionByScope: [Scope: String] = [:]
     private var homeNavigation = false
     var onScopeChange: ((Scope) -> Void)?
     private let mediaFilter = NSPopUpButton()
@@ -66,6 +67,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         setScope(.library)
     }
     func setScope(_ scope: Scope) {
+        let changed = self.scope != scope
+        if changed, let selected { selectionByScope[self.scope] = selected.id }
         self.scope = scope
         pendingFilterTitle = nil
         filter.selectItem(at: 0)
@@ -73,7 +76,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
            let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) {
             filter.selectItem(at: index)
         }
-        reload()
+        reload(selecting: changed ? selectionByScope[scope] : nil)
     }
     private let inspectorButton = NSButton(checkboxWithTitle: "Inspector", target: nil, action: nil)
     private let browserSplit = NSSplitViewController()
@@ -452,7 +455,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         UserDefaults.standard.set(viewModeControl.selectedSegment, forKey: "Idlesse.library.viewMode")
         scroll.isHidden = isGrid
         gridScroll.isHidden = !isGrid
-        if isGrid { gridView.update(items: items, selectedID: selected?.id) }
+        if isGrid {
+            gridView.update(items: items, selectedID: selected?.id)
+            gridView.revealSelection()
+        } else if let index = items.firstIndex(where: { $0.id == selected?.id }) {
+            table.scrollRowToVisible(index)
+        }
     }
 
     @objc private func mediaFilterChanged() { reload() }
@@ -549,6 +557,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             titleLabel.stringValue = "No matches"
             detail.stringValue = "Nothing matches “\(search.stringValue)”. Clear the search to browse everything, or Import… to add more."
             clearSearchButton.isHidden = false
+        } else if homeNavigation && scope == .favorites && mediaFilter.indexOfSelectedItem == 0 {
+            titleLabel.stringValue = "No favorites yet"
+            detail.stringValue = "Star a wallpaper to find it here."
+            clearSearchButton.isHidden = true
+        } else if homeNavigation && scope == .recent && mediaFilter.indexOfSelectedItem == 0 {
+            titleLabel.stringValue = "No recent wallpapers"
+            detail.stringValue = "Wallpapers you open appear here."
+            clearSearchButton.isHidden = true
+        } else if homeNavigation && mediaFilter.indexOfSelectedItem > 0 {
+            titleLabel.stringValue = "No matching media"
+            detail.stringValue = "Choose All Media to browse this view."
+            clearSearchButton.isHidden = true
         } else if let collection = activeCollection {
             titleLabel.stringValue = collection.name
             detail.stringValue = "This collection is empty. Use Collections… to add scenes, or play order and shuffle once it has some."
@@ -583,13 +603,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
         items = allItems().filter { item in
             let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
+            let mediaType = item.builtin != nil ? "scene" : item.entry?.inferredMediaType
             if homeNavigation {
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                let isVideo = path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video"
-                let isScene = item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene"
-                if mediaFilter.indexOfSelectedItem == 1 && !isVideo { return false }
-                if mediaFilter.indexOfSelectedItem == 2 && !isScene { return false }
-                if mediaFilter.indexOfSelectedItem == 3 && (isVideo || isScene) { return false }
+                if mediaFilter.indexOfSelectedItem == 1 && mediaType != "video" { return false }
+                if mediaFilter.indexOfSelectedItem == 2 && mediaType != "scene" { return false }
+                if mediaFilter.indexOfSelectedItem == 3 && mediaType != "image" { return false }
                 switch scope {
                 case .favorites: return matches && store.catalog.favorites.contains(item.id)
                 case .recent: return matches && store.catalog.recent[item.id] != nil
@@ -601,15 +619,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
             case 3: return matches && store.catalog.favorites.contains(item.id)
-            case 4:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video")
-            case 5:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene")
-            case 6:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") || path.hasSuffix(".png") || path.hasSuffix(".heic") || item.entry?.mediaType == "image")
+            case 4: return matches && mediaType == "video"
+            case 5: return matches && mediaType == "scene"
+            case 6: return matches && mediaType == "image"
             default: return matches
             }
         }.sorted {
@@ -636,6 +648,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             gridView.select(id: selected?.id)
             preview()
             table.scrollRowToVisible(index)
+            if !gridScroll.isHidden { gridView.revealSelection() }
         } else {
             table.deselectAll(nil)
             selected = nil
@@ -1491,6 +1504,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let raw = folder.appendingPathComponent("revision.png")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data([1]).write(to: raw)
+        let bookmark = try raw.bookmarkData(options: [], includingResourceValuesForKeys: [.pathKey], relativeTo: nil)
+        let legacyImage = SceneLibraryStore.Entry(id: "legacy-image", title: "Legacy", bookmark: bookmark)
+        precondition(legacyImage.inferredMediaType == "image")
+        let legacyVideoURL = folder.appendingPathComponent("legacy.MP4")
+        try Data().write(to: legacyVideoURL)
+        let videoBookmark = try legacyVideoURL.bookmarkData(options: [], includingResourceValuesForKeys: [.pathKey], relativeTo: nil)
+        let legacyVideo = SceneLibraryStore.Entry(id: "legacy-video", title: "Legacy", bookmark: videoBookmark)
+        precondition(legacyVideo.inferredMediaType == "video", "Legacy video bookmarks must not become images")
+        precondition(SceneLibraryStore.Entry(id: "source-scene", title: "Scene", relativeMediaPath: "scene.idlesse").inferredMediaType == "scene")
         let oldRevision = try PosterRevision.read(raw)
         try Data([1, 2]).write(to: raw)
         let newRevision = try PosterRevision.read(raw)
@@ -1505,6 +1527,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.items.isEmpty, "Recent excludes wallpapers never opened")
         precondition(controller.sort.indexOfSelectedItem == originalSort, "Recent must preserve browser sort")
         controller.setScope(.library)
+        let remembered = controller.items.last!
+        controller.selected = remembered
+        controller.setScope(.favorites)
+        precondition(controller.selected == nil, "Empty Favorites must have no selection")
+        precondition(controller.titleLabel.stringValue == "No favorites yet")
+        controller.setScope(.library)
+        precondition(controller.selected?.id == remembered.id, "Returning to Library must restore its selection")
         controller.viewModeControl.selectedSegment = 1
         controller.viewModeChanged()
         precondition(!controller.right.isHidden, "Grid must retain selection details")
