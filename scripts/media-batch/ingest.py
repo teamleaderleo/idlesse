@@ -502,14 +502,15 @@ class Target:
         if self.kind != 'live2d':
             calibrate.rebundle(self.workspace)
 
-    def export(self, job, duration, modal, log):
+    def export(self, job, duration, modal, log, encoder='x265'):
         staged = job / 'out'
         if self.kind == 'lobby':
             plan = job / 'plan.json'
             plan.write_text(json.dumps({'schema': 1, 'model': PLAN_MODEL, 'source': PLAN_SOURCE, 'items': [
                 {'id': self.asset, 'title': self.title, 'stem': self.stem, 'animation': self.animation, 'seconds': duration}]}, indent=2))
             subprocess.run([sys.executable, str(HERE / 'run.py'), '--root', str(self.workspace), '--output', str(staged),
-                            '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal], check=True)
+                            '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal,
+                            '--encoder', encoder], check=True)
         else:
             plan = job / 'plan.json'
             plan.write_text(json.dumps({'items': [{**self.item, 'animation': self.animation}]}, indent=2))
@@ -548,6 +549,8 @@ def main():
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
     p.add_argument('--replace', action='store_true', help='Archive and replace an existing export of the same title')
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
+    p.add_argument('--fast-encode', action='store_true',
+                   help='Encode on the GPU in about a minute instead of x265 10-bit, at the cost of banding in soft gradients')
     p.add_argument('--no-library', action='store_true', help='Install the file without adding it to the Idlesse Library')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
@@ -719,7 +722,7 @@ def main():
         else:
             log('Azur Lane models render from their original textures; this export is local and free.')
 
-        staged = target.export(job, duration, modal, log)
+        staged = target.export(job, duration, modal, log, encoder='webcodecs' if a.fast_encode else 'x265')
         keep_camera = True
         final = install(staged, target.names, output, a.replace, clear_framing=changed, log=log)
         if a.trim_edges and trim:

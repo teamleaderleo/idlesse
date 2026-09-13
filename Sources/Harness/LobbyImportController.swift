@@ -45,6 +45,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let fitButton = NSButton(title: "Fit Camera", target: nil, action: nil)
     private let upscaleButton = NSButton(title: "Upscale Together…", target: nil, action: nil)
+    private let importManyButton = NSButton(title: "Import Together", target: nil, action: nil)
     private let chooseButton = NSButton(title: "Folder or ZIP…", target: nil, action: nil)
     private let namesButton = NSButton(title: "Look Up Names", target: nil, action: nil)
 
@@ -113,7 +114,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         form.spacing = 6
         titleField.widthAnchor.constraint(equalToConstant: 280).isActive = true
         animationField.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        for (button, action) in [(previewButton, #selector(previewSelected)), (importButton, #selector(importSelected)), (stopButton, #selector(stop)), (fitButton, #selector(fitCamera)), (upscaleButton, #selector(upscaleSelected))] {
+        for (button, action) in [(previewButton, #selector(previewSelected)), (importButton, #selector(importSelected)), (stopButton, #selector(stop)), (fitButton, #selector(fitCamera)), (upscaleButton, #selector(upscaleSelected)), (importManyButton, #selector(importSelectedTogether))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -127,7 +128,8 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         status.textColor = .secondaryLabelColor
         fitButton.toolTip = "Zoom and recentre until the art covers the frame for the whole loop (free, local)"
         upscaleButton.toolTip = "Upscale every selected lobby in one Modal job, so they share its startup cost"
-        let buttons = NSStackView(views: [previewButton, fitButton, importButton, upscaleButton, stopButton, spinner])
+        importManyButton.toolTip = "Import every selected lobby that is already upscaled, one after another, with its recorded camera"
+        let buttons = NSStackView(views: [previewButton, fitButton, importButton, importManyButton, upscaleButton, stopButton, spinner])
         buttons.spacing = 10
         let right = NSStackView(views: [image, heading, info, form, buttons, status])
         right.orientation = .vertical
@@ -245,14 +247,18 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
             previewedAsset = nil
             image.image = nil
             heading.stringValue = "\(table.selectedRowIndexes.count) lobbies selected"
+            var lines: [String] = []
+            let ready = readyToImport
+            if !ready.isEmpty {
+                lines.append("\(ready.count) can be imported for free, one after another, each with its recorded camera. Each takes several minutes; edges that need more than a trim are skipped for you to fit by hand.")
+            }
             if let quote = batchQuote {
                 let single = quote.lobbies.compactMap(\.quoteUSD).reduce(0, +)
-                info.stringValue = String(format: "Upscale the %d that need it in one Modal job: about %.0f seconds, about $%.2f (one at a time would be about $%.2f). Importing each is then free.",
-                                          quote.lobbies.count, quote.seconds, quote.usd, single)
-                    + (quote.seconds > Self.batchSeconds ? " That is too much for one job; select fewer." : "")
-            } else {
-                info.stringValue = "Every selected lobby is already upscaled."
+                lines.append(String(format: "Upscale the %d that need it in one Modal job: about %.0f seconds, about $%.2f (one at a time would be about $%.2f). Importing each is then free.",
+                                    quote.lobbies.count, quote.seconds, quote.usd, single)
+                    + (quote.seconds > Self.batchSeconds ? " That is too much for one job; select fewer." : ""))
             }
+            info.stringValue = lines.isEmpty ? "Every selected lobby is already installed." : lines.joined(separator: "\n\n")
             updateControls()
             return
         }
@@ -442,7 +448,54 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         }
     }
 
-    @objc private func stop() { run?.stop() }
+    /// Upscaled, not yet installed, and named: what a batch import can take without asking anything.
+    private var readyToImport: [Lobby] {
+        selectedLobbies.filter { $0.upscaled && $0.installed.isEmpty && $0.title != nil }
+    }
+    private var importQueue: [Lobby] = []
+    private var importTotal = 0
+    private var importReport: (imported: [String], skipped: [String]) = ([], [])
+
+    @objc private func importSelectedTogether() {
+        let ready = readyToImport
+        guard !ready.isEmpty, run == nil else { return }
+        importQueue = ready
+        importTotal = ready.count
+        importReport = ([], [])
+        importNext()
+    }
+
+    private func importNext() {
+        guard !importQueue.isEmpty else {
+            let report = importReport
+            heading.stringValue = "Imported \(report.imported.count) of \(importTotal)"
+            info.stringValue = report.skipped.isEmpty ? "All of them are in the Library."
+                : "Skipped:\n" + report.skipped.joined(separator: "\n")
+            importTotal = 0
+            reloadList()
+            return
+        }
+        let lobby = importQueue.removeFirst()
+        let title = lobby.title ?? lobby.asset
+        heading.stringValue = "Importing \(SceneLibraryController.displayTitle(title)) (\(importTotal - importQueue.count) of \(importTotal))"
+        start([lobby.asset, "--json", "--title", title, "--animation", animationValue, "--trim-edges"], onEvent: { [weak self] event in
+            guard event["event"] as? String == "installed", let path = event["path"] as? String else { return }
+            self?.onInstalled(URL(fileURLWithPath: path))
+        }) { [weak self] succeeded, output in
+            guard let self else { return }
+            if succeeded { self.importReport.imported.append(title) }
+            else { self.importReport.skipped.append("\(SceneLibraryController.displayTitle(title)): \(Self.lastMessage(output))") }
+            self.importNext()
+        }
+    }
+
+    @objc private func stop() {
+        if !importQueue.isEmpty {
+            importReport.skipped += importQueue.map { "\(SceneLibraryController.displayTitle($0.title ?? $0.asset)): stopped" }
+            importQueue = []
+        }
+        run?.stop()
+    }
 
     // MARK: Running
 
@@ -479,6 +532,9 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         upscaleButton.isHidden = !many || batchQuote == nil
         upscaleButton.isEnabled = !busy && (batchQuote?.seconds ?? .infinity) <= Self.batchSeconds
         if let quote = batchQuote { upscaleButton.title = "Upscale \(quote.lobbies.count) Together…" }
+        importManyButton.isHidden = !many || readyToImport.isEmpty
+        importManyButton.isEnabled = !busy
+        importManyButton.title = "Import \(readyToImport.count) Together"
         previewButton.isHidden = many
         importButton.isHidden = many
         previewButton.isEnabled = !busy && selectedLobby != nil

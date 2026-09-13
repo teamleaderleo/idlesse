@@ -26,9 +26,29 @@ def scale_atlas(text):
                      for line in text.splitlines()) + '\n'
 
 
-def run(argv, log, cwd=None, timeout=1200, env=None):
+def run(argv, log, cwd=None, timeout=1200, env=None, progress=None):
+    """Run to completion into `log`. With `progress`, also echo the renderer's
+    frame count as it goes, so a ten-minute x265 export is not a silent one."""
     with log.open('ab') as stream:
-        subprocess.run(argv, cwd=cwd, stdout=stream, stderr=stream, check=True, timeout=timeout, env=env)
+        if progress is None:
+            subprocess.run(argv, cwd=cwd, stdout=stream, stderr=stream, check=True, timeout=timeout, env=env)
+            return
+        process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        expired = threading.Event()
+        timer = threading.Timer(timeout, lambda: (expired.set(), process.kill()))
+        timer.start()
+        try:
+            for line in process.stdout:
+                stream.write(line)
+                match = re.match(rb'Frame (\d+)', line)
+                if match:
+                    print(progress(int(match.group(1))), flush=True)
+        finally:
+            timer.cancel()
+        if process.wait() != 0:
+            if expired.is_set():
+                raise subprocess.TimeoutExpired(argv, timeout)
+            raise subprocess.CalledProcessError(process.returncode, argv)
 
 
 def probe(path):
@@ -88,7 +108,8 @@ def main():
     parser.add_argument('--job-name', default='batch-2026-09-10')
     parser.add_argument('--port', type=int, default=18763)
     parser.add_argument('--frame-asset', action='append', default=[])
-    parser.add_argument('--encoder', choices=['webcodecs','frames'], default='webcodecs')
+    parser.add_argument('--encoder', choices=['webcodecs','frames','x265'], default='webcodecs',
+        help='x265 renders lossless frames and encodes 10-bit HEVC: several times slower, without gradient banding')
     parser.add_argument('--restore-only', action='store_true', help='Prepare textures without starting the local renderer')
     args = parser.parse_args()
     if Path(args.job_name).name != args.job_name or args.job_name in ('', '.', '..'):
@@ -167,15 +188,17 @@ def main():
             if not reused:
                 frame_args = [str(temporary), str(frames), '3840', '2160',
                     'assets-ai-batch/' + item['id'], item['stem'], item['animation']]
-                use_frames = args.encoder == 'frames' or item['id'] in args.frame_asset
+                use_frames = args.encoder in ('frames', 'x265') or item['id'] in args.frame_asset
                 renderer = [str(root / 'render')] if use_frames else [sys.executable, str(Path(__file__).with_name('encode.py'))]
                 state['current'] = {'asset': item['id'], 'title': title, 'stage': 'waiting-for-encoder'}; save(state_path, state)
                 with (root/'.media-encoder.lock').open('a') as encoder_lock:
                     fcntl.flock(encoder_lock, fcntl.LOCK_EX)
                     state['current']['stage'] = 'encoding'; save(state_path, state)
                     try:
-                        run(renderer + frame_args, job / (title + '.log'), root, 1900,
-                            env={**os.environ, 'IDLESSE_RENDER_PORT': str(server.server_port)})
+                        run(renderer + frame_args, job / (title + '.log'), root, 3700 if args.encoder == 'x265' else 1900,
+                            progress=(lambda done: f'Rendered {done} of {frames} frames') if use_frames else None,
+                            env={**os.environ, 'IDLESSE_RENDER_PORT': str(server.server_port),
+                                 'IDLESSE_FRAME_ENCODER': args.encoder})
                     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                         if use_frames: raise
                         print('WebCodecs failed; using frame encoder once:', title, flush=True)
@@ -198,7 +221,7 @@ def main():
             shutil.move(temporary, final)
             receipt = {'title': title, 'path': str(final), 'sha256': digest(final), 'probe': result,
                 'attemptSeconds': round(time.monotonic() - start, 2), 'reusedEncodedVideo': reused, 'source': plan['source'],
-                'restoration': plan['model'], 'encoder': 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
+                'restoration': plan['model'], 'encoder': 'webcodecs' if 'encodeSeconds' in render_meta else 'x265-main10' if args.encoder == 'x265' else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
                 'caveat': 'Upscaled texture detail; Spine-only rendering may omit Unity effects/physics. Visual QA required.'}
             save(final.with_suffix('.source.json'), receipt)
             state['items'][item['id']] = receipt; state.pop('current', None); save(state_path, state)
