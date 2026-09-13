@@ -1,5 +1,6 @@
 import AppKit
 import ScreenSaver
+import UniformTypeIdentifiers
 
 final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var window: NSWindow!
@@ -26,11 +27,32 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                 self.scenePreview.openLibraryScene(url, asCopy: asCopy)
             })
         }
+        library?.onFrame = { [weak self] url, access in self?.showFraming(url, access: access) }
         wallpaper.onManualSelection = { [weak self] in
             self?.library?.stopRotation()
             self?.library?.releaseActiveUseAccess()
         }
         library?.startSchedules()
+    }
+    private var framingEditors: [URL: MediaFramingController] = [:]
+    private func showFraming(_ url: URL, access: AnyObject? = nil) {
+        let key = url.standardizedFileURL
+        if let open = framingEditors[key] { open.show(); return }
+        let editor = MediaFramingController(media: url, access: access) { [weak self] saved in
+            self?.wallpaper.reloadIfShowing(saved)
+        }
+        editor.isOnDesktop = { [weak self] in self?.wallpaper.isShowing(url) ?? false }
+        editor.onClose = { [weak self] in self?.framingEditors[key] = nil }
+        framingEditors[key] = editor
+        editor.show()
+    }
+    @objc private func openFramingFile() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose a picture or video to crop or soften."
+        panel.allowedContentTypes = [.image, .audiovisualContent]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        showFraming(url)
     }
     private var onboarding: OnboardingController?
     private func showOnboarding() {
@@ -455,6 +477,8 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaperMenu.addItem(scenePreviewItem)
         let libraryItem = wallpaperMenu.addItem(withTitle: "Library…", action: #selector(showLibrary), keyEquivalent: "l")
         libraryItem.target = self
+        let framingItem = wallpaperMenu.addItem(withTitle: "Adjust Framing of a File…", action: #selector(openFramingFile), keyEquivalent: "")
+        framingItem.target = self
         wallpaperMenu.addItem(.separator())
         comfort.addDesktopIconsItem(to: wallpaperMenu)
         let bedtime = wallpaperMenu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
@@ -640,6 +664,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--smoke-wallpaper"),
     }
 }
 
+if CommandLine.arguments.contains("--smoke-framing") {
+    _ = NSApplication.shared
+    do { try MediaFramingController.smokeTest(); exit(0) }
+    catch { fputs("Media framing smoke test failed: \(error)\n", stderr); exit(1) }
+}
 if CommandLine.arguments.contains("--smoke-options") {
     let controller = ConfigureSheetController(preferences: IdlessePreferences.shared) {}
     controller.window.contentView?.layoutSubtreeIfNeeded()

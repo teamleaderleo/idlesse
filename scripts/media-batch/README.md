@@ -80,6 +80,18 @@ Do not crop bleed out at export to tidy a frame. Exports are 16:9 and displays a
 
 So the rule is asymmetric: **remove all matte, keep the bleed.** Frame for the widest display in use and let narrower ones spend the margin. Where a wide panel then shows bleed it cannot crop, that is a display-side crop to fix (#96), not a recipe to re-cut — one baked frame cannot be right for two aspects at once, because the narrow display's good view is a crop of the wide display's.
 
+### Framing in the app
+
+For any imported picture or video, Library → More… → **Adjust Framing…** (or
+Wallpaper → Adjust Framing of a File…) opens the frame with a crop box, the
+focus point, picture adjustments, and a dashed outline of what every connected
+display actually shows. Save writes the same `<name>.framing.json` described
+below, and reloads the desktop once if that file is on it. Nothing is
+re-exported. The editor warns when a crop enlarges the picture well past its
+uncropped fit; that crop wants a re-rendered camera instead of a sidecar.
+
+Use `measure-bleed.py` when the edge is too subtle to place by eye.
+
 ### Measuring the bleed
 
 Do not eyeball the margin. `measure-bleed.py` profiles each edge across the
@@ -118,17 +130,24 @@ the band on screen; declared far too large it starts eating composition on
 every display. Confirm the geometry against the displays actually in use before
 settling on a number.
 
-### Softening a bright scene
+### Adjusting a bright or flat scene
 
-Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before softening anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
+Some lobby art is simply painted bright: Seia's sunlit bedroom averages 224 of 255 and plays back exactly as rendered. Before adjusting anything, check that brightness is the art and not the file. An export whose colour tags are incomplete displays with lifted midtones, and `run.py` now fixes those tags before publishing, but older files may predate that.
 
-To soften a scene that really is bright, add `tone` to its sidecar, next to any framing:
+Use the editor's sliders, or add `tone` to the sidecar next to any framing. Every field is optional and 0 is neutral:
 
 ```json
-{"bleed": {"right": 0.0029}, "tone": {"soften": 0.3}}
+{"bleed": {"right": 0.0029}, "tone": {"exposure": -0.45, "soften": 0.2, "contrast": 0.2, "saturation": 0.25}}
 ```
 
-`soften` runs from 0 to 1. The wallpaper applies a tone curve at playback that leaves shadows and midtones alone and lowers the peak toward 0.82 at full strength; the video file is not touched, so deleting the key restores it. Keep it light. Around 0.25-0.35 takes the glare off; past about 0.4 whites turn grey and bright pastel art goes flat.
+| Field | Range | Effect |
+|---|---|---|
+| `exposure` | -2 to 2 | stops of light, multiplied in linear light |
+| `soften` | 0 to 1 | rolls highlights off; the peak falls toward 0.82 at full strength |
+| `contrast` | -1 to 1 | around mid-grey |
+| `saturation` | -1 to 1 | -1 is greyscale |
+
+The wallpaper applies them to video at playback in Core Image's colour-managed working space, and the file is not touched, so deleting the key restores it. Overexposed art usually wants exposure down with a little contrast and saturation back, rather than heavy softening alone: softening past about 0.4 greys the whites and desaturates pastels. Stills are not adjusted yet.
 
 Use the existing Drive sync folder for archiving originals/restored texture bundles and final clips. Verify copy hashes before deleting disposable local intermediates. Sync-folder presence alone does not prove remote upload completion. Keep Library-referenced playback files until a bookmark-aware move/relink is performed.
 
@@ -137,6 +156,44 @@ Dependencies retain their upstream licenses, especially the Spine runtimes. This
 Tests: `python3 scripts/media-batch/test_batch.py`.
 
 After exports, run `verify.py --root build/ba-export-study` using the study venv (Pillow). It creates first/middle/last strips and loop-boundary diagnostics for review. Then `archive.py --root build/ba-export-study --drive "<existing Drive sync root>/Idlesse"` copies and hashes videos, provenance, posters and one source/restoration archive. It does not claim cloud sync or delete playback files.
+
+## Importing one lobby
+
+`ingest.py` takes one scene from source to installed wallpaper:
+
+```sh
+python3 scripts/media-batch/ingest.py hanako_home                  # already in assets-pc
+python3 scripts/media-batch/ingest.py ~/Downloads/lobby.zip --title Someone
+python3 scripts/media-batch/ingest.py --fetch ch0400_home --title Someone   # BA-AD download
+python3 scripts/media-batch/ingest.py hanako_home --crop 0.1 0 0.8 0.8 --preview
+```
+
+It renders a free preview from the original textures and measures matte across
+the loop before anything else; `--preview` stops there, and matte stops the run
+unless `--allow-matte`. `--crop X Y W H` is a unit box of the current frame to
+keep, and becomes the camera. Upscaling is the only paid step: it runs only for
+a lobby never upscaled before, is quoted from the timings of past runs and
+Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds
+the worst case), and needs a yes or `--yes`. Everything else is local.
+
+### Re-rendering a crop
+
+A crop drawn in **Adjust Framing…** is a display-side zoom, so it enlarges the
+video. To keep full detail, render the crop as the camera instead:
+
+```sh
+python3 scripts/media-batch/ingest.py --reframe ".../<Title>-Restored-4K60.mp4" --from-sidecar
+```
+
+or press **Re-render Camera…** in the editor, which runs exactly that. It reads
+the camera the export was made with from its `.source.json`, composes the crop on
+top, exports locally from the existing upscaled textures, archives the old file
+in `superseded-<date>/`, renames the new file over it atomically (a playing wallpaper keeps the old inode until it reloads), and removes the crop box and
+focus from the sidecar while keeping adjustments. The app never passes `--yes`,
+so a scene that still needs upscaling stops at the quote. The button appears
+once `ingest.py` has run on this Mac, because each run records its location in
+the app's defaults. New cameras are written to both the workspace and the
+tracked `cameras.json`; commit the latter to keep them.
 
 ## One-command pipeline
 

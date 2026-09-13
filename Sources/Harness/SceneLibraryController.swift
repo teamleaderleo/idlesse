@@ -234,6 +234,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         } catch { reportTask("Rotation: " + error.localizedDescription) }
     }
     private var onUse: (URL) -> Void
+    /// Opens the framing editor for an imported picture or video, handing over
+    /// the access that keeps its folder readable and writable while it is open.
+    var onFrame: ((URL, AnyObject?) -> Void)?
     private var onEdit: (URL, Bool) -> Void
 
     init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
@@ -366,7 +369,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         clearSearchButton.bezelStyle = .rounded
         clearSearchButton.isHidden = true
         remove.target = self; remove.action = #selector(removeScene)
-        more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library"])
+        more.addItems(withTitles: ["More…", "Refresh Preview", "Make a Copy in Studio", "Remove from Library", "Adjust Framing…"])
         more.menu?.autoenablesItems = false
         more.target = self; more.action = #selector(moreAction)
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
@@ -917,6 +920,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
         more.item(at: 3)?.isEnabled = selected?.entry != nil
+        more.item(at: 4)?.isEnabled = selected?.entry != nil && selected?.entry?.mediaType != "scene"
         collectionActions.removeAllItems()
         collectionActions.addItems(withTitles: [rotationTimer == nil ? "Collections…" : "Collections · Rotating every \(rotationMinutes)m", "New Collection…"])
         if filter.selectedItem?.representedObject is String {
@@ -1302,6 +1306,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         case 1: refreshPreview()
         case 2: duplicateScene()
         case 3: removeScene()
+        case 4: frameScene()
         default: break
         }
     }
@@ -1493,6 +1498,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         act(editing: false)
     }
     @objc private func editScene() { act(editing: true) }
+    @objc private func frameScene() {
+        guard let selected, selected.entry != nil else { return }
+        do {
+            let opened = try open(selected)
+            guard MediaFramingController.canFrame(opened.url) else {
+                opened.access?.close()
+                detail.stringValue = "Framing applies to imported pictures and videos. Scenes keep theirs in Studio."
+                return
+            }
+            onFrame?(opened.url, opened.access)
+        } catch { detail.stringValue = error.localizedDescription }
+    }
     @objc private func duplicateScene() { act(editing: true, asCopy: true) }
     private func act(editing: Bool, asCopy: Bool = false) {
         guard let selected else { return }

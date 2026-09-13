@@ -290,6 +290,22 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         explicitDisplayURL(for: displayID) ?? selectedURL
     }
 
+    /// Whether any display is playing `media`, directly or as a display override.
+    func isShowing(_ media: URL) -> Bool {
+        let path = media.standardizedFileURL.path
+        return NSScreen.screens.contains { screen in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+            return displayURL(for: id)?.standardizedFileURL.path == path
+        }
+    }
+
+    /// Reloads the desktop once when it is showing `media`, so an edited sidecar
+    /// takes effect; anything else on screen is left alone.
+    func reloadIfShowing(_ media: URL) {
+        guard isShowing(media), let selectedURL else { return }
+        select(selectedURL, reloading: true)
+    }
+
     func setDisplayURL(_ url: URL, for displayID: UInt32) {
         do {
             displayAssignmentStore.setBookmarkData(try bookmarkData(for: url),

@@ -728,22 +728,41 @@ extension SceneTone {
         return tone
     }
 
-    /// A composition applying the tone curve, or nil when there is nothing to do.
-    /// The curve is applied directly: this handler hands over display-encoded
-    /// values, and wrapping it in a linear-to-sRGB encode and decode, as Core Image
-    /// normally wants, applied it to double-encoded values and pulled the peak of
-    /// full softening down to 162 instead of 209.
+    /// A composition applying these adjustments, or nil when there is nothing to do.
     func videoComposition(for asset: AVAsset) -> AVVideoComposition? {
         guard !isNeutral else { return nil }
-        let points = curve.map { CIVector(x: $0.x, y: $0.y) }
+        let tone = self
         return AVMutableVideoComposition(asset: asset) { request in
-            let source = request.sourceImage
-            let toned = source
-                .applyingFilter("CIToneCurve", parameters: [
-                    "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
-                    "inputPoint3": points[3], "inputPoint4": points[4]])
-                .cropped(to: source.extent)
-            request.finish(with: toned, context: nil)
+            request.finish(with: tone.apply(to: request.sourceImage), context: nil)
         }
+    }
+
+    /// Adjusts a frame inside Core Image's colour-managed working space, which
+    /// is linear: the composition handler decodes the video into it and encodes
+    /// the result again. Exposure is therefore a plain multiplication of light,
+    /// and CIToneCurve converts to sRGB internally to apply its points, so the
+    /// soften curve is quoted in display values. Wrapping either in a manual
+    /// linear-to-sRGB encode and decode converts twice, which is how full
+    /// softening once pulled the peak down to 162 instead of 209.
+    func apply(to source: CIImage) -> CIImage {
+        let value = clamped
+        guard !value.isNeutral else { return source }
+        var image = source
+        if value.exposure != 0 {
+            image = image.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: value.exposure])
+        }
+        if value.contrast != 0 || value.saturation != 0 {
+            image = image.applyingFilter("CIColorControls", parameters: [
+                kCIInputContrastKey: 1 + value.contrast * 0.5,
+                kCIInputSaturationKey: 1 + value.saturation,
+                kCIInputBrightnessKey: 0])
+        }
+        if value.soften != 0 {
+            let points = value.curve.map { CIVector(x: $0.x, y: $0.y) }
+            image = image.applyingFilter("CIToneCurve", parameters: [
+                "inputPoint0": points[0], "inputPoint1": points[1], "inputPoint2": points[2],
+                "inputPoint3": points[3], "inputPoint4": points[4]])
+        }
+        return image.cropped(to: source.extent)
     }
 }

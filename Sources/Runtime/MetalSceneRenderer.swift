@@ -386,6 +386,9 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 if sharedHub == nil {
                     let item = AVPlayerItem(url: url)
                     item.preferredForwardBufferDuration = 0.5
+                    // The same sidecar adjustments the layer renderer and shared hub apply;
+                    // the video output reads composed frames, so they reach the texture.
+                    if let tone = SceneTone.beside(url) { item.videoComposition = tone.videoComposition(for: item.asset) }
                     let player = AVQueuePlayer()
                     player.isMuted = true
                     player.preventsDisplaySleepDuringVideoPlayback = false

@@ -86,6 +86,20 @@ struct SceneFocus: Codable, Sendable, Equatable {
                                               lead: margin.bottom, trail: margin.top, t: 1 - point.y),
                       width: filled.width, height: filled.height)
     }
+
+    /// The part of the frame a display of `display` size actually shows, in unit
+    /// coordinates from the top-left: `filledFrame` read backwards, so an editor
+    /// can outline each display over the whole frame instead of guessing.
+    func visibleRegion(content: CGSize, display: CGSize, bleed: SceneBleed? = nil) -> CGRect {
+        let bounds = CGRect(origin: .zero, size: display)
+        let frame = filledFrame(content: content, in: bounds, bleed: bleed)
+        guard frame.width > 0, frame.height > 0 else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
+        let width = bounds.width / frame.width, height = bounds.height / frame.height
+        // Layer y runs bottom-up: the top of the display sits at maxY.
+        return CGRect(x: (bounds.minX - frame.minX) / frame.width,
+                      y: (frame.maxY - bounds.maxY) / frame.height,
+                      width: width, height: height)
+    }
 }
 
 /// Margin the artist painted past the intended composition so that a crop has
@@ -921,24 +935,50 @@ struct SceneNode: Codable, Sendable {
     }
 }
 
-/// Highlight softening for a bright video, read from the same sidecar as framing.
+/// Picture adjustments for a video, read from the same sidecar as framing.
 ///
 /// Some lobby art is painted bright -- Seia's sunlit bedroom averages 224 of
-/// 255 and plays back exactly as rendered -- and reads as glaring on a desktop
-/// that is otherwise dim. This rolls the highlights off without touching the
-/// file, so deleting the sidecar restores the original.
+/// 255 and plays back exactly as rendered -- and reads as overexposed on a
+/// desktop that is otherwise dim. These correct it at playback without touching
+/// the file, so deleting the sidecar restores the original. Every field is
+/// optional and neutral at 0, so `{"soften": 0.3}` still means what it did.
 struct SceneTone: Codable, Sendable, Equatable {
-    /// 0 leaves the video untouched; 1 is the strongest roll-off.
+    /// Rolls highlights off, 0...1; shadows and midtones are left alone.
     var soften: Double = 0
+    /// Stops of exposure, -2...2, applied to linear light like a camera would.
+    var exposure: Double = 0
+    /// -1...1 around mid-grey.
+    var contrast: Double = 0
+    /// -1 is greyscale, 1 doubles saturation.
+    var saturation: Double = 0
+    enum CodingKeys: String, CodingKey { case soften, exposure, contrast, saturation }
 
-    init(soften: Double = 0) { self.soften = soften }
+    init(soften: Double = 0, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0) {
+        self.soften = soften; self.exposure = exposure; self.contrast = contrast; self.saturation = saturation
+    }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         soften = try container.decodeIfPresent(Double.self, forKey: .soften) ?? 0
+        exposure = try container.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+        contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
+        saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
+    }
+    /// Neutral fields are left out, so a sidecar only says what was changed.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        let value = clamped
+        if value.soften != 0 { try container.encode(value.soften, forKey: .soften) }
+        if value.exposure != 0 { try container.encode(value.exposure, forKey: .exposure) }
+        if value.contrast != 0 { try container.encode(value.contrast, forKey: .contrast) }
+        if value.saturation != 0 { try container.encode(value.saturation, forKey: .saturation) }
     }
 
-    var clamped: SceneTone { SceneTone(soften: soften.isFinite ? min(max(soften, 0), 1) : 0) }
-    var isNeutral: Bool { clamped.soften == 0 }
+    var clamped: SceneTone {
+        func unit(_ v: Double, _ low: Double, _ high: Double) -> Double { v.isFinite ? min(max(v, low), high) : 0 }
+        return SceneTone(soften: unit(soften, 0, 1), exposure: unit(exposure, -2, 2),
+                         contrast: unit(contrast, -1, 1), saturation: unit(saturation, -1, 1))
+    }
+    var isNeutral: Bool { clamped == SceneTone() }
 
     /// Points for a tone curve over sRGB-encoded values. Shadows and midtones
     /// stay where they are; the curve bends only above the middle, so the
@@ -976,6 +1016,30 @@ struct SceneFraming: Decodable {
         let data = try Data(contentsOf: path)
         guard data.count <= 4096 else { throw SceneError.invalid("Framing sidecar is too large.") }
         return try JSONDecoder().decode(SceneFraming.self, from: data)
+    }
+
+    /// Writes this framing beside `media`, leaving any keys it does not own in
+    /// place. Values that change nothing -- a centred focus, an empty margin, no
+    /// softening -- are dropped rather than written, and a sidecar left with
+    /// nothing in it is removed, so resetting a file really does restore it.
+    func write(beside media: URL) throws {
+        let path = SceneFraming.url(for: media)
+        var contents: [String: Any] = [:]
+        if let data = try? Data(contentsOf: path), data.count <= 4096,
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { contents = existing }
+        func object<T: Encodable>(_ value: T) throws -> Any {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+        }
+        let margin = bleed?.clamped
+        contents["focus"] = try focus.map(\.clamped).flatMap { $0 == .centre ? nil : try object($0) }
+        contents["bleed"] = try margin.flatMap { $0.isEmpty ? nil : try object($0) }
+        contents["tone"] = try tone.map(\.clamped).flatMap { $0.isNeutral ? nil : try object($0) }
+        if contents.isEmpty {
+            if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+            return
+        }
+        let data = try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: path, options: .atomic)
     }
 }
 
