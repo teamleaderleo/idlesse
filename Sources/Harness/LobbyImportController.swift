@@ -16,7 +16,11 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         let upscaled: Bool
         let quoteUSD: Double?
         let capUSD: Double?
+        let quoteSeconds: Double?
     }
+    /// Must match ingest.py: startup is paid once per job, and one job takes at most this much estimated work.
+    private static let startupSeconds = 120.0
+    private static let batchSeconds = 600.0
 
     private let pipeline: MediaPipeline
     private let onInstalled: (URL) -> Void
@@ -40,6 +44,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let fitButton = NSButton(title: "Fit Camera", target: nil, action: nil)
+    private let upscaleButton = NSButton(title: "Upscale Together…", target: nil, action: nil)
     private let chooseButton = NSButton(title: "Folder or ZIP…", target: nil, action: nil)
 
     init(pipeline: MediaPipeline, onInstalled: @escaping (URL) -> Void) {
@@ -83,6 +88,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         table.dataSource = self
         table.delegate = self
         table.usesAlternatingRowBackgroundColors = true
+        table.allowsMultipleSelection = true
         table.setAccessibilityLabel("Lobbies")
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -104,7 +110,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         form.spacing = 6
         titleField.widthAnchor.constraint(equalToConstant: 280).isActive = true
         animationField.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        for (button, action) in [(previewButton, #selector(previewSelected)), (importButton, #selector(importSelected)), (stopButton, #selector(stop)), (fitButton, #selector(fitCamera))] {
+        for (button, action) in [(previewButton, #selector(previewSelected)), (importButton, #selector(importSelected)), (stopButton, #selector(stop)), (fitButton, #selector(fitCamera)), (upscaleButton, #selector(upscaleSelected))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -117,7 +123,8 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         fitButton.toolTip = "Zoom and recentre until the art covers the frame for the whole loop (free, local)"
-        let buttons = NSStackView(views: [previewButton, fitButton, importButton, stopButton, spinner])
+        upscaleButton.toolTip = "Upscale every selected lobby in one Modal job, so they share its startup cost"
+        let buttons = NSStackView(views: [previewButton, fitButton, importButton, upscaleButton, stopButton, spinner])
         buttons.spacing = 10
         let right = NSStackView(views: [image, heading, info, form, buttons, status])
         right.orientation = .vertical
@@ -166,7 +173,8 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
                 let quote = row["quote"] as? [String: Any]
                 return Lobby(asset: asset, title: row["title"] as? String, installed: row["installed"] as? [String] ?? [],
                              upscaled: row["upscaled"] as? Bool ?? false,
-                             quoteUSD: quote?["estimateUSD"] as? Double, capUSD: quote?["capUSD"] as? Double)
+                             quoteUSD: quote?["estimateUSD"] as? Double, capUSD: quote?["capUSD"] as? Double,
+                             quoteSeconds: (quote?["estimateSeconds"] as? NSNumber)?.doubleValue)
             }
             let pending = self.lobbies.filter { $0.installed.isEmpty }.count
             self.status.stringValue = "\(self.lobbies.count) lobbies extracted, \(pending) not installed yet."
@@ -195,7 +203,9 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         if (notification.object as? NSSearchField) === search { filter() }
     }
 
-    private var selectedLobby: Lobby? { shown.indices.contains(table.selectedRow) ? shown[table.selectedRow] : nil }
+    private var selectedLobby: Lobby? {
+        table.selectedRowIndexes.count == 1 && shown.indices.contains(table.selectedRow) ? shown[table.selectedRow] : nil
+    }
 
     func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -214,7 +224,35 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         if tableColumn?.identifier.rawValue != "title" { label.textColor = .secondaryLabelColor }
         return label
     }
+    private var selectedLobbies: [Lobby] { table.selectedRowIndexes.compactMap { shown.indices.contains($0) ? shown[$0] : nil } }
+
+    /// One job for everything selected that still needs upscaling: GPU time adds up, startup is paid once.
+    private var batchQuote: (lobbies: [Lobby], seconds: Double, usd: Double, cap: Double)? {
+        let pending = selectedLobbies.filter { !$0.upscaled }
+        guard !pending.isEmpty, let sample = pending.first, let usd = sample.quoteUSD, let seconds = sample.quoteSeconds, seconds > 0,
+              let cap = sample.capUSD else { return nil }
+        let rate = usd / seconds
+        let total = pending.reduce(Self.startupSeconds) { $0 + max(($1.quoteSeconds ?? Self.startupSeconds) - Self.startupSeconds, 0) }
+        return (pending, total, total * rate, cap)
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if table.selectedRowIndexes.count > 1 {
+            preview = nil
+            previewedAsset = nil
+            image.image = nil
+            heading.stringValue = "\(table.selectedRowIndexes.count) lobbies selected"
+            if let quote = batchQuote {
+                let single = quote.lobbies.compactMap(\.quoteUSD).reduce(0, +)
+                info.stringValue = String(format: "Upscale the %d that need it in one Modal job: about %.0f seconds, about $%.2f (one at a time would be about $%.2f). Importing each is then free.",
+                                          quote.lobbies.count, quote.seconds, quote.usd, single)
+                    + (quote.seconds > Self.batchSeconds ? " That is too much for one job; select fewer." : "")
+            } else {
+                info.stringValue = "Every selected lobby is already upscaled."
+            }
+            updateControls()
+            return
+        }
         guard let lobby = selectedLobby, lobby.asset != previewedAsset else { updateControls(); return }
         preview = nil
         previewedAsset = nil
@@ -366,6 +404,24 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         }
     }
 
+    @objc private func upscaleSelected() {
+        guard let quote = batchQuote, quote.seconds <= Self.batchSeconds, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Upscale \(quote.lobbies.count) lobbies on Modal?"
+        alert.informativeText = String(format: "One job upscales all of them. That is billed to your Modal account: about $%.2f, and at most $%.2f because the job stops after 15 minutes with no retries. Nothing is exported or installed; importing each one afterwards is local and free.", quote.usd, quote.cap)
+        alert.addButton(withTitle: "Upscale")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            self.status.stringValue = "Upscaling on Modal…"
+            self.start(["--upscale"] + quote.lobbies.map(\.asset) + ["--yes", "--json"], onEvent: nil) { [weak self] succeeded, output in
+                guard let self else { return }
+                self.status.stringValue = (succeeded ? "" : "Upscale didn’t finish: ") + Self.lastMessage(output)
+                self.reloadList()
+            }
+        }
+    }
+
     @objc private func stop() { run?.stop() }
 
     // MARK: Running
@@ -399,6 +455,12 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         let busy = run != nil
         busy ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
         stopButton.isHidden = !busy
+        let many = table.selectedRowIndexes.count > 1
+        upscaleButton.isHidden = !many || batchQuote == nil
+        upscaleButton.isEnabled = !busy && (batchQuote?.seconds ?? .infinity) <= Self.batchSeconds
+        if let quote = batchQuote { upscaleButton.title = "Upscale \(quote.lobbies.count) Together…" }
+        previewButton.isHidden = many
+        importButton.isHidden = many
         previewButton.isEnabled = !busy && selectedLobby != nil
         fitButton.isHidden = preview == nil || (preview?["clean"] as? Bool ?? true)
         fitButton.isEnabled = !busy
@@ -456,6 +518,16 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         if let hold = ProcessInfo.processInfo.environment["IDLESSE_SMOKE_HOLD"].flatMap(Double.init) {
             controller.show()
             RunLoop.main.run(until: Date().addingTimeInterval(hold))
+        }
+        let pendingRows = IndexSet(controller.shown.indices.filter { !controller.shown[$0].upscaled }.prefix(3))
+        if pendingRows.count > 1 {
+            controller.table.selectRowIndexes(pendingRows, byExtendingSelection: false)
+            let quote = controller.batchQuote!
+            let separate = quote.lobbies.compactMap(\.quoteUSD).reduce(0, +)
+            precondition(quote.usd < separate && !controller.upscaleButton.isHidden && controller.importButton.isHidden,
+                         "several lobbies share one job and cost less together")
+            controller.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            wait("reselection") { controller.run == nil }
         }
         controller.titleField.stringValue = "not a valid name!"
         controller.importSelected()

@@ -178,6 +178,12 @@ a lobby never upscaled before, is quoted from the timings of past runs and
 Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds
 the worst case), and needs a yes or `--yes`. Everything else is local.
 
+Upscaling is billed per job, and most of a single lobby's cost is container
+startup. `--upscale a b c` upscales several lobbies in one job instead, so later
+imports of each are free; all 34 lobbies still unupscaled here quote at about
+$0.18 together against $1.61 one by one. It refuses work estimated past 600
+seconds, leaving the 15-minute cap room.
+
 In the app, **Wallpaper → Import Lobby…** does the same through this script. It
 lists every extracted lobby with its state (installed, free, or the upscale
 price), previews the selection, offers **Fit Camera** when the preview shows

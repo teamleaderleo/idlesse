@@ -39,6 +39,9 @@ CONTAINER_SECONDS = L4_PER_SECOND + 8 * CPU_CORE_PER_SECOND + 16 * MEMORY_GIB_PE
 # loosely from past runs; the quote rounds up rather than down.
 STARTUP_SECONDS = 120
 TIMEOUT_SECONDS = 900
+# The most estimated work one job is allowed to take on, leaving the cap room
+# for a slow container rather than cutting a batch off half-way.
+BATCH_SECONDS = 600
 
 
 def ensure_pillow(workspace):
@@ -276,8 +279,10 @@ def past_rate(workspace):
     return seconds / megapixels if megapixels else 1.5
 
 
-def quote(workspace, asset):
-    pngs = sorted((workspace / 'assets-pc' / asset).glob('*.png'))
+def quote(workspace, assets):
+    """Estimate for one Modal job upscaling `assets` (an id or a list): one startup, shared."""
+    assets = [assets] if isinstance(assets, str) else list(assets)
+    pngs = [p for asset in assets for p in sorted((workspace / 'assets-pc' / asset).glob('*.png'))]
     megapixels = sum(math.prod(png_size(p)) for p in pngs) / 1e6
     work = megapixels * past_rate(workspace)
     estimate = STARTUP_SECONDS + work
@@ -288,7 +293,11 @@ def quote(workspace, asset):
 
 def confirm_paid(workspace, asset, yes):
     q = quote(workspace, asset)
-    print(f'\nUpscaling {asset} needs one Modal L4 job: {q["textures"]} texture(s), {q["megapixels"]} MP.')
+    if q['estimateSeconds'] > BATCH_SECONDS:
+        raise SystemExit(f'That is about {q["estimateSeconds"]}s of work, too close to the {TIMEOUT_SECONDS}s cap for one job; '
+                         'upscale fewer lobbies at a time.')
+    names = asset if isinstance(asset, str) else asset[0] if len(asset) == 1 else f'{len(asset)} lobbies together'
+    print(f'\nUpscaling {names} needs one Modal L4 job: {q["textures"]} texture(s), {q["megapixels"]} MP.')
     print(f'  Estimate ~{q["estimateSeconds"]}s of container time (~{q["gpuSeconds"]}s on the GPU), about ${q["estimateUSD"]:.2f}.')
     print(f'  Hard cap: {TIMEOUT_SECONDS // 60} minutes, one container, no retries, so at most about ${q["capUSD"]:.2f}.')
     print('  Estimate uses list prices and your past runs; Modal bills the actual time.')
@@ -306,6 +315,41 @@ def prepare_free_restore(workspace, asset, job):
     with zipfile.ZipFile(job / 'restored.zip', 'w', zipfile.ZIP_STORED) as archive:
         for png in sorted((workspace / 'assets-pc' / asset).glob('*.png')):
             archive.write(workspace / 'assets-ai-batch' / asset / png.name, f'{asset}/{png.name}')
+
+
+def upscale_batch(workspace, assets, yes, json_events, log):
+    """Upscale several lobbies in one Modal job, so each pays for its GPU seconds and not its own startup."""
+    for asset in assets:
+        safe_name(asset)
+        if not list((workspace / 'assets-pc' / asset).glob('*.skel')):
+            raise SystemExit(f'No lobby {asset} in assets-pc.')
+    pending = sorted({asset for asset in assets if not restored_complete(workspace, asset)})
+    skipped = sorted(set(assets) - set(pending))
+    if skipped:
+        log(f'Already upscaled, skipping: {", ".join(skipped)}')
+    if not pending:
+        emit(json_events, 'upscaled', assets=[], skipped=skipped)
+        log('Nothing to upscale.')
+        return
+    modal = find_modal()
+    if not modal:
+        raise SystemExit('Upscaling needs the modal CLI, and it is not installed.')
+    confirm_paid(workspace, pending, yes)
+    job = workspace / f'upscale-{datetime.datetime.now():%Y%m%d-%H%M%S}'
+    job.mkdir()
+    plan = job / 'plan.json'
+    plan.write_text(json.dumps({'schema': 1, 'model': PLAN_MODEL, 'source': PLAN_SOURCE, 'items': [
+        {'id': asset, 'title': asset, 'stem': stem_of(workspace, asset), 'animation': 'Idle_01', 'seconds': 1}
+        for asset in pending]}, indent=2))
+    subprocess.run([sys.executable, str(HERE / 'run.py'), '--root', str(workspace), '--output', str(job / 'out'),
+                    '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal, '--restore-only'], check=True)
+    missing = [asset for asset in pending if not restored_complete(workspace, asset)]
+    if missing:
+        raise SystemExit(f'The job finished but these are not fully upscaled: {", ".join(missing)}')
+    report = job / 'restored.zip.json'
+    seconds = json.loads(report.read_text()).get('seconds') if report.exists() else None
+    emit(json_events, 'upscaled', assets=pending, skipped=skipped, gpuSeconds=seconds)
+    log(f'Upscaled {len(pending)} lobbies; importing them is now local and free.')
 
 
 # --- install -----------------------------------------------------------------
@@ -366,6 +410,8 @@ def main():
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
+    p.add_argument('--upscale', nargs='+', metavar='ASSET',
+                   help='Upscale these lobbies together in one quoted Modal job, so later imports are free')
     p.add_argument('--list', action='store_true', help='Print every extracted lobby as JSON, with install and upscale state')
     p.add_argument('--json', action='store_true', help='Also print IDLESSE-prefixed JSON events, for the app')
     a = p.parse_args()
@@ -376,6 +422,9 @@ def main():
     log = lambda message: print(message, flush=True)
     if a.list:
         print(json.dumps(list_lobbies(workspace, (a.output or DEFAULT_OUTPUT).expanduser().resolve()), indent=2))
+        return
+    if a.upscale:
+        upscale_batch(workspace, a.upscale, a.yes, a.json, log)
         return
 
     receipt = None
