@@ -124,6 +124,7 @@ struct RendererDiagnostics {
 protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
+    var isReadyForDisplay: Bool { get }
     var presentedFrameCount: Int? { get }
     var gpuTotals: (seconds: Double, frames: Int)? { get }
     func setPaused(_ paused: Bool)
@@ -137,6 +138,7 @@ protocol SceneRenderer: AnyObject {
 }
 
 extension SceneRenderer {
+    var isReadyForDisplay: Bool { true }
     func refreshSceneTime() { view.needsDisplay = true }
     func setMuted(_ muted: Bool) {}
     func updateScene(_ scene: SceneDescriptor) -> Bool { false }
@@ -528,6 +530,7 @@ final class SharedVideoHub {
 }
 
 final class VideoRenderer: SceneRenderer {
+    var isReadyForDisplay: Bool { (view as? VideoWallpaperView)?.playerLayer.isReadyForDisplay == true }
     let view: NSView
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
@@ -595,6 +598,7 @@ final class VideoRenderer: SceneRenderer {
 
 /// Array order is back to front. Normal alpha composition only.
 final class LayeredSceneRenderer: SceneRenderer {
+    var isReadyForDisplay: Bool { zip(children, nodes).allSatisfy { !$0.1.visible || $0.0.isReadyForDisplay } }
     let view: NSView
     private var children: [SceneRenderer] = []
     private var nodes: [SceneNode] = []

@@ -768,6 +768,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     var onFirstFrameReady: (() -> Void)?
     private var deliveredFirstFrame = false
+    var isReadyForDisplay: Bool { deliveredFirstFrame }
 
     func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }

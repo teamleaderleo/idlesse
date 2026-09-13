@@ -134,6 +134,17 @@ final class WallpaperSurface {
         renderer.setPreferredFrameRate(SceneFrameRate.selected.requested(maximum: window.screen?.maximumFramesPerSecond ?? 60))
     }
 
+    var isReadyForDisplay: Bool { renderer.isReadyForDisplay }
+    func prepareForDisplay() {
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderBack(nil)
+        renderer.setMuted(true)
+        renderer.setPaused(false)
+        renderer.refreshSceneTime()
+    }
+    func refreshPreparation() { renderer.refreshSceneTime() }
+
     func show(paused: Bool) {
         window.orderBack(nil)
         menuStrip?.window.orderFront(nil)
@@ -194,9 +205,10 @@ final class WallpaperSurface {
 }
 
 enum WallpaperError: LocalizedError {
-    case unreadableImage, noVideo, unsupported
+    case unreadableImage, noVideo, unsupported, preparationTimeout
     var errorDescription: String? {
         switch self {
+        case .preparationTimeout: return "The new wallpaper did not produce a frame. Your previous wallpaper is still selected."
         case .unreadableImage: return "That image could not be opened."
         case .noVideo: return "Choose a playable video with a finite duration and a video track."
         case .unsupported: return "Choose a JPG, PNG, HEIC, MP4 or MOV file."
@@ -749,8 +761,32 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     candidateClock.pointerEnabled = reloading && self.clock.pointerEnabled
                     candidateClock.audioEnabled = reloading && self.clock.audioEnabled && playable.usesAudio
                 }
+                var preparationError: String?
                 let (replacement, newHub) = self.suspended ? ([], nil) :
-                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
+                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request, onError: { [weak self] message in
+                        if adopted { self?.stop(); self?.showError(message) }
+                        else { preparationError = message }
+                    })
+                defer {
+                    if !adopted { replacement.forEach { $0.close() }; newHub?.close() }
+                }
+                if self.presentsWindows && !replacement.isEmpty {
+                    newHub?.setMuted(true)
+                    newHub?.setPaused(false)
+                    replacement.forEach { $0.prepareForDisplay() }
+                    let deadline = ProcessInfo.processInfo.systemUptime + 10
+                    while !replacement.allSatisfy({ $0.isReadyForDisplay }) {
+                        try Task.checkCancellation()
+                        guard request == self.generation, !self.suspended else { throw CancellationError() }
+                        if let preparationError { throw SceneError.invalid(preparationError) }
+                        guard ProcessInfo.processInfo.systemUptime < deadline else { throw WallpaperError.preparationTimeout }
+                        try await Task.sleep(nanoseconds: 30_000_000)
+                        replacement.forEach { $0.refreshPreparation() }
+                    }
+                    try Task.checkCancellation()
+                    guard request == self.generation, !self.suspended else { throw CancellationError() }
+                    if let preparationError { throw SceneError.invalid(preparationError) }
+                }
                 let fade = !reloading && self.presentsWindows && !self.suspended && !self.shouldPause &&
                     !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && self.transitionDuration > 0 && !self.surfaces.isEmpty
                 if fade {
@@ -792,7 +828,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 replacement.forEach { $0.setMuted(!self.soundEnabled) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
-                    replacement.forEach { $0.window.alphaValue = fade ? 0 : 1; $0.show(paused: self.shouldPause) }
+                    replacement.forEach {
+                        self.configureDesktopInteraction($0)
+                        $0.window.alphaValue = fade ? 0 : 1
+                        $0.show(paused: self.shouldPause)
+                    }
                     if fade { self.beginTransition() }
                 }
                 self.ensureStatusItem()
@@ -827,7 +867,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int, onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
@@ -837,6 +877,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let sharedHub = (sharesSceneAcrossDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
+            if let onError { onError(message); return }
             self.stop()
             self.showError(message)
         } : nil
@@ -865,6 +906,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         sharedHub: screenHub, securityScope: screenScope) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
+                        if let onError { onError(message); return }
                         self.stop()
                         self.showError(message)
                     }

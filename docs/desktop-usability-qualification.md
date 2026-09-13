@@ -57,3 +57,11 @@ These are sequential, unequal-duration live samples, not controlled benchmarks.
 The display-1 missed-copy ratio and mean improved markedly, but worst-case skew
 increased; do not infer atomic synchronization or universally lower latency.
 The main renderer does not wait for the strip and no additional decoder is used.
+
+### Prepared scene handoff
+
+Replacement selection now waits for render readiness before retiring the active scene or starting a crossfade. Candidates are ordered transparent, muted, and noninteractive during preparation. Metal readiness requires a completed full-frame GPU command; Standard video uses AVPlayerLayer readiness, and layered scenes require every visible child. A ten-second preparation deadline fails the selection rather than forcing an unready frame onto the desktop. Cancellation closes candidate windows and their shared decoder; candidate decoder errors are retained until selection can report failure, without stopping the existing wallpaper.
+
+This preparation temporarily retains both scenes and their resources. The deadline bounds loading time, not peak memory. Further qualification should cover rapid replacement, decoder failure, and suspension during preparation.
+
+The rebuilt app restored Hina, then completed Library selection Hina → Tiger → Hina. The final Library state reports Hina on desktop with playback running. This verifies ordinary real-media handoff completion; it is not a frame-by-frame latency measurement.
