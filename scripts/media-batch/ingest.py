@@ -502,7 +502,7 @@ class Target:
         if self.kind != 'live2d':
             calibrate.rebundle(self.workspace)
 
-    def export(self, job, duration, modal, log, encoder='x265'):
+    def export(self, job, duration, modal, log, encoder='x265', edges='original'):
         staged = job / 'out'
         if self.kind == 'lobby':
             plan = job / 'plan.json'
@@ -510,7 +510,7 @@ class Target:
                 {'id': self.asset, 'title': self.title, 'stem': self.stem, 'animation': self.animation, 'seconds': duration}]}, indent=2))
             subprocess.run([sys.executable, str(HERE / 'run.py'), '--root', str(self.workspace), '--output', str(staged),
                             '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal,
-                            '--encoder', encoder], check=True)
+                            '--encoder', encoder, '--edges', edges], check=True)
         else:
             plan = job / 'plan.json'
             plan.write_text(json.dumps({'items': [{**self.item, 'animation': self.animation}]}, indent=2))
@@ -551,6 +551,9 @@ def main():
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
     p.add_argument('--fast-encode', action='store_true',
                    help='Encode on the GPU in about a minute instead of x265 10-bit, at the cost of banding in soft gradients')
+    p.add_argument('--edges', choices=['smooth', 'original'],
+                   help="Lobby silhouettes: smooth evens out the art's stair-stepped outlines (default, or what the "
+                        're-rendered export used); original keeps them exactly as painted')
     p.add_argument('--no-library', action='store_true', help='Install the file without adding it to the Idlesse Library')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
@@ -563,6 +566,7 @@ def main():
     workspace = a.workspace.expanduser().resolve()
     ensure_pillow(workspace)
     calibrate = load('calibrate')
+    smooth_edges = load('smooth_edges')
     register_with_app(workspace)
     log = lambda message: print(message, flush=True)
     if a.update_names:
@@ -709,6 +713,14 @@ def main():
         elif not calibrate.clean(edges) and not a.allow_matte:
             raise SystemExit('Stopping before export because the preview shows matte; adjust the crop or pass --allow-matte.')
 
+        # Smooth edges need the upscaled masks: a paid upscale now returns them, and
+        # lobbies upscaled before they existed fall back rather than pay again.
+        edges = 'original'
+        if lobby and (a.edges or (receipt or {}).get('edges') or 'smooth') == 'smooth':
+            if not free or smooth_edges.has_masks(workspace, asset):
+                edges = 'smooth'
+            else:
+                log('No edge masks for this lobby yet; exporting with its original edges.')
         job.mkdir()
         modal = '/usr/bin/false'
         if lobby and free:
@@ -722,7 +734,7 @@ def main():
         else:
             log('Azur Lane models render from their original textures; this export is local and free.')
 
-        staged = target.export(job, duration, modal, log, encoder='webcodecs' if a.fast_encode else 'x265')
+        staged = target.export(job, duration, modal, log, encoder='webcodecs' if a.fast_encode else 'x265', edges=edges)
         keep_camera = True
         final = install(staged, target.names, output, a.replace, clear_framing=changed, log=log)
         if a.trim_edges and trim:

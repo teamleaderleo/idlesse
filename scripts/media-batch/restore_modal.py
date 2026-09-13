@@ -39,6 +39,12 @@ def bench(textures: bytes):
     result=Image.fromarray(pixels).resize((ow*2,oh*2),Image.Resampling.LANCZOS)
     result.putalpha(original.getchannel("A").resize(result.size,Image.Resampling.LANCZOS))
     buf=io.BytesIO();result.save(buf,format="PNG",compress_level=3);zout.writestr(entry.filename,buf.getvalue())
+    # The alpha through the same model, for smooth_edges.py: stair-stepped outlines come out smooth.
+    ta=torch.from_numpy(np.array(original.getchannel("A")).astype(np.float32)/255)[None,None].repeat(1,3,1,1).cuda().half().contiguous(memory_format=torch.channels_last)
+    ma=model(ta)[0].float().mean(0).clamp(0,1).mul(255).round().to(torch.uint8).cpu().numpy()
+    mask=Image.fromarray(ma).resize((ow*2,oh*2),Image.Resampling.LANCZOS)
+    buf=io.BytesIO();mask.save(buf,format="PNG",compress_level=3);zout.writestr("assets-ai-masks/"+entry.filename,buf.getvalue())
+    del ta,ma
     textureReports.append({"file":entry.filename,"size":list(result.size),"seconds":time.monotonic()-stamp});print(textureReports[-1],flush=True)
     del tx,ty,pixels,arr,result
  return {"textures":textureReports,"seconds":time.monotonic()-wall},assetsOut.getvalue()

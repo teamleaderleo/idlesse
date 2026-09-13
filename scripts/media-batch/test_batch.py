@@ -146,4 +146,41 @@ class PaintedAreaTests(unittest.TestCase):
         x, y, w, h = self.calibrate.largest_box([a, b])
         self.assertGreaterEqual(x * 1920, 400); self.assertLessEqual((x + w) * 1920, 1520 + 1e-6)
 
+class SmoothEdgeTests(unittest.TestCase):
+    from PIL import Image, ImageDraw, ImageFilter
+    import smooth_edges
+
+    def pages(self):
+        """A diagonal silhouette stepped every 2px (one source pixel at 2x), and the smooth diagonal a mask would give."""
+        stepped = self.Image.new('L', (160, 160), 0)
+        draw = self.ImageDraw.Draw(stepped)
+        for y in range(160):
+            draw.line([(0, y), ((y // 2) * 2, y)], fill=255)
+        smooth = self.Image.new('L', (160, 160), 0)
+        self.ImageDraw.Draw(smooth).polygon([(0, 0), (160, 160), (0, 160)], fill=255)
+        return stepped.filter(self.ImageFilter.BoxBlur(0.5)), smooth.filter(self.ImageFilter.BoxBlur(0.5))
+
+    def test_stepped_outline_takes_the_mask(self):
+        alpha, mask = self.pages()
+        out = self.smooth_edges.blend(alpha, mask)
+        value = out.getpixel((81, 80))
+        self.assertLess(abs(value - mask.getpixel((81, 80))), abs(value - alpha.getpixel((81, 80))))
+
+    def test_reshaped_area_keeps_the_painted_alpha(self):
+        alpha, _ = self.pages()
+        mask = self.Image.new('L', alpha.size, 255)  # the model filled a gap that should stay open
+        out = self.smooth_edges.blend(alpha, mask)
+        self.assertEqual(out.getpixel((120, 40)), alpha.getpixel((120, 40)))
+
+    def test_lace_keeps_the_painted_alpha(self):
+        lace = self.Image.new('L', (160, 160), 0)
+        draw = self.ImageDraw.Draw(lace)
+        for x in range(0, 160, 3):
+            for y in range(0, 160, 3):
+                draw.point((x, y), fill=255)
+        lace = lace.filter(self.ImageFilter.BoxBlur(1))
+        mask = lace.filter(self.ImageFilter.BoxBlur(2))
+        out = self.smooth_edges.blend(lace, mask)
+        self.assertEqual(out.getpixel((80, 80)), lace.getpixel((80, 80)))
+
 if __name__ == '__main__': unittest.main()

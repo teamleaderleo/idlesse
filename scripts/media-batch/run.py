@@ -4,6 +4,7 @@ import argparse, contextlib, os, sys, fcntl, hashlib, json, re, shutil, subproce
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import smooth_edges
 
 
 def save(path, value):
@@ -136,6 +137,8 @@ def main():
     parser.add_argument('--frame-asset', action='append', default=[])
     parser.add_argument('--encoder', choices=['webcodecs','frames','x265'], default='webcodecs',
         help='x265 sends lossless frames to 10-bit HEVC: slower, without gradient banding; several can run at once')
+    parser.add_argument('--edges', choices=['original', 'smooth'], default='original',
+        help='smooth renders from assets-ai-smooth: stair-stepped silhouettes evened out with the upscaled masks')
     parser.add_argument('--restore-only', action='store_true', help='Prepare textures without starting the local renderer')
     args = parser.parse_args()
     if Path(args.job_name).name != args.job_name or args.job_name in ('', '.', '..'):
@@ -173,9 +176,13 @@ def main():
         with zipfile.ZipFile(restored_zip) as archive:
             expected = {i['id'] + '/' + p.name for i in plan['items']
                         for p in (root / 'assets-pc' / i['id']).glob('*.png')}
-            if set(archive.namelist()) != expected:
+            names = set(archive.namelist())
+            masks = {n for n in names if n.startswith(smooth_edges.MASKS + '/')}
+            if names - masks != expected or not masks <= {smooth_edges.MASKS + '/' + n for n in expected}:
                 raise RuntimeError('Unexpected restored texture manifest')
-            archive.extractall(restored)
+            archive.extractall(restored, members=sorted(expected))
+            # Older restore jobs returned no masks; those lobbies can still export with original edges.
+            archive.extractall(root, members=sorted(masks))
         for item in plan['items']:
             dest = restored / item['id']
             for path in (root / 'assets-pc' / item['id']).iterdir():
@@ -187,6 +194,14 @@ def main():
     if args.restore_only:
         print('Restored textures verified; export remains pending', flush=True)
         return
+    textures = {}
+    for item in plan['items']:
+        if args.edges == 'smooth':
+            if not smooth_edges.has_masks(root, item['id']):
+                raise RuntimeError(f'No edge masks for {item["id"]}; export it with --edges original')
+            textures[item['id']] = smooth_edges.build(root, item['id']).relative_to(root).as_posix()
+        else:
+            textures[item['id']] = 'assets-ai-batch/' + item['id']
     class QuietHandler(SimpleHTTPRequestHandler):
         def log_message(self, *args): pass
     handler = partial(QuietHandler, directory=str(root))
@@ -213,7 +228,7 @@ def main():
             reused = temporary.exists()
             if not reused:
                 frame_args = [str(temporary), str(frames), '3840', '2160',
-                    'assets-ai-batch/' + item['id'], item['stem'], item['animation']]
+                    textures[item['id']], item['stem'], item['animation']]
                 use_frames = args.encoder == 'frames' or item['id'] in args.frame_asset
                 x265 = args.encoder == 'x265' and not use_frames
                 helper = 'encode_x265.py' if x265 else 'encode.py'
@@ -247,7 +262,7 @@ def main():
             shutil.move(temporary, final)
             receipt = {'title': title, 'path': str(final), 'sha256': digest(final), 'probe': result,
                 'attemptSeconds': round(time.monotonic() - start, 2), 'reusedEncodedVideo': reused, 'source': plan['source'],
-                'restoration': plan['model'], 'encoder': 'x265-main10' if args.encoder == 'x265' and item['id'] not in args.frame_asset else 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
+                'restoration': plan['model'] + ('; ' + smooth_edges.VERSION if args.edges == 'smooth' else ''), 'edges': args.edges, 'encoder': 'x265-main10' if args.encoder == 'x265' and item['id'] not in args.frame_asset else 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
                 'caveat': 'Upscaled texture detail; Spine-only rendering may omit Unity effects/physics. Visual QA required.'}
             save(final.with_suffix('.source.json'), receipt)
             state['items'][item['id']] = receipt; state.pop('current', None); save(state_path, state)

@@ -207,6 +207,16 @@ imports of each are free; all 34 lobbies still unupscaled here quote at about
 $0.18 together against $1.61 one by one. It refuses work estimated past 600
 seconds, leaving the 15-minute cap room.
 
+Lobby art often draws a 1px dark outline right at a transparent silhouette, so
+upscaling its alpha keeps every source pixel as a stair step. The upscale job
+also runs each texture's alpha through the model into `assets-ai-masks`, and
+`smooth_edges.py` uses that mask only where it stays close to the Lanczos alpha
+(a step, not a reshape) and not in dense soft transparency such as lace or
+smoke, where it hardens detail. Exports use it by default (`--edges smooth`,
+rendered from `assets-ai-smooth`); `--edges original` keeps a lobby's edges as
+painted, and a re-render keeps whichever its receipt records. Lobbies upscaled
+before masks existed export with original edges rather than paying again.
+
 `--update-names` caches lobby names from SchaleDB's public student list, whose
 `DevName` is the lobby code (`CH0064` is `ch0064_home`); it matched 41 of 43
 hand-chosen titles, the other two only adding a suffix. `--list` then names every

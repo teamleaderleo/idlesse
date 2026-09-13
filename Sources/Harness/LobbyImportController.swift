@@ -32,6 +32,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
 
     private let search = NSSearchField()
     private let hideInstalled = NSButton(checkboxWithTitle: "Hide installed", target: nil, action: nil)
+    private let smoothEdges = NSButton(checkboxWithTitle: "Smooth jagged outlines", target: nil, action: nil)
     private let table = NSTableView()
     private let image = NSImageView()
     private let heading = NSTextField(labelWithString: "Choose a lobby")
@@ -108,7 +109,9 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         let nameLabel = NSTextField(labelWithString: "Name"), animationLabel = NSTextField(labelWithString: "Animation")
         for label in [nameLabel, animationLabel] { label.widthAnchor.constraint(equalToConstant: 72).isActive = true }
         let nameRow = NSStackView(views: [nameLabel, titleField]), animationRow = NSStackView(views: [animationLabel, animationField])
-        let form = NSStackView(views: [nameRow, animationRow])
+        smoothEdges.state = .on
+        smoothEdges.toolTip = "Even out stair-stepped silhouettes left by the art's outlines. Lace, hair wisps and smoke stay as painted."
+        let form = NSStackView(views: [nameRow, animationRow, smoothEdges])
         form.orientation = .vertical
         form.alignment = .leading
         form.spacing = 6
@@ -372,7 +375,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
             window.makeFirstResponder(titleField)
             return
         }
-        var arguments = [asset, "--json", "--title", titleValue, "--animation", animationValue]
+        var arguments = [asset, "--json", "--title", titleValue, "--animation", animationValue, "--edges", edgesValue]
         // Export exactly what the preview showed, including a fitted camera.
         if let camera = preview["camera"] as? [Double], camera.count == 3 {
             arguments += ["--camera"] + camera.map { String($0) }
@@ -449,6 +452,8 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
     }
 
     /// Upscaled, not yet installed, and named: what a batch import can take without asking anything.
+    private var edgesValue: String { smoothEdges.state == .on ? "smooth" : "original" }
+
     private var readyToImport: [Lobby] {
         selectedLobbies.filter { $0.upscaled && $0.installed.isEmpty && $0.title != nil }
     }
@@ -478,7 +483,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         let lobby = importQueue.removeFirst()
         let title = lobby.title ?? lobby.asset
         heading.stringValue = "Importing \(SceneLibraryController.displayTitle(title)) (\(importTotal - importQueue.count) of \(importTotal))"
-        start([lobby.asset, "--json", "--title", title, "--animation", animationValue, "--trim-edges"], onEvent: { [weak self] event in
+        start([lobby.asset, "--json", "--title", title, "--animation", animationValue, "--trim-edges", "--edges", edgesValue], onEvent: { [weak self] event in
             guard event["event"] as? String == "installed", let path = event["path"] as? String else { return }
             self?.onInstalled(URL(fileURLWithPath: path))
         }) { [weak self] succeeded, output in
