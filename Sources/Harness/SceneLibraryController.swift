@@ -136,13 +136,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let remove = NSButton(title: "Remove from Library", target: nil, action: nil)
     private enum PosterRevision: Equatable, Sendable {
         case package(ScenePackageWriter.Revision)
-        case file(Date?, Int?)
+        case file(Date?, Int?, Data?)
         static func read(_ source: URL) throws -> PosterRevision {
             var url = source
             url.removeAllCachedResourceValues()
             if url.pathExtension.lowercased() == "idlesse" { return .package(try ScenePackageWriter.revision(of: url)) }
             let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            return .file(values.contentModificationDate, values.fileSize)
+            // A crop/color save changes the sidecar, not the movie. Keep the
+            // bounded sidecar bytes in the revision so even same-size edits
+            // invalidate a previously rendered preview.
+            let handle = try? FileHandle(forReadingFrom: SceneFraming.url(for: url))
+            defer { try? handle?.close() }
+            let framing = try handle?.read(upToCount: 4097)
+            return .file(values.contentModificationDate, values.fileSize, framing)
         }
     }
     private var cache: [String: (image: NSImage, note: String, revision: PosterRevision)] = [:]
@@ -1572,6 +1578,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         try Data([1, 2]).write(to: raw)
         let newRevision = try PosterRevision.read(raw)
         precondition(oldRevision != newRevision)
+        try Data(#"{"focus":{"x":0.2,"y":0.5}}"#.utf8).write(to: SceneFraming.url(for: raw))
+        let croppedRevision = try PosterRevision.read(raw)
+        precondition(croppedRevision != newRevision, "Sidecar creation must invalidate posters")
+        try Data(#"{"focus":{"x":0.8,"y":0.5}}"#.utf8).write(to: SceneFraming.url(for: raw))
+        let changedCropRevision = try PosterRevision.read(raw)
+        precondition(changedCropRevision != croppedRevision, "Same-size framing edits must invalidate posters")
+        try FileManager.default.removeItem(at: SceneFraming.url(for: raw))
+        let resetCropRevision = try PosterRevision.read(raw)
+        precondition(resetCropRevision == newRevision, "Resetting framing must invalidate the cropped poster")
         var copied = false
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),

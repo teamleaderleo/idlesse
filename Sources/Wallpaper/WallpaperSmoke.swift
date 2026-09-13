@@ -4,6 +4,18 @@ import MetalKit
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {
+        // This suite inspects Standard's child views; do not let the user's
+        // animated menu preference select Metal for those structural checks.
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        var testArguments = arguments
+        testArguments["comfort.liveMenuStrip"] = false
+        UserDefaults.standard.setVolatileDomain(testArguments, forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
+        let sourceDuration = AVURLAsset(url: videoURL).duration.seconds
+        guard sourceDuration.isFinite, sourceDuration >= 1 else {
+            throw SceneError.invalid("Wallpaper smoke tests need a moving video at least one second long.")
+        }
+
         let overnight = DimSchedule(start: 22 * 60, end: 7 * 60)
         precondition(overnight.contains(minute: 22 * 60) && overnight.contains(minute: 0))
         precondition(overnight.contains(minute: 7 * 60 - 1) && !overnight.contains(minute: 7 * 60))
@@ -701,7 +713,7 @@ enum WallpaperSmoke {
 
         let followClock = SceneClock()
         var following = liveVideoScene
-        following.timeline = .init(duration: 2, mode: .loop, videosFollowScene: true)
+        following.timeline = .init(duration: max(2, sourceDuration + 1), mode: .loop, videosFollowScene: true)
         try followClock.configure(timeline: following.timeline)
         let followVideo = try MetalSceneRenderer(playable: following,
             bounds: NSRect(x: 0, y: 0, width: 32, height: 32), scale: 1, clock: followClock) { errors.append($0) }
@@ -721,11 +733,11 @@ enum WallpaperSmoke {
         }
         try followClock.seek(to: 0.1)
         followVideo.refreshSceneTime()
-        try followClock.seek(to: 1.8) // A newer seek wins; source video wraps at one second.
+        try followClock.seek(to: 1.8) // A newer seek wins; wrap using the actual source duration.
         followVideo.refreshSceneTime()
         wait {
             _ = try? followVideo.renderProbe()
-            return abs((followVideo.videoTransportPositions.first ?? -1) - 0.8) < 0.01
+            return abs((followVideo.videoTransportPositions.first ?? -1) - 1.8.truncatingRemainder(dividingBy: sourceDuration)) < 0.01
         }
         try followClock.configure(time: 0.2, rate: 0.5, loop: nil)
         followClock.setPaused(false)
@@ -735,11 +747,13 @@ enum WallpaperSmoke {
             let position = followVideo.videoTransportPositions.first ?? -1
             return position > 0.3 && abs(position - followClock.time) < 0.15
         }
+        try followClock.seek(to: sourceDuration + 0.1)
+        followVideo.refreshSceneTime()
         wait {
             _ = try? followVideo.renderProbe()
             let position = followVideo.videoTransportPositions.first ?? -1
-            return followClock.time > 1.1 && position >= 0 && position < 0.5
-                && abs(position - followClock.time.truncatingRemainder(dividingBy: 1)) < 0.15
+            return followClock.time > sourceDuration && position >= 0 && position < 0.5
+                && abs(position - followClock.time.truncatingRemainder(dividingBy: sourceDuration)) < 0.15
         }
         followClock.setPaused(true)
         followVideo.setPaused(true)
@@ -876,6 +890,14 @@ enum WallpaperSmoke {
         precondition(focusedRenderer.updateScene(focusedScene))
         precondition(zip(originalCanvases, canvases(focusedRenderer.view)).allSatisfy { $0 === $1 })
         precondition(originalCanvases.allSatisfy { $0.fillFocus == CGPoint(x: 0.8, y: 0.1) })
+        focusedScene.bleed = SceneBleed(top: 0.05, left: 0.1, right: 0.2)
+        precondition(focusedRenderer.updateScene(focusedScene))
+        for canvas in originalCanvases {
+            let image = canvas.currentImage!
+            let expected = focusedScene.focus!.filledFrame(content: image.size, in: canvas.bounds, bleed: focusedScene.bleed)
+            precondition(canvas.destinationRect(for: image) == expected, "Nested still and animated images must share crop geometry")
+        }
+        focusedScene.bleed = nil
         focusedScene.focus = nil
         precondition(focusedRenderer.updateScene(focusedScene))
         precondition(originalCanvases.allSatisfy { $0.fillFocus == nil })
