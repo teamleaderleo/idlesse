@@ -170,6 +170,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     }
 
     func show() {
+        updateButtons()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -398,6 +399,17 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         registerUndo(from: framing)
         apply(SceneFraming())
     }
+
+    var acceptsSaveCommand: Bool {
+        window?.isKeyWindow == true && window?.attachedSheet == nil && saveButton.isEnabled
+    }
+
+    func saveDocument() {
+        guard acceptsSaveCommand else { return }
+        save()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) { updateButtons() }
 
     @objc private func save() {
         do {
