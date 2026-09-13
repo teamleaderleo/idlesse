@@ -94,6 +94,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
     private var pendingThumbnails: [String: [(NSImage) -> Void]] = [:]
+    private var resolvedMediaURLs: [String: URL] = [:]
     private var thumbnailRevisions: [String: UInt] = [:]
     private var thumbnailJobsStarted = 0
     private let scroll = NSScrollView()
@@ -868,21 +869,35 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         preview()
     }
     private func open(_ item: Item) throws -> OpenedItem {
-        if let builtin = item.builtin { return OpenedItem(url: builtin, access: nil) }
+        if let builtin = item.builtin {
+            resolvedMediaURLs[item.id] = builtin.standardizedFileURL
+            return OpenedItem(url: builtin, access: nil)
+        }
         guard let entry = item.entry else { throw CocoaError(.fileNoSuchFile) }
         let access = try store.access(entry)
+        resolvedMediaURLs[item.id] = access.url.standardizedFileURL
         return OpenedItem(url: access.url, access: access)
     }
-    @objc private func refreshPreview() {
-        if let selected {
-            cache.removeValue(forKey: selected.id)
-            cacheOrder.removeAll { $0 == selected.id }
-            thumbnailRevisions[selected.id, default: 0] &+= 1
-            gridView.refreshThumbnail(id: selected.id)
-            if let index = items.firstIndex(where: { $0.id == selected.id }) {
-                table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
-            }
+    private func invalidatePreview(id: String) {
+        cache.removeValue(forKey: id)
+        cacheOrder.removeAll { $0 == id }
+        thumbnailRevisions[id, default: 0] &+= 1
+        gridView.refreshThumbnail(id: id)
+        if let index = items.firstIndex(where: { $0.id == id }) {
+            table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
         }
+    }
+
+    /// Refresh already visited rows without resolving every bookmark or mounting sources.
+    func mediaDidChange(_ url: URL) {
+        let key = url.standardizedFileURL
+        let ids = resolvedMediaURLs.compactMap { $0.value == key ? $0.key : nil }
+        for id in ids { invalidatePreview(id: id) }
+        if let selected, ids.contains(selected.id) { preview() }
+    }
+
+    @objc private func refreshPreview() {
+        if let selected { invalidatePreview(id: selected.id) }
         preview()
     }
     @objc private func clearTaskStatus() { reportTask("") }
@@ -1717,6 +1732,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         while thumbnailCompletions < 2 && Date() < thumbDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         precondition(thumbnailCompletions == 2 && controller.pendingThumbnails[duplicateRequest.id] == nil)
         print("Shared thumbnail: 2 consumers, 1 job, \(Int((ProcessInfo.processInfo.systemUptime - thumbnailStart) * 1000)) ms")
+
+        let beforeSaveRevision = controller.thumbnailRevisions[duplicateRequest.id, default: 0]
+        let selectedBeforeSave = controller.selected?.id
+        controller.mediaDidChange(controller.resolvedMediaURLs[duplicateRequest.id]!)
+        precondition(controller.thumbnailRevisions[duplicateRequest.id] == beforeSaveRevision + 1)
+        precondition(controller.selected?.id == selectedBeforeSave && !applied,
+                     "Saving framing refreshes previews without selecting or applying a wallpaper")
 
         var staleDelivered = false
         var refreshedThumbnail: NSImage?

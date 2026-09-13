@@ -40,6 +40,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         if let open = framingEditors[key] { open.show(); return }
         let editor = MediaFramingController(media: url, access: access) { [weak self] saved in
             self?.wallpaper.reloadIfShowing(saved)
+            self?.library?.mediaDidChange(saved)
         }
         editor.isOnDesktop = { [weak self] in self?.wallpaper.isShowing(url) ?? false }
         editor.onClose = { [weak self] in self?.framingEditors[key] = nil }
