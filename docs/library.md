@@ -279,3 +279,7 @@ The current-wallpaper popover follows live playback changes while open, includin
 title, destination, pause state, sound, and availability of scene controls. Pause
 availability matches the menu extra (animated playback only). Authored package
 titles appear in Home; raw media keeps its cleaned display filename.
+
+The raw wallpaper chooser now opens Library as its owner instead of launching the
+legacy Screen Saver Preview. That preview's HUD is limited to saver playback,
+revealing its picture, and Settings; Library and Studio remain app-level commands.

@@ -658,7 +658,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             self?.select(url)
         }
-        onShowPreview?()
+        onShowLibrary?()
         if let owner = presentingWindow?() {
             panel.beginSheetModal(for: owner, completionHandler: completion)
         } else {

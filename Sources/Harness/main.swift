@@ -165,13 +165,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         nextButton.toolTip = "Next picture (→)"
         let revealButton = NSButton(title: "Show in Finder", target: self, action: #selector(revealImage))
         settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
-        let wallpaperButton = NSButton(title: "Wallpaper…", target: wallpaper, action: #selector(WallpaperController.chooseWallpaper))
-        wallpaperButton.bezelStyle = .rounded
-        let sceneButton = NSButton(title: "Studio…", target: self, action: #selector(showScenePreview))
-        sceneButton.bezelStyle = .rounded
-        let libraryButton = NSButton(title: "Library…", target: self, action: #selector(showLibrary))
-        libraryButton.bezelStyle = .rounded
-        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton, libraryButton])
+        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton])
         controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         for button in [pauseButton!, nextButton, revealButton, settingsButton!] {
