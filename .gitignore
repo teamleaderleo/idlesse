@@ -1,5 +1,6 @@
 build/
 .build/
+.glaeda/apple-build/
 .DS_Store
 DerivedData/
 *.xcuserstate
