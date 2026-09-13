@@ -766,11 +766,19 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         metal.draw()
         return true
     }
+    var onFirstFrameReady: (() -> Void)?
+    private var deliveredFirstFrame = false
+
     func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
         if diagnostics.state == .running { updateSignals(sampledSignals()) }
         let changed = updateVideos()
         needsFrame = needsFrame || changed
+        // Do not replace the desktop poster with an incomplete composition while
+        // AVFoundation is still producing the first visible video textures.
+        guard !inputs.contains(where: { visibleIDs.contains($0.node.id) && $0.node.kind == .video && $0.texture == nil }) else {
+            gate.signal(); return
+        }
         guard needsFrame || roots.flatMap({ $0.descendants }).contains(where: { visibleIDs.contains($0.id) && $0.hasAnimatedEffects }) || inputs.contains(where: { visibleIDs.contains($0.node.id) && ($0.node.kind == .gradient || $0.node.kind == .particles || $0.node.kind == .shader) }) else {
             gate.signal(); return
         }
@@ -783,8 +791,14 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         command.addCompletedHandler { [weak self] command in
             gate.signal()
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.needsFrame, !self.diagnostics.animated, self.diagnostics.state != .disposed else { return }
-                self.metal.draw()
+                guard let self, self.diagnostics.state != .disposed else { return }
+                if command.status == .completed && !self.deliveredFirstFrame {
+                    self.deliveredFirstFrame = true
+                    let ready = self.onFirstFrameReady
+                    self.onFirstFrameReady = nil
+                    ready?()
+                }
+                if self.needsFrame && !self.diagnostics.animated { self.metal.draw() }
             }
             if command.status == .completed { gpuMetrics.recordGPU(start: command.gpuStartTime, end: command.gpuEndTime) }
             if command.status == .error {

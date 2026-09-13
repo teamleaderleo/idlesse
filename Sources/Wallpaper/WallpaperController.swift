@@ -91,6 +91,20 @@ final class WallpaperSurface {
             metal.displayFrame = screen.frame
         }
         window.contentView = renderer.view
+        if let metal = renderer as? MetalSceneRenderer {
+            // Keep the native still wallpaper visible until the GPU has a full
+            // composition. A newly attached CAMetalLayer otherwise flashes black.
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            renderer.view.layer?.opacity = 0
+            metal.onFirstFrameReady = { [weak self] in
+                guard let self else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.renderer.view.layer?.opacity = 1
+                CATransaction.commit()
+            }
+        }
         if Self.liveMenuStripEnabled,
            let metal = renderer as? MetalSceneRenderer {
             let strip = MenuBarStrip(screen: screen)
@@ -1517,6 +1531,9 @@ private final class MenuBarStrip {
         window.setFrame(frame, display: false)
         window.isReleasedWhenClosed = false
         window.title = "Idlesse Menu Strip Experiment"
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        layer.opacity = 0
         let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
         view.wantsLayer = true
         layer.pixelFormat = .bgra8Unorm
@@ -1551,6 +1568,15 @@ private final class MenuBarStrip {
         let pair = timing.makePair()
         source.addPresentedHandler { drawable in pair.record(source: true, time: drawable.presentedTime) }
         target.addPresentedHandler { drawable in pair.record(source: false, time: drawable.presentedTime) }
+        command.addCompletedHandler { [weak self] command in
+            guard command.status == .completed else { return }
+            DispatchQueue.main.async { [weak self] in
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self?.layer.opacity = 1
+                CATransaction.commit()
+            }
+        }
         command.present(target)
         frames += 1
         requestDrawable()
