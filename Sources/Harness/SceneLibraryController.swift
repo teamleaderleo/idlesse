@@ -15,9 +15,76 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let url: URL
         let access: SceneLibraryStore.Access?
     }
+    enum Scope: Hashable {
+        case library, favorites, recent, collection(String)
+    }
+    private(set) var scope: Scope = .library
+    private var selectionByScope: [Scope: String] = [:]
+    private var homeNavigation = false
+    var onScopeChange: ((Scope) -> Void)?
+    private let mediaFilter = NSPopUpButton()
+    private let importButton = NSButton(title: "Import…", target: nil, action: nil)
+
+    /// Home owns the toolbar, while Library retains the search query and import actions.
+    func makeSearchToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        if let stack = search.superview as? NSStackView { stack.removeArrangedSubview(search) }
+        search.removeFromSuperview()
+        let item = NSSearchToolbarItem(itemIdentifier: identifier)
+        item.searchField = search
+        item.label = "Search Wallpapers"
+        item.toolTip = "Search the current Library selection"
+        return item
+    }
+
+    func makeImportToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        if let stack = importButton.superview as? NSStackView { stack.removeArrangedSubview(importButton) }
+        importButton.removeFromSuperview()
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Import Wallpapers"
+        item.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "Import Wallpapers")
+        item.toolTip = "Import wallpapers…"
+        item.target = self
+        item.action = #selector(addScenes)
+        return item
+    }
+
+    func setSearchEnabled(_ enabled: Bool) { search.isEnabled = enabled }
+
+    private func revealImportedScope() {
+        guard homeNavigation else { return }
+        scope = .library
+        mediaFilter.selectItem(at: 0)
+        onScopeChange?(.library)
+    }
+    var rotationSummary: String? {
+        rotationTimer == nil ? nil : "Rotating every \(rotationMinutes)m"
+    }
+    func useHomeNavigation() {
+        homeNavigation = true
+        filter.isHidden = true
+        mediaFilter.isHidden = false
+        pendingFilterTitle = nil
+        setScope(.library)
+    }
+    func setScope(_ scope: Scope) {
+        let changed = self.scope != scope
+        if changed, let selected { selectionByScope[self.scope] = selected.id }
+        self.scope = scope
+        pendingFilterTitle = nil
+        filter.selectItem(at: 0)
+        if case .collection(let id) = scope,
+           let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) {
+            filter.selectItem(at: index)
+        }
+        reload(selecting: changed ? selectionByScope[scope] : nil)
+    }
+    private let inspectorButton = NSButton(checkboxWithTitle: "Inspector", target: nil, action: nil)
+    private let browserSplit = NSSplitViewController()
+    private var inspectorItem: NSSplitViewItem?
     private let store: SceneLibraryStore
     private let table = NSTableView()
     private let search = NSSearchField()
+    private var pendingSearch: DispatchWorkItem?
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
     private let viewModeControl = NSSegmentedControl(labels: ["List", "Grid"], trackingMode: .selectOne, target: nil, action: nil)
@@ -25,11 +92,40 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
+    private var pendingThumbnails: [String: [(NSImage) -> Void]] = [:]
+    private var thumbnailRevisions: [String: UInt] = [:]
+    private var thumbnailJobsStarted = 0
     private let scroll = NSScrollView()
     private let right = NSStackView()
     private let gridScroll = NSScrollView()
     private let gridView = LibraryGridView()
     private let poster = NSImageView()
+    private var posterItemID: String?
+    private let livePreviewButton = NSButton(title: "Play Preview", target: nil, action: nil)
+    private let previewHost = ScenePreviewHost()
+    private var liveTask: Task<Void, Never>?
+    private var liveGeneration = 0
+    private var liveAccess: SceneLibraryStore.Access?
+    private let taskStatus = NSTextField(labelWithString: "")
+    private let dismissStatus = NSButton(title: "Dismiss", target: nil, action: nil)
+    private let taskStatusRow = NSStackView()
+    private var browserBottom: NSLayoutConstraint?
+    private var playingURL: URL?
+    func updatePlayingURL(_ url: URL?) {
+        let next = url?.standardizedFileURL
+        guard next != playingURL else { return }
+        playingURL = next
+        updateApplyState()
+    }
+    private func updateApplyState() {
+        let isPlaying: Bool
+        if let selected, let playingURL {
+            isPlaying = (try? open(selected).url.standardizedFileURL) == playingURL
+        } else { isPlaying = false }
+        apply.title = isPlaying ? "On Desktop" : "Set Wallpaper"
+        apply.isEnabled = selected != nil && !isPlaying
+    }
+    private var previewObservers: [NSObjectProtocol] = []
     private let titleLabel = NSTextField(labelWithString: "Choose a wallpaper")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let favorite = NSButton(title: "Favorite", target: nil, action: nil)
@@ -135,7 +231,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             try store.used(item.id)
             retainUseAccess(opened.access)
             onUse(opened.url)
-        } catch { detail.stringValue = "Rotation: " + error.localizedDescription }
+        } catch { reportTask("Rotation: " + error.localizedDescription) }
     }
     private var onUse: (URL) -> Void
     private var onEdit: (URL, Bool) -> Void
@@ -154,6 +250,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         window?.center()
         window?.restoreManagedFrame(name: "IdlesseLibrary", defaultSize: NSSize(width: 1040, height: 640))
         setup()
+        for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification,
+                     NSWindow.didChangeOcclusionStateNotification] {
+            previewObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if name != NSWindow.didChangeOcclusionStateNotification || self.window?.occlusionState.contains(.visible) != true {
+                    self.stopLivePreview()
+                }
+            })
+        }
+        previewObservers.append(NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification,
+            object: browserSplit.splitView, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if self.inspectorItem?.isCollapsed == true { self.stopLivePreview() }
+        })
         reload(selecting: UserDefaults.standard.string(forKey: "Idlesse.library.selectedID"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -165,13 +275,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         thumbnails.totalCostLimit = 64 * 1024 * 1024
         search.placeholderString = "Search wallpapers"
         search.delegate = self
+        search.target = self
+        search.action = #selector(commitSearch)
+        search.sendsWholeSearchString = true
         filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         filter.target = self; filter.action = #selector(filterChanged)
         sort.addItems(withTitles: ["Name", "Recently Opened"])
         sort.target = self; sort.action = #selector(filterChanged)
         sort.selectItem(at: min(max(0, UserDefaults.standard.integer(forKey: "Idlesse.library.sortMode")), sort.numberOfItems - 1))
         pendingFilterTitle = UserDefaults.standard.string(forKey: "Idlesse.library.filterTitle")
-        let add = NSButton(title: "Import…", target: self, action: #selector(addScenes))
+        importButton.target = self
+        importButton.action = #selector(addScenes)
         collectionActions.addItem(withTitle: "Collections…")
         collectionActions.target = self
         collectionActions.action = #selector(collectionAction)
@@ -181,7 +295,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         viewModeControl.target = self
         viewModeControl.action = #selector(viewModeChanged)
         viewModeControl.selectedSegment = UserDefaults.standard.integer(forKey: "Idlesse.library.viewMode")
-        let toolbar = NSStackView(views: [search, filter, sort, viewModeControl, collectionActions, sourceActions, add])
+        mediaFilter.addItems(withTitles: ["All Media", "Videos", "Scenes", "Images"])
+        mediaFilter.isHidden = true
+        mediaFilter.target = self
+        mediaFilter.action = #selector(mediaFilterChanged)
+        inspectorButton.target = self
+        inspectorButton.action = #selector(toggleInspector)
+        inspectorButton.state = UserDefaults.standard.object(forKey: "Idlesse.library.inspectorVisible") as? Bool == false ? .off : .on
+        let toolbar = NSStackView(views: [search, filter, mediaFilter, sort, viewModeControl, inspectorButton, collectionActions, sourceActions, importButton])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -204,12 +325,26 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         gridScroll.drawsBackground = false
         gridView.autoresizingMask = [.width]
         gridView.onSelect = { [weak self] item in
-            self?.selected = item
-            if let index = self?.items.firstIndex(where: { $0.id == item.id }) {
-                self?.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-                self?.table.scrollRowToVisible(index)
+            guard let self, self.selected?.id != item.id else { return }
+            self.selected = item
+            if let index = self.items.firstIndex(where: { $0.id == item.id }) {
+                self.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                self.table.scrollRowToVisible(index)
             }
-            self?.preview()
+            self.preview()
+        }
+        gridView.onMenu = { [weak self] item in
+            let menu = NSMenu()
+            guard let self else { return menu }
+            self.selected = item
+            for (title, action) in [("Set Wallpaper", #selector(useScene)),
+                                    ("Edit in Studio", #selector(editScene)),
+                                    ("Make a Copy in Studio", #selector(duplicateScene)),
+                                    (self.store.catalog.favorites.contains(item.id) ? "Remove Favorite" : "Add Favorite", #selector(toggleFavorite))] {
+                let entry = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+                entry.target = self
+            }
+            return menu
         }
         gridView.onDoubleAction = { [weak self] item in
             self?.selected = item
@@ -237,9 +372,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
         let heading = NSStackView(views: [titleLabel, NSView(), favorite])
         heading.orientation = .horizontal
-        let primary = NSStackView(views: [apply, edit, more, clearSearchButton])
-        primary.spacing = 10
-        for button in [add, apply, edit] { button.bezelStyle = .rounded }
+        livePreviewButton.target = self
+        livePreviewButton.action = #selector(toggleLivePreview)
+        livePreviewButton.bezelStyle = .rounded
+        livePreviewButton.toolTip = "Play a muted preview here without changing the desktop"
+        let playbackActions = NSStackView(views: [apply, livePreviewButton])
+        playbackActions.spacing = 8
+        let editingActions = NSStackView(views: [edit, more])
+        editingActions.spacing = 8
+        let primary = NSStackView(views: [playbackActions, editingActions, clearSearchButton])
+        primary.spacing = 8
+        for button in [importButton, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
         apply.contentTintColor = .white
         detail.font = .systemFont(ofSize: 12)
@@ -247,33 +390,76 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
-        for view in [toolbar, scroll, right, gridScroll] {
+        let browser = NSView()
+        let browserController = NSViewController()
+        browserController.view = browser
+        let browserItem = NSSplitViewItem(viewController: browserController)
+        browserItem.minimumThickness = 240
+        let inspectorController = NSViewController()
+        let inspector = NSView()
+        inspectorController.view = inspector
+        let pane = NSSplitViewItem(viewController: inspectorController)
+        pane.minimumThickness = 300
+        pane.maximumThickness = 600
+        pane.canCollapse = true
+        inspectorItem = pane
+        browserSplit.addSplitViewItem(browserItem)
+        browserSplit.addSplitViewItem(pane)
+        browserSplit.splitView.isVertical = true
+        browserSplit.splitView.autosaveName = "IdlesseLibraryInspector"
+        browserSplit.splitView.dividerStyle = .thin
+        taskStatus.font = .systemFont(ofSize: 12)
+        taskStatus.textColor = .secondaryLabelColor
+        taskStatus.lineBreakMode = .byTruncatingMiddle
+        dismissStatus.target = self
+        dismissStatus.action = #selector(clearTaskStatus)
+        dismissStatus.bezelStyle = .rounded
+        taskStatusRow.setViews([taskStatus, dismissStatus], in: .leading)
+        taskStatusRow.orientation = .horizontal
+        taskStatusRow.spacing = 12
+        taskStatusRow.isHidden = true
+        for view in [toolbar, browserSplit.view, taskStatusRow] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
+        for view in [scroll, gridScroll] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            browser.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: browser.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: browser.trailingAnchor),
+                view.topAnchor.constraint(equalTo: browser.topAnchor),
+                view.bottomAnchor.constraint(equalTo: browser.bottomAnchor),
+            ])
+        }
+        right.translatesAutoresizingMaskIntoConstraints = false
+        inspector.addSubview(right)
         poster.translatesAutoresizingMaskIntoConstraints = false
+        primary.orientation = .vertical
+        primary.alignment = .leading
+        browserBottom = browserSplit.view.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        browserBottom?.isActive = true
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
-            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
-            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            search.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
-            scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
-            scroll.widthAnchor.constraint(equalToConstant: 300),
-            right.topAnchor.constraint(equalTo: scroll.topAnchor),
-            right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
-            right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            right.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            search.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            browserSplit.view.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
+            browserSplit.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            browserSplit.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            taskStatusRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            taskStatusRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            taskStatusRow.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
+            right.topAnchor.constraint(equalTo: inspector.topAnchor, constant: 12),
+            right.leadingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: 16),
+            right.trailingAnchor.constraint(equalTo: inspector.trailingAnchor, constant: -16),
+            right.bottomAnchor.constraint(lessThanOrEqualTo: inspector.bottomAnchor, constant: -12),
             poster.widthAnchor.constraint(equalTo: right.widthAnchor),
             poster.heightAnchor.constraint(equalTo: poster.widthAnchor, multiplier: 9.0 / 16.0),
             heading.widthAnchor.constraint(equalTo: right.widthAnchor),
             detail.widthAnchor.constraint(equalTo: right.widthAnchor),
-            gridScroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
-            gridScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            gridScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
+        pane.isCollapsed = inspectorButton.state == .off
         viewModeChanged()
     }
 
@@ -281,9 +467,22 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let isGrid = viewModeControl.selectedSegment == 1
         UserDefaults.standard.set(viewModeControl.selectedSegment, forKey: "Idlesse.library.viewMode")
         scroll.isHidden = isGrid
-        right.isHidden = isGrid
         gridScroll.isHidden = !isGrid
-        if isGrid { gridView.update(items: items, selectedID: selected?.id) }
+        if isGrid {
+            gridView.update(items: items, selectedID: selected?.id)
+            gridView.revealSelection()
+        } else if let index = items.firstIndex(where: { $0.id == selected?.id }) {
+            table.scrollRowToVisible(index)
+        }
+    }
+
+    @objc private func mediaFilterChanged() { reload() }
+
+    @objc private func toggleInspector() {
+        let visible = inspectorButton.state == .on
+        inspectorItem?.isCollapsed = !visible
+        if !visible { stopLivePreview() }
+        UserDefaults.standard.set(visible, forKey: "Idlesse.library.inspectorVisible")
     }
 
     weak var hostWindow: NSWindow?
@@ -371,6 +570,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             titleLabel.stringValue = "No matches"
             detail.stringValue = "Nothing matches “\(search.stringValue)”. Clear the search to browse everything, or Import… to add more."
             clearSearchButton.isHidden = false
+        } else if homeNavigation && scope == .favorites && mediaFilter.indexOfSelectedItem == 0 {
+            titleLabel.stringValue = "No favorites yet"
+            detail.stringValue = "Star a wallpaper to find it here."
+            clearSearchButton.isHidden = true
+        } else if homeNavigation && scope == .recent && mediaFilter.indexOfSelectedItem == 0 {
+            titleLabel.stringValue = "No recent wallpapers"
+            detail.stringValue = "Wallpapers you open appear here."
+            clearSearchButton.isHidden = true
+        } else if homeNavigation && mediaFilter.indexOfSelectedItem > 0 {
+            titleLabel.stringValue = "No matching media"
+            detail.stringValue = "Choose All Media to browse this view."
+            clearSearchButton.isHidden = true
         } else if let collection = activeCollection {
             titleLabel.stringValue = collection.name
             detail.stringValue = "This collection is empty. Use Collections… to add scenes, or play order and shuffle once it has some."
@@ -381,8 +592,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             clearSearchButton.isHidden = true
         }
     }
-    func controlTextDidChange(_ obj: Notification) { reload() }
+    func controlTextDidChange(_ obj: Notification) {
+        pendingSearch?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        pendingSearch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+    @objc private func commitSearch() { reload() }
     private func reload(selecting id: String? = nil) {
+        pendingSearch?.cancel()
+        pendingSearch = nil
         reloadSourceActions()
         let previous = id ?? selected?.id
         let collectionID = filter.selectedItem?.representedObject as? String
@@ -403,34 +622,49 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
-        items = allItems().filter { item in
-            let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
-            if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
+        let catalog = allItems()
+        let query = search.stringValue
+        let scores: [String: Double] = query.isEmpty ? [:] : catalog.reduce(into: [:]) { scores, item in
+            scores[item.id] = Self.fuzzyScore(query: query, in: item.title)
+        }
+        let collectionPositions: [String: Int] = (activeCollection?.sceneIDs ?? []).enumerated().reduce(into: [:]) { positions, entry in
+            if positions[entry.element] == nil { positions[entry.element] = entry.offset }
+        }
+        let needsMediaType = homeNavigation ? mediaFilter.indexOfSelectedItem > 0 : (4...6).contains(filter.indexOfSelectedItem)
+        items = catalog.filter { item in
+            let matches = query.isEmpty || scores[item.id] != nil
+            guard matches else { return false }
+            let mediaType = needsMediaType ? (item.builtin != nil ? "scene" : item.entry?.inferredMediaType) : nil
+            if homeNavigation {
+                if mediaFilter.indexOfSelectedItem == 1 && mediaType != "video" { return false }
+                if mediaFilter.indexOfSelectedItem == 2 && mediaType != "scene" { return false }
+                if mediaFilter.indexOfSelectedItem == 3 && mediaType != "image" { return false }
+                switch scope {
+                case .favorites: return matches && store.catalog.favorites.contains(item.id)
+                case .recent: return matches && store.catalog.recent[item.id] != nil
+                case .library, .collection: break
+                }
+            }
+            if activeCollection != nil { return collectionPositions[item.id] != nil }
             switch filter.indexOfSelectedItem {
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
             case 3: return matches && store.catalog.favorites.contains(item.id)
-            case 4:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video")
-            case 5:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene")
-            case 6:
-                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
-                return matches && (path.hasSuffix(".jpg") || path.hasSuffix(".jpeg") || path.hasSuffix(".png") || path.hasSuffix(".heic") || item.entry?.mediaType == "image")
+            case 4: return matches && mediaType == "video"
+            case 5: return matches && mediaType == "scene"
+            case 6: return matches && mediaType == "image"
             default: return matches
             }
         }.sorted {
-            if let activeCollection {
-                return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
+            if activeCollection != nil {
+                return (collectionPositions[$0.id] ?? Int.max) < (collectionPositions[$1.id] ?? Int.max)
             }
-            if !search.stringValue.isEmpty {
-                let a = Self.fuzzyScore(query: search.stringValue, in: $0.title) ?? .infinity
-                let b = Self.fuzzyScore(query: search.stringValue, in: $1.title) ?? .infinity
+            if !query.isEmpty {
+                let a = scores[$0.id] ?? .infinity
+                let b = scores[$1.id] ?? .infinity
                 if a != b { return a < b }
             }
-            if sort.indexOfSelectedItem == 1 {
+            if (homeNavigation && scope == .recent) || sort.indexOfSelectedItem == 1 {
                 let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
                 if a != b { return a > b }
             }
@@ -440,11 +674,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         gridView.update(items: items, selectedID: selected?.id)
         updateEmptyState(activeCollection: activeCollection)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
-            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             selected = items[index]
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             gridView.select(id: selected?.id)
             preview()
             table.scrollRowToVisible(index)
+            if !gridScroll.isHidden { gridView.revealSelection() }
         } else {
             table.deselectAll(nil)
             selected = nil
@@ -485,15 +720,31 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     func requestThumbnail(for item: Item, completion: @escaping (NSImage) -> Void) {
         thumbnails.countLimit = 64
+        let revision = thumbnailRevisions[item.id, default: 0]
+        let requestID = revision == 0 ? item.id : "\(item.id)|\(revision)"
+        if pendingThumbnails[requestID] != nil {
+            pendingThumbnails[requestID]?.append(completion)
+            return
+        }
         guard let opened = try? open(item) else { return }
+        pendingThumbnails[requestID] = [completion]
+        thumbnailJobsStarted += 1
+        let finish: (NSImage?) -> Void = { [weak self] image in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let callbacks = self.pendingThumbnails.removeValue(forKey: requestID) ?? []
+                guard self.thumbnailRevisions[item.id, default: 0] == revision else { return }
+                if let image { callbacks.forEach { $0(image) } }
+            }
+        }
         let posterAccess: SceneLibraryStore.Access? = item.entry.flatMap { try? store.accessPoster($0) }
         thumbnailQueue.async { [weak self, opened, posterAccess] in
             guard let self else { return }
             let source = opened.url
             let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
             if let image = self.thumbnails.object(forKey: key) {
-                DispatchQueue.main.async { completion(image) }
+                finish(image)
                 return
             }
             let image: CGImage?
@@ -503,7 +754,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
                     ?? Self.listThumbnail(source.appendingPathComponent("preview.png"))
                     ?? Self.packageAssetThumbnail(source)
-            } else if let still = Self.listThumbnail(source) ?? Self.decodedStill(source) {
+            } else if let still = Self.listThumbnail(source) {
                 image = still
             } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
                 ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
@@ -514,10 +765,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 generator.maximumSize = CGSize(width: 320, height: 180)
                 image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
             } else { image = nil }
-            guard let image else { Self.appendThumbLine("THUMB-MISS \(source.path)"); return }
+            guard let image else { finish(nil); return }
             let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
             self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
-            DispatchQueue.main.async { completion(result) }
+            finish(result)
         }
     }
     private static func listThumbnail(_ url: URL) -> CGImage? {
@@ -532,7 +783,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let scene = try? LocalSceneSource.read(package) else { return nil }
         let candidates: [URL] = ([scene.assetURL] + scene.allNodes.map(\.assetURL)).compactMap { $0 }
         for url in candidates {
-            if let thumb = listThumbnail(url) ?? decodedStill(url) { return thumb }
+            if let thumb = listThumbnail(url) { return thumb }
             if ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
@@ -564,31 +815,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return nil
         }
     }
-    private static func appendThumbLine(_ line: String) {
-        guard let data = (line + "\n").data(using: .utf8) else { return }
-        let path = "/tmp/idlesse-thumb.log"
-        if FileManager.default.fileExists(atPath: path), let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
-            try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
-        } else { try? data.write(to: URL(fileURLWithPath: path)) }
-    }
-    private static func decodedStill(_ url: URL) -> CGImage? {
-        guard ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"].contains(url.pathExtension.lowercased()),
-              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let full = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let maxSide = max(full.width, full.height)
-        guard maxSide > 320 else { return full }
-        let scale = 320.0 / Double(maxSide)
-        let w = max(1, Int((Double(full.width) * scale).rounded()))
-        let h = max(1, Int((Double(full.height) * scale).rounded()))
-        guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
-            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return full }
-        context.interpolationQuality = .high
-        context.draw(full, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return context.makeImage() ?? full
-    }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        let next = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        guard next?.id != selected?.id else { return }
+        selected = next
         gridView.select(id: selected?.id)
         preview()
     }
@@ -599,15 +829,90 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return OpenedItem(url: access.url, access: access)
     }
     @objc private func refreshPreview() {
-        if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
+        if let selected {
+            cache.removeValue(forKey: selected.id)
+            cacheOrder.removeAll { $0 == selected.id }
+            thumbnailRevisions[selected.id, default: 0] &+= 1
+            gridView.refreshThumbnail(id: selected.id)
+            if let index = items.firstIndex(where: { $0.id == selected.id }) {
+                table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
+            }
+        }
         preview()
     }
+    @objc private func clearTaskStatus() { reportTask("") }
+    private func reportTask(_ message: String) {
+        taskStatus.stringValue = message
+        taskStatus.toolTip = message
+        taskStatusRow.isHidden = message.isEmpty
+        browserBottom?.constant = message.isEmpty ? 0 : -34
+    }
+
+    func stopLivePreview() {
+        liveGeneration += 1
+        liveTask?.cancel()
+        liveTask = nil
+        previewHost.renderer?.view.removeFromSuperview()
+        previewHost.stop()
+        liveAccess = nil
+        livePreviewButton.title = "Play Preview"
+    }
+
+    @objc private func toggleLivePreview() {
+        if liveTask != nil || previewHost.renderer != nil { stopLivePreview(); return }
+        guard let selected, inspectorItem?.isCollapsed == false else { return }
+        let token = liveGeneration
+        livePreviewButton.title = "Cancel Preview"
+        liveTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { if token == self.liveGeneration { self.liveTask = nil } }
+            do {
+                let opened = try self.open(selected)
+                defer { withExtendedLifetime(opened.access) {} }
+                let scene = try await LocalSceneSource().resolve(opened.url)
+                try Task.checkCancellation()
+                guard token == self.liveGeneration else { return }
+                try self.previewHost.clock.configure(timeline: scene.timeline)
+                self.previewHost.clock.pointerEnabled = false
+                self.previewHost.clock.audioEnabled = false
+                let bounds = NSRect(x: 0, y: 0, width: min(600, max(1, self.poster.bounds.width)),
+                                    height: min(338, max(1, self.poster.bounds.height)))
+                let renderer = try self.previewHost.prepare(scene: scene, bounds: bounds, scale: 1, metal: true,
+                    onError: { [weak self] message in
+                        guard let self, token == self.liveGeneration else { return }
+                        self.detail.stringValue = "Preview: " + message
+                        self.stopLivePreview()
+                    })
+                guard token == self.liveGeneration, !Task.isCancelled else {
+                    renderer.releaseResources()
+                    return
+                }
+                self.previewHost.renderer = renderer
+                self.liveAccess = opened.access
+                renderer.setMuted(true)
+                renderer.setPreferredFrameRate(30)
+                renderer.view.frame = self.poster.bounds
+                renderer.view.autoresizingMask = [.width, .height]
+                self.poster.addSubview(renderer.view)
+                self.previewHost.setPaused(false)
+                self.livePreviewButton.title = "Stop Preview"
+            } catch {
+                guard token == self.liveGeneration, !Task.isCancelled else { return }
+                self.stopLivePreview()
+                self.detail.stringValue = "Preview unavailable: " + error.localizedDescription
+            }
+        }
+    }
+
     private func preview() {
+        stopLivePreview()
+        livePreviewButton.isEnabled = selected != nil
         task?.cancel(); task = nil; generation += 1
         let token = generation
-        poster.image = nil
+        if posterItemID != selected?.id { poster.image = nil }
+        posterItemID = selected?.id
         favorite.isEnabled = selected != nil
-        apply.isEnabled = selected != nil
+        updateApplyState()
         edit.isEnabled = selected != nil
         remove.isEnabled = selected?.entry != nil
         more.isEnabled = selected != nil
@@ -750,25 +1055,25 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.cacheOrder.removeAll { removed.contains($0) }
                 self.thumbnails.removeAllObjects()
                 self.reload()
-                self.detail.stringValue = "Removed \(source.name) from the Library. Source files were preserved."
-            } catch { self.detail.stringValue = error.localizedDescription }
+                self.reportTask("Removed \(source.name) from the Library. Source files were preserved.")
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
 
     private func reconcileSource(_ id: String) {
         guard conversionTask == nil else {
-            detail.stringValue = "A Library import or Source scan is already running."
+            reportTask("A Library import or Source scan is already running.")
             return
         }
         guard let source = store.catalog.sources.first(where: { $0.id == id }), let window = presentationWindow else { return }
         let access: SceneLibraryStore.Access
         do { access = try store.accessSource(id) }
-        catch { detail.stringValue = error.localizedDescription; return }
+        catch { reportTask(error.localizedDescription); return }
 
         conversionTask = Task { @MainActor [weak self, access] in
             guard let self else { return }
             defer { self.conversionTask = nil; withExtendedLifetime(access) {} }
-            self.detail.stringValue = "Scanning \(source.name)…"
+            self.reportTask("Scanning \(source.name)…")
             do {
                 var drafts = try await Task.detached(priority: .utility) { try Self.scanSource(access.url) }.value
                 try Task.checkCancellation()
@@ -783,7 +1088,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     return digestLengths.contains(bytes) && drafts[index].observation?.hasDigest != true
                 }
                 if !digestCandidates.isEmpty {
-                    self.detail.stringValue = "Checking a bounded set of move candidates…"
+                    self.reportTask("Checking a bounded set of move candidates…")
                     let observations = try await Task.detached(priority: .utility) {
                         try SceneLibraryStore.boundedDigests(root: access.url, drafts: drafts, indices: digestCandidates)
                     }.value
@@ -793,9 +1098,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     }
                     diff = try self.store.prepareReconciliation(sourceID: id, scanned: drafts)
                 }
-                self.detail.stringValue = "Review \(source.name) reconciliation."
+                self.reportTask("Review \(source.name) reconciliation.")
                 guard let accepted = await SourceReconciliationReview.choose(diff: diff, sourceName: source.name, window: window) else {
-                    self.detail.stringValue = "\(source.name) rescan canceled. Library unchanged."
+                    self.reportTask("\(source.name) rescan canceled. Library unchanged.")
                     return
                 }
                 try Task.checkCancellation()
@@ -804,10 +1109,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.reload()
                 let present = self.store.catalog.entries.filter { $0.sourceID == id && $0.availability == .present }.count
                 let missing = self.store.catalog.entries.filter { $0.sourceID == id && $0.availability == .missing }.count
-                self.detail.stringValue = "\(source.name) reconciled: \(present) present, \(missing) missing."
+                self.reportTask("\(source.name) reconciled: \(present) present, \(missing) missing.")
             } catch {
                 guard !Task.isCancelled else { return }
-                self.detail.stringValue = "Source rescan failed: \(error.localizedDescription)"
+                self.reportTask("Source rescan failed: \(error.localizedDescription)")
             }
         }
     }
@@ -830,21 +1135,21 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     try self.store.relinkSource(id, to: root)
                     self.cache.removeAll(); self.cacheOrder.removeAll(); self.thumbnails.removeAllObjects()
                     self.reload()
-                    self.detail.stringValue = "Source relinked. Run Rescan to reconcile changed descendants."
-                } catch { self.detail.stringValue = error.localizedDescription }
+                    self.reportTask("Source relinked. Run Rescan to reconcile changed descendants.")
+                } catch { self.reportTask(error.localizedDescription) }
             } else { self.importSource(root) }
         }
     }
 
     private func importSource(_ root: URL) {
         guard conversionTask == nil else {
-            detail.stringValue = "An import is already running. Try again when it finishes."
+            reportTask("An import is already running. Try again when it finishes.")
             return
         }
         conversionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.conversionTask = nil }
-            self.detail.stringValue = "Scanning Source…"
+            self.reportTask("Scanning Source…")
             do {
                 let drafts = try await Task.detached(priority: .utility) { try Self.scanSource(root) }.value
                 try Task.checkCancellation()
@@ -853,12 +1158,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let firstNew = self.store.catalog.entries.first { $0.sourceID == source.id && !oldIDs.contains($0.id) }?.id
                     ?? self.store.catalog.entries.first { $0.sourceID == source.id && $0.availability == .present }?.id
                 self.search.stringValue = ""
-                self.filter.selectItem(at: 2)
+                self.filter.selectItem(at: 2); self.revealImportedScope()
                 self.reload(selecting: firstNew)
-                self.detail.stringValue = "\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id && $0.availability == .present }.count) wallpapers in Library."
+                self.reportTask("\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id && $0.availability == .present }.count) wallpapers in Library.")
             } catch {
                 guard !Task.isCancelled else { return }
-                self.detail.stringValue = "Source import failed: \(error.localizedDescription)"
+                self.reportTask("Source import failed: \(error.localizedDescription)")
             }
         }
     }
@@ -952,7 +1257,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     private func importScenes(_ urls: [URL]) {
         guard conversionTask == nil else {
-            detail.stringValue = "An import is already running. Try again when it finishes."
+            reportTask("An import is already running. Try again when it finishes.")
             return
         }
         conversionTask = Task { @MainActor [weak self] in
@@ -962,14 +1267,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             var failures: [String] = []
             for (index, source) in urls.enumerated() {
                 if Task.isCancelled { return }
-                self.detail.stringValue = "Importing \(index + 1) of \(urls.count)…"
+                self.reportTask("Importing \(index + 1) of \(urls.count)…")
                 do {
                     guard Self.supportedImport(source) else { throw SceneError.invalid("This file type is not supported.") }
                     let convert = try await MediaImport.needsConversion(source)
                     try Task.checkCancellation()
                     let imported: URL
                     if convert {
-                        self.detail.stringValue = "Converting \(index + 1) of \(urls.count)…"
+                        self.reportTask("Converting \(index + 1) of \(urls.count)…")
                         imported = try await MediaImport.convert(source)
                     } else { imported = source }
                     try Task.checkCancellation()
@@ -980,8 +1285,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     failures.append("\(source.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-            if firstID != nil { self.search.stringValue = ""; self.filter.selectItem(at: 2) }
+            if firstID != nil { self.search.stringValue = ""; self.filter.selectItem(at: 2); self.revealImportedScope() }
             self.reload(selecting: firstID)
+            self.reportTask("Imported \(urls.count - failures.count) of \(urls.count) wallpapers" + (failures.isEmpty ? "" : " · \(failures.count) failed"))
             if !failures.isEmpty {
                 if let handler = self.importFailureHandler { handler(failures); return }
                 let alert = NSAlert()
@@ -1001,18 +1307,30 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     @objc private func toggleFavorite() {
         guard let selected else { return }
-        do { try store.favorite(selected.id); reload() } catch { detail.stringValue = error.localizedDescription }
+        do { try store.favorite(selected.id); reload() } catch { reportTask(error.localizedDescription) }
     }
     @objc private func removeScene() {
         guard let selected, selected.entry != nil else { return }
         do { try store.remove(selected.id); cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id }; reload() }
-        catch { detail.stringValue = error.localizedDescription }
+        catch { reportTask(error.localizedDescription) }
     }
     @objc private func useScene() { act(editing: false) }
-    func cycle(delta: Int) {
-        guard !items.isEmpty else { return }
-        let current = selected.flatMap { item in items.firstIndex(where: { $0.id == item.id }) } ?? (delta >= 0 ? -1 : 0)
-        let next = (current + delta + items.count * 2) % items.count
+    var hasCycleCandidates: Bool { items.count > 1 }
+
+    private func cycleIndex(delta: Int, from playingURL: URL?) -> Int? {
+        guard hasCycleCandidates else { return nil }
+        // Browsing a poster must not silently move the transport's starting point.
+        let playingIndex = playingURL.flatMap { url in
+            items.firstIndex { item in
+                (try? open(item).url.standardizedFileURL) == url.standardizedFileURL
+            }
+        }
+        let current = playingIndex ?? (delta >= 0 ? -1 : 0)
+        return (current + delta + items.count * 2) % items.count
+    }
+
+    func cycle(delta: Int, from playingURL: URL? = nil) {
+        guard let next = cycleIndex(delta: delta, from: playingURL) else { return }
         table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         selected = items[next]
         gridView.select(id: selected?.id)
@@ -1023,13 +1341,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let item = collectionActions.selectedItem else { return }
         if ["Move Collection Up", "Move Collection Down"].contains(item.title), let id = filter.selectedItem?.representedObject as? String {
             do { try store.moveCollection(id, by: item.title == "Move Collection Up" ? -1 : 1); reload() }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         if ["Move Scene Earlier", "Move Scene Later"].contains(item.title),
            let id = filter.selectedItem?.representedObject as? String, let selected {
             do { try store.moveScene(selected.id, in: id, by: item.title == "Move Scene Earlier" ? -1 : 1); reload(selecting: selected.id) }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         if item.title == "Playback & Schedule…" { editPlayback(); return }
@@ -1040,32 +1358,32 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 var settings = collection.playback ?? SceneLibraryStore.Playback()
                 settings.minutes = minutes
                 do { try store.setPlayback(id, settings) }
-                catch { detail.stringValue = error.localizedDescription; return }
+                catch { reportTask(error.localizedDescription); return }
             }
             let editedID = filter.selectedItem?.representedObject as? String
             if rotationCollectionID == nil || editedID == rotationCollectionID {
                 rotationMinutes = minutes
                 if rotationTimer != nil { armRotationTimer(); preview() }
             }
-            detail.stringValue = "Collections change every \(minutes) minutes."
+            reportTask("Collections change every \(minutes) minutes.")
             return
         }
         if item.title == "Play Collection in Order" || item.title == "Shuffle Collection" {
             guard let id = filter.selectedItem?.representedObject as? String,
                   let collection = store.catalog.collections.first(where: { $0.id == id }),
-                  !collection.sceneIDs.isEmpty else { detail.stringValue = "Add scenes to this collection first."; return }
+                  !collection.sceneIDs.isEmpty else { reportTask("Add scenes to this collection first."); return }
             stopRotation()
             var settings = collection.playback ?? SceneLibraryStore.Playback()
             settings.shuffle = item.title == "Shuffle Collection"
             do { try store.setPlayback(id, settings) }
-            catch { detail.stringValue = error.localizedDescription; return }
+            catch { reportTask(error.localizedDescription); return }
             beginRotation(store.catalog.collections.first { $0.id == id }!, shuffle: settings.shuffle)
             preview()
             return
         }
         if let id = item.representedObject as? String, let selected {
             do { try store.toggleMembership(sceneID: selected.id, collectionID: id); reload() }
-            catch { detail.stringValue = error.localizedDescription }
+            catch { reportTask(error.localizedDescription) }
             return
         }
         let activeID = filter.selectedItem?.representedObject as? String
@@ -1083,16 +1401,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         alert.beginSheetModal(for: presentationWindow!) { [weak self] result in
             guard let self, result == .alertFirstButtonReturn else { return }
             do {
-                if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0) }
+                if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0); self.revealImportedScope() }
                 else if renaming, let activeID { try self.store.renameCollection(activeID, name: field.stringValue) }
                 else {
                     let collection = try self.store.createCollection(name: field.stringValue)
                     self.reload()
                     self.filter.selectItem(at: self.filter.itemArray.firstIndex { ($0.representedObject as? String) == collection.id }!)
                     self.search.stringValue = ""
+                    if self.homeNavigation {
+                        self.scope = .collection(collection.id)
+                        self.onScopeChange?(self.scope)
+                    }
                 }
                 self.reload()
-            } catch { self.detail.stringValue = error.localizedDescription }
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
     private func editPlayback() {
@@ -1150,7 +1472,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self.scheduleToken = nil
                 self.checkSchedule()
                 self.preview()
-            } catch { self.detail.stringValue = error.localizedDescription }
+            } catch { self.reportTask(error.localizedDescription) }
         }
     }
     private func armRotationTimer() {
@@ -1186,9 +1508,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 onUse(opened.url)
                 if !embedded { window?.orderOut(nil) }
             }
-        } catch { detail.stringValue = error.localizedDescription }
+        } catch { reportTask(error.localizedDescription) }
     }
     func windowWillClose(_ notification: Notification) {
+        pendingSearch?.cancel(); pendingSearch = nil
+        stopLivePreview()
         conversionTask?.cancel()
         task?.cancel(); generation += 1
         cache.removeAll(); cacheOrder.removeAll(); poster.image = nil
@@ -1196,15 +1520,37 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func windowDidMove(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     func windowDidResize(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     deinit {
+        pendingSearch?.cancel()
+        previewObservers.forEach(NotificationCenter.default.removeObserver)
+        liveTask?.cancel()
+        previewHost.stop()
         conversionTask?.cancel(); task?.cancel(); rotationTimer?.invalidate(); scheduleTimer?.invalidate()
     }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
+        let preferenceKeys = ["Idlesse.library.inspectorVisible", "Idlesse.library.viewMode",
+                              "Idlesse.library.selectedID", "Idlesse.library.sortMode", "Idlesse.library.filterTitle"]
+        let preferences = preferenceKeys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(preferenceKeys, preferences) {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
         let raw = folder.appendingPathComponent("revision.png")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data([1]).write(to: raw)
+        let bookmark = try raw.bookmarkData(options: [], includingResourceValuesForKeys: [.pathKey], relativeTo: nil)
+        let legacyImage = SceneLibraryStore.Entry(id: "legacy-image", title: "Legacy", bookmark: bookmark)
+        precondition(legacyImage.inferredMediaType == "image")
+        let legacyVideoURL = folder.appendingPathComponent("legacy.MP4")
+        try Data().write(to: legacyVideoURL)
+        let videoBookmark = try legacyVideoURL.bookmarkData(options: [], includingResourceValuesForKeys: [.pathKey], relativeTo: nil)
+        let legacyVideo = SceneLibraryStore.Entry(id: "legacy-video", title: "Legacy", bookmark: videoBookmark)
+        precondition(legacyVideo.inferredMediaType == "video", "Legacy video bookmarks must not become images")
+        precondition(SceneLibraryStore.Entry(id: "source-scene", title: "Scene", relativeMediaPath: "scene.idlesse").inferredMediaType == "scene")
         let oldRevision = try PosterRevision.read(raw)
         try Data([1, 2]).write(to: raw)
         let newRevision = try PosterRevision.read(raw)
@@ -1213,12 +1559,53 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
             onUse: { _ in applied = true }, onEdit: { _, asCopy in copied = asCopy })
+        let originalSort = controller.sort.indexOfSelectedItem
+        controller.useHomeNavigation()
+        controller.setScope(.recent)
+        precondition(controller.items.isEmpty, "Recent excludes wallpapers never opened")
+        precondition(controller.sort.indexOfSelectedItem == originalSort, "Recent must preserve browser sort")
+        controller.setScope(.library)
+        let remembered = controller.items.last!
+        controller.selected = remembered
+        controller.setScope(.favorites)
+        precondition(controller.selected == nil, "Empty Favorites must have no selection")
+        precondition(controller.titleLabel.stringValue == "No favorites yet")
+        controller.setScope(.library)
+        precondition(controller.selected?.id == remembered.id, "Returning to Library must restore its selection")
+        controller.viewModeControl.selectedSegment = 1
+        controller.viewModeChanged()
+        precondition(!controller.right.isHidden, "Grid must retain selection details")
+        controller.inspectorButton.state = .off
+        controller.toggleInspector()
+        precondition(controller.inspectorItem?.isCollapsed == true)
+        controller.inspectorButton.state = .on
+        controller.toggleInspector()
+        controller.viewModeControl.selectedSegment = 0
+        controller.viewModeChanged()
+        controller.homeNavigation = false
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
         precondition(controller.droppedURLs(pasteboard) == [raw])
         precondition(controller.items.count == 8 && controller.items.contains { $0.title == "Desk Clock" })
         precondition(controller.sourceActions.itemArray.contains { $0.title == "Add Source…" })
+        let fullCatalog = controller.items
+        controller.items = []
+        precondition(!controller.hasCycleCandidates && controller.cycleIndex(delta: 1, from: nil) == nil)
+        controller.items = [fullCatalog[0]]
+        precondition(!controller.hasCycleCandidates && controller.cycleIndex(delta: -1, from: nil) == nil)
+        controller.cycle(delta: 1)
+        precondition(!applied, "Single-item transport must not restart or apply wallpaper")
+        controller.items = fullCatalog
+        precondition(controller.hasCycleCandidates)
+        let playing = try controller.open(controller.items[0]).url
+        controller.selected = controller.items[3]
+        precondition(controller.cycleIndex(delta: 1, from: playing) == 1,
+            "Transport must follow playback, not the selected poster")
+        precondition(controller.cycleIndex(delta: -1, from: playing) == controller.items.count - 1)
+        precondition(controller.cycleIndex(delta: 1, from: nil) == 0)
+        precondition(controller.cycleIndex(delta: -1, from: nil) == controller.items.count - 1)
+
         let index = controller.items.firstIndex { $0.title == "Undertow" }!
         controller.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         controller.selected = controller.items[index]
@@ -1226,6 +1613,61 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let deadline = Date().addingTimeInterval(10)
         while controller.task != nil && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         precondition(controller.poster.image != nil, controller.detail.stringValue)
+        controller.updatePlayingURL(try controller.open(controller.selected!).url)
+        precondition(controller.apply.title == "On Desktop" && !controller.apply.isEnabled)
+        controller.updatePlayingURL(nil)
+        precondition(controller.apply.title == "Set Wallpaper" && controller.apply.isEnabled)
+
+        let duplicateRequest = Item(id: "smoke.shared-thumbnail", title: "Undertow", builtin: controller.selected!.builtin, entry: nil)
+        let jobsBefore = controller.thumbnailJobsStarted
+        var thumbnailCompletions = 0
+        let thumbnailStart = ProcessInfo.processInfo.systemUptime
+        controller.requestThumbnail(for: duplicateRequest) { _ in thumbnailCompletions += 1 }
+        controller.requestThumbnail(for: duplicateRequest) { _ in thumbnailCompletions += 1 }
+        precondition(controller.thumbnailJobsStarted == jobsBefore + 1, "Duplicate requests must share one job")
+        let thumbDeadline = Date().addingTimeInterval(10)
+        while thumbnailCompletions < 2 && Date() < thumbDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        precondition(thumbnailCompletions == 2 && controller.pendingThumbnails[duplicateRequest.id] == nil)
+        print("Shared thumbnail: 2 consumers, 1 job, \(Int((ProcessInfo.processInfo.systemUptime - thumbnailStart) * 1000)) ms")
+
+        var staleDelivered = false
+        var refreshedThumbnail: NSImage?
+        controller.requestThumbnail(for: duplicateRequest) { _ in staleDelivered = true }
+        controller.thumbnailRevisions[duplicateRequest.id, default: 0] &+= 1
+        controller.requestThumbnail(for: duplicateRequest) { refreshedThumbnail = $0 }
+        let refreshDeadline = Date().addingTimeInterval(10)
+        while (refreshedThumbnail == nil || !controller.pendingThumbnails.isEmpty) && Date() < refreshDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(!staleDelivered, "A refreshed thumbnail must reject the older in-flight result")
+        precondition(refreshedThumbnail != nil)
+        precondition(max(refreshedThumbnail!.size.width, refreshedThumbnail!.size.height) <= 320)
+
+        let originalDetail = controller.detail.stringValue
+        controller.reportTask("Importing 1 of 2…")
+        precondition(controller.detail.stringValue == originalDetail, "Import status must not replace artwork details")
+        controller.clearTaskStatus()
+        precondition(controller.taskStatusRow.isHidden)
+        controller.toggleLivePreview()
+        let liveDeadline = Date().addingTimeInterval(10)
+        while controller.liveTask != nil && Date() < liveDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(controller.previewHost.renderer != nil, controller.detail.stringValue)
+        precondition(!applied, "Local preview must not apply a wallpaper")
+        precondition(controller.previewHost.renderer?.diagnostics.audioMuted == true)
+        let liveGenerationBeforeReselect = controller.liveGeneration
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        precondition(controller.liveGeneration == liveGenerationBeforeReselect && controller.previewHost.renderer != nil,
+                     "Reselecting the same row must preserve its live preview")
+        controller.stopLivePreview()
+        precondition(controller.previewHost.renderer == nil && controller.liveAccess == nil)
+        controller.toggleLivePreview()
+        controller.stopLivePreview()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        precondition(controller.previewHost.renderer == nil, "Canceled resolution must not install a late renderer")
+
+        precondition(!applied, "Browsing and generating a preview must not apply a desktop wallpaper")
         let colors = NSBitmapImageRep(data: controller.poster.image!.tiffRepresentation!)!
         var hasWarmColor = false
         for y in stride(from: 0, to: colors.pixelsHigh, by: 32) {
@@ -1250,6 +1692,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
         precondition(controller.collectionActions.itemArray.contains { $0.title == "Rename Collection…" })
+        controller.homeNavigation = true
+        controller.setScope(.favorites)
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        try controller.store.used(controller.selected!.id)
+        controller.setScope(.recent)
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        precondition(controller.sort.indexOfSelectedItem == originalSort)
+        controller.setScope(.collection(collection.id))
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        controller.homeNavigation = false
         controller.collectionActions.selectItem(withTitle: "Shuffle Collection")
         controller.collectionAction()
         precondition(applied && controller.rotationTimer != nil)
@@ -1281,6 +1733,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
         root.cacheDisplay(in: root.bounds, to: bitmap)
         try bitmap.representation(using: .png, properties: [:])!.write(to: outputURL, options: .withoutOverwriting)
+        controller.viewModeControl.selectedSegment = 1
+        controller.viewModeChanged()
+        root.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        let gridBitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
+        root.cacheDisplay(in: root.bounds, to: gridBitmap)
+        let gridOutput = outputURL.deletingPathExtension().appendingPathExtension("grid.png")
+        try gridBitmap.representation(using: .png, properties: [:])!.write(to: gridOutput, options: .withoutOverwriting)
+        precondition(!controller.right.isHidden && controller.inspectorItem?.isCollapsed == false)
         controller.search.stringValue = "No matching scene"
         controller.reload()
         precondition(controller.items.isEmpty && !controller.apply.isEnabled)
@@ -1290,6 +1751,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.clearSearch()
         precondition(controller.search.stringValue.isEmpty && controller.items.count == 8 && controller.clearSearchButton.isHidden,
             "Clearing the search must restore browsing")
+        let beforeTyping = controller.items.map(\.id)
+        controller.search.stringValue = "Aurora"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        controller.search.stringValue = "Undertow"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        precondition(controller.items.map(\.id) == beforeTyping, "Typing should not rebuild synchronously")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        precondition(controller.items.count == 1 && controller.items.first?.title == "Undertow")
+        controller.search.stringValue = "Aurora"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        controller.commitSearch()
+        precondition(controller.pendingSearch == nil && controller.items.allSatisfy { $0.title.contains("Aurora") })
+        controller.clearSearch()
         precondition(Self.fuzzyScore(query: "", in: "Anything") == 0)
         precondition(Self.fuzzyScore(query: "undertow", in: "Undertow") != nil)
         precondition(Self.fuzzyScore(query: "xqz", in: "Undertow") == nil)
@@ -1337,6 +1811,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let videoDeadline = Date().addingTimeInterval(10)
             while controller.task != nil && Date() < videoDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
             precondition(controller.poster.image != nil && controller.detail.stringValue.contains("fps") && controller.detail.stringValue.contains("×"), controller.detail.stringValue)
+            applied = false
+            controller.toggleLivePreview()
+            let videoPreviewDeadline = Date().addingTimeInterval(10)
+            while controller.liveTask != nil && Date() < videoPreviewDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            precondition(controller.previewHost.renderer != nil, controller.detail.stringValue)
+            precondition(controller.previewHost.renderer?.diagnostics.audioMuted == true && !applied)
+            controller.stopLivePreview()
+            precondition(controller.previewHost.renderer == nil)
+
             var video = SceneNode(content: .video(videoURL))
             video.opacity = 0
             let package = folder.appendingPathComponent("Transparent Video.idlesse")

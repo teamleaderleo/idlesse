@@ -1,6 +1,37 @@
 # Idlesse Library
 
-Open Library from the preview window or Wallpaper menu (Command-L).
+Open Library from the menu extra (Open Library…) or Wallpaper menu (Command-L).
+
+Home owns Library/Favorites/Recent/collection navigation through `SceneLibraryController.Scope`.
+It no longer locates dropdowns by walking the view hierarchy. Recent shows only opened
+items and does not change the saved sort mode. Media filtering remains independent.
+The sidebar can be collapsed with its toolbar button.
+
+List and Grid share a resizable, hideable inspector. Its visibility and divider position
+persist. Grid cards offer explicit context-menu actions; hovering never applies a wallpaper.
+The menu extra groups scene controls under Scene, opens Library for browsing, and leaves
+transition defaults in Settings. The legacy screen-saver preview remains an internal
+utility rather than a normal wallpaper navigation destination.
+
+Follow-up work in #107/#108: move browser actions into the native window toolbar,
+and add richer selected/current metadata.
+
+The inspector's Play Preview button creates one local, muted Metal renderer at a requested
+30 fps. It uses the selected scene (including composition), never the desktop selection
+callback. Pointer and system-audio inputs stay off. Stop, selection changes, hiding the
+inspector, leaving Library, closing/minimizing the window, or losing window focus release
+the renderer and its security-scoped access. Pending resolution is canceled and guarded
+against late installation. Preview is explicit, not hover-triggered.
+
+The apply button reports On Desktop for the currently playing URL. Imports, conversions,
+Source scans, and collection-operation messages use a separate dismissible status row;
+poster details and item-specific preview failures stay in the inspector. The status row
+reserves space only while it contains a message.
+
+`--smoke-library` covers local preview setup/teardown, canceled resolution, muted output,
+no desktop-apply callback, current-wallpaper state, and task/item status separation.
+Pass a local video path after the output PNG to exercise video preview setup and composed
+video poster rendering. These offscreen checks do not establish sustained onscreen cadence.
 
 - Eight bundled scenes currently ship with the app: Desk Clock, After Hours, Undertow,
   Fireflies, Ripple, Audio Aurora, Aurora, and Breathing Aurora.
@@ -26,7 +57,7 @@ Open Library from the preview window or Wallpaper menu (Command-L).
   This works for individual imports and entries from a Source.
 - Drop supported scene/media files onto the scene list to use the individual import
   pipeline. Unsupported dropped files are ignored.
-- Adding individual scenes clears the search, opens Imported, and selects the first
+- Adding individual scenes clears the search, returns Home to Library (Imported in the standalone browser), and selects the first
   added scene. Video playability is probed asynchronously. Imports/conversions run
   sequentially in one cancellable batch and refresh the Library once on completion.
   Each file is attempted independently; failed imports are reported together while
@@ -168,3 +199,87 @@ each wallpaper surface views its rectangle within the union of connected display
 enabled. Gaps and unequal monitor sizes are preserved. Studio and exports show the entire
 scene in their own canvas aspect ratio. Video players still follow the existing approximate
 clock behavior.
+
+### Home toolbar and preview verification
+
+Home hosts Library search in an `NSSearchToolbarItem` and Import in a native
+window toolbar button. Library still owns the query and import action; its
+standalone window retains the content controls. Search is disabled in Displays
+and re-enabled when returning to a Library scope. Media type, sorting, view mode,
+inspector, collections, and sources remain in the content row.
+
+`--smoke-home` exercises toolbar construction, destination navigation, and
+Settings routing without presenting desktop surfaces. Library smoke coverage
+continues to include canceled preview loading and muted video setup/teardown.
+The development window was also checked with an existing video: successive
+screenshots showed advancing preview frames, followed by a successful Stop
+Preview. This is a functional UI check, not a frame-rate or energy measurement.
+
+### Browsing continuity
+
+Home remembers the selected wallpaper separately for each scope during the
+session. Returning from an empty scope restores the previous selection. Switching
+List/Grid reveals the selection in the destination layout without applying it.
+Empty Favorites, Recent, and media filters use their own guidance.
+
+Older individually bookmarked entries can omit media type. Badges and filters
+now share classification from the bookmark's embedded path or the catalog's
+relative path, with explicit catalog types taking precedence. This does not
+resolve, mount, or decode the referenced file. Unknown formats display “Media”.
+Regression checks include legacy video/image bookmarks and scope restoration.
+
+### Transport availability
+
+Home, global next/previous shortcuts, and the menu extra use the same candidate
+rule: the current Library view must contain at least two wallpapers. A one-item
+view cannot restart its only wallpaper through Next/Previous. The menu omits
+these commands when unavailable; Home disables them with explanatory tooltips.
+When available, transport still advances relative to the playing URL, independently
+of poster selection. Smoke checks cover zero, one, and multiple candidates.
+
+### Preview and interaction polish
+
+Concurrent requests for the same card thumbnail share one queued job and fan out
+the result to their consumers. Failed work also clears the pending request.
+Repeated selection of the same row/card preserves a live preview instead of
+restarting it, and cached poster pixels remain visible while their revision is
+checked. Inspector actions are grouped into playback and editing rows.
+
+The current-wallpaper popover includes Pause/Resume, Stop, wallpaper sound for
+video content, and Scene Controls when the current scene exposes parameters.
+These act on the desktop wallpaper, independently of Library preview selection.
+
+Home/Library smoke tests restore their browsing preference changes. Tests cover
+duplicate thumbnail requests, unchanged-row live preview continuity, and existing
+4K video preview setup. A live UI check verified popover Pause/Resume and the
+compact inspector. These checks do not establish an overall scrolling FPS gain.
+
+Desktop cleanup in this pass ignores the trailing click of a double-click on the
+wallpaper. Widget preference synchronization is bounded to once per five seconds
+instead of every Home refresh; Idlesse widget toggles refresh immediately.
+External macOS widget-setting changes can take up to five seconds to appear.
+The original Mission Control reveal hitch and menu-strip visual parity still
+need dedicated on-display qualification; this pass does not claim they are fixed.
+
+### Search work
+
+Typing coalesces result refreshes with a 120 ms delay. Return commits immediately;
+explicit navigation/clearing cancels a pending search, as does closing Library.
+Each nonempty query scores each title once and reuses scores for sorting. Ordinary
+browsing skips media-type inference unless a type filter is active, and collection
+membership/order uses one lookup map per refresh. Smoke checks cover rapid query
+replacement and immediate commit. Live UI checks cover typing, Return, and clear.
+
+Refresh Preview also invalidates the selected gallery/list thumbnail. Revision-tagged
+requests prevent older queued results from overwriting the refresh. Still thumbnails
+use ImageIO's 320-pixel thumbnail path only; failed decoding leaves the placeholder
+rather than falling back to allocating a full-resolution bitmap.
+
+The current-wallpaper popover follows live playback changes while open, including
+title, destination, pause state, sound, and availability of scene controls. Pause
+availability matches the menu extra (animated playback only). Authored package
+titles appear in Home; raw media keeps its cleaned display filename.
+
+The raw wallpaper chooser now opens Library as its owner instead of launching the
+legacy Screen Saver Preview. That preview's HUD is limited to saver playback,
+revealing its picture, and Settings; Library and Studio remain app-level commands.

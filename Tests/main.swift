@@ -71,3 +71,20 @@ for mode in [IdlesseScalingMode.fit, .fill, .actual] {
     }
 }
 print("Canvas geometry and color checks passed")
+
+// Focal fill uses top-left unit coordinates; fit and absent focus stay centered.
+let focusedCanvas = ImageCanvasView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+focusedCanvas.scalingMode = .fill
+let wideImage = NSImage(size: NSSize(width: 200, height: 100))
+precondition(focusedCanvas.destinationRect(for: wideImage) == NSRect(x: -50, y: 0, width: 200, height: 100))
+focusedCanvas.fillFocus = CGPoint(x: 0, y: 0)
+precondition(focusedCanvas.destinationRect(for: wideImage).origin == .zero)
+focusedCanvas.fillFocus = CGPoint(x: 2, y: -1)
+precondition(focusedCanvas.destinationRect(for: wideImage).origin == CGPoint(x: -100, y: 0))
+let tallImage = NSImage(size: NSSize(width: 100, height: 200))
+precondition(focusedCanvas.destinationRect(for: tallImage).origin == CGPoint(x: 0, y: -100))
+focusedCanvas.fillFocus = CGPoint(x: 0, y: 1)
+precondition(focusedCanvas.destinationRect(for: tallImage).origin == .zero)
+focusedCanvas.scalingMode = .fit
+precondition(focusedCanvas.destinationRect(for: wideImage) == NSRect(x: 0, y: 25, width: 100, height: 50))
+print("Focal image geometry passed")

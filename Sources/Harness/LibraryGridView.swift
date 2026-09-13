@@ -84,6 +84,7 @@ typealias LibraryItem = SceneLibraryController.Item
 
 final class LibraryGridView: NSView {
     var onSelect: ((LibraryItem) -> Void)?
+    var onMenu: ((LibraryItem) -> NSMenu)?
     var onDoubleAction: ((LibraryItem) -> Void)?
     var onRequestThumbnail: ((LibraryItem, @escaping (NSImage) -> Void) -> Void)?
 
@@ -109,10 +110,27 @@ final class LibraryGridView: NSView {
         relayout()
     }
 
+    func refreshThumbnail(id: String) {
+        guard let request = onRequestThumbnail else { return }
+        for card in activeCards.values where card.item?.id == id {
+            card.requestThumbnail(using: request)
+        }
+    }
+
     func select(id: String?) {
         selectedID = id
         for card in activeCards.values {
             card.isSelected = card.item?.id == id
+        }
+    }
+
+    /// Reveal the same item when switching layouts or restoring a scope.
+    /// This changes only scroll position; it never selects or applies a wallpaper.
+    func revealSelection() {
+        guard let selectedID, let index = items.firstIndex(where: { $0.id == selectedID }) else { return }
+        relayout()
+        if let frame = layoutPlan?.frame(for: index) {
+            scrollToVisible(frame.insetBy(dx: 0, dy: -8))
         }
     }
 
@@ -214,6 +232,7 @@ final class LibraryGridView: NSView {
             } else {
                 card = reusableCards.popLast() ?? LibraryCardView(frame: .zero)
                 card.onClick = { [weak self] item in self?.selectFromUser(item) }
+                card.onMenu = { [weak self] item in self?.onMenu?(item) }
                 card.onDoubleClick = { [weak self] item in self?.doubleActionFromUser(item) }
                 changed = card.configure(item: item)
                 activeCards[index] = card
@@ -267,6 +286,13 @@ final class LibraryGridView: NSView {
 }
 
 final class LibraryCardView: NSView {
+    override var isFlipped: Bool { true }
+    var onMenu: ((LibraryItem) -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let item else { return nil }
+        onClick?(item)
+        return onMenu?(item)
+    }
     private(set) var item: LibraryItem?
     var isSelected = false {
         didSet { updateBorder() }
@@ -327,13 +353,12 @@ final class LibraryCardView: NSView {
             self.item = item
         }
         titleLabel.stringValue = SceneLibraryController.displayTitle(item.title)
-        let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
-        if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
-            badgeLabel.stringValue = "VIDEO"
-        } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
-            badgeLabel.stringValue = "INTERACTIVE SCENE"
-        } else {
-            badgeLabel.stringValue = "IMAGE"
+        let mediaType = item.builtin != nil ? "scene" : item.entry?.inferredMediaType
+        switch mediaType {
+        case "video": badgeLabel.stringValue = "Video"
+        case "scene": badgeLabel.stringValue = "Scene"
+        case "image": badgeLabel.stringValue = "Image"
+        default: badgeLabel.stringValue = "Media"
         }
         return changed
     }

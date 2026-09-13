@@ -17,7 +17,10 @@ private final class DesktopWindow: NSPanel {
             if let desktopMenu, let view = contentView { NSMenu.popUpContextMenu(desktopMenu(), with: event, for: view) }
             return
         }
-        if event.type == .leftMouseDown, let desktopClick { desktopClick(); return }
+        if event.type == .leftMouseDown, let desktopClick {
+            if event.clickCount == 1 { desktopClick() }
+            return
+        }
         super.sendEvent(event)
     }
 }
@@ -39,6 +42,10 @@ final class WallpaperSurface {
         ProcessInfo.processInfo.environment["IDLESSE_LIVE_MENU_STRIP"] == "1" ||
             UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip")
     }
+    static func usesMetal(_ scene: SceneDescriptor, menuAnimation: Bool) -> Bool {
+        menuAnimation || scene.canvas == .desktopSpan || scene.requiresMetal ||
+            ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1"
+    }
     let window: NSWindow
     let displayID: UInt32
     private let renderer: SceneRenderer
@@ -48,6 +55,7 @@ final class WallpaperSurface {
     var presentedFrameCount: Int? { renderer.presentedFrameCount }
     var gpuTotals: (seconds: Double, frames: Int)? { renderer.gpuTotals }
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
+    var menuStripTiming: String { menuStrip?.timing.summary ?? "disabled" }
     var menuStripWindowNumber: Int? { menuStrip?.window.windowNumber }
     func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
 
@@ -71,10 +79,7 @@ final class WallpaperSurface {
         window.title = "Idlesse Wallpaper"
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient, .shader].contains($0.kind) || $0.needsComposition }
-        if playable.canvas == .desktopSpan || playable.requiresMetal ||
-           ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" ||
-           (Self.liveMenuStripEnabled && hasCreativeLayers) {
+        if Self.usesMetal(playable, menuAnimation: Self.liveMenuStripEnabled) {
             renderer = try MetalSceneRenderer(playable: playable, bounds: bounds,
                 scale: screen.backingScaleFactor, clock: clock, onError: onError, sharedHub: sharedHub)
         } else {
@@ -86,12 +91,26 @@ final class WallpaperSurface {
             metal.displayFrame = screen.frame
         }
         window.contentView = renderer.view
+        if let metal = renderer as? MetalSceneRenderer {
+            // Keep the native still wallpaper visible until the GPU has a full
+            // composition. A newly attached CAMetalLayer otherwise flashes black.
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            renderer.view.layer?.opacity = 0
+            metal.onFirstFrameReady = { [weak self] in
+                guard let self else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.renderer.view.layer?.opacity = 1
+                CATransaction.commit()
+            }
+        }
         if Self.liveMenuStripEnabled,
            let metal = renderer as? MetalSceneRenderer {
             let strip = MenuBarStrip(screen: screen)
             menuStrip = strip
-            strip.onFirstDrawable = { [weak metal] in metal?.refreshSceneTime() }
-            metal.mirrorFrame = { [weak strip] command, texture in strip?.copy(command: command, texture: texture) }
+            strip.onDrawableCatchUp = { [weak metal] in metal?.refreshSceneTime() }
+            metal.mirrorFrame = { [weak strip] command, drawable in strip?.copy(command: command, source: drawable) }
         }
         updateFrameRate()
     }
@@ -114,6 +133,17 @@ final class WallpaperSurface {
     func updateFrameRate() {
         renderer.setPreferredFrameRate(SceneFrameRate.selected.requested(maximum: window.screen?.maximumFramesPerSecond ?? 60))
     }
+
+    var isReadyForDisplay: Bool { renderer.isReadyForDisplay }
+    func prepareForDisplay() {
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderBack(nil)
+        renderer.setMuted(true)
+        renderer.setPaused(false)
+        renderer.refreshSceneTime()
+    }
+    func refreshPreparation() { renderer.refreshSceneTime() }
 
     func show(paused: Bool) {
         window.orderBack(nil)
@@ -175,9 +205,10 @@ final class WallpaperSurface {
 }
 
 enum WallpaperError: LocalizedError {
-    case unreadableImage, noVideo, unsupported
+    case unreadableImage, noVideo, unsupported, preparationTimeout
     var errorDescription: String? {
         switch self {
+        case .preparationTimeout: return "The new wallpaper did not produce a frame. Your previous wallpaper is still selected."
         case .unreadableImage: return "That image could not be opened."
         case .noVideo: return "Choose a playable video with a finite duration and a video track."
         case .unsupported: return "Choose a JPG, PNG, HEIC, MP4 or MOV file."
@@ -352,6 +383,96 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
+    static func smokeSelectionTransactions() throws {
+        final class ControlledSource: SceneSource {
+            var blocked = false
+            var entered = false
+            func resolve(_ url: URL) async throws -> SceneDescriptor {
+                if url.lastPathComponent == "slow" {
+                    entered = true
+                    // Deliberately ignore cancellation: stale providers must not win.
+                    while blocked { await Task.yield(); try? await Task.sleep(nanoseconds: 5_000_000) }
+                }
+                if url.lastPathComponent == "bad" { throw SceneError.invalid("Expected load failure") }
+                return SceneDescriptor(title: url.lastPathComponent, nodes: [SceneNode(content: .gradient)])
+            }
+        }
+        let source = ControlledSource()
+        let host = WallpaperController()
+        host.source = source
+        host.presentsWindows = false
+        var errors = [String]()
+        host.onError = { errors.append($0) }
+        defer { host.shutdown() }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition() && Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+            precondition(condition(), "Selection transaction timed out")
+        }
+        let first = URL(fileURLWithPath: "/transaction/first")
+        let latest = URL(fileURLWithPath: "/transaction/latest")
+        host.select(first); wait { !host.isLoading }
+        precondition(host.selectedURL == first)
+        let original = host.surfaces.first
+        source.blocked = true
+        host.select(URL(fileURLWithPath: "/transaction/slow"))
+        wait { source.entered }
+        precondition(host.selectedURL == first && host.surfaces.first === original,
+                     "Loading must retain the active surface")
+        host.select(latest); wait { !host.isLoading }
+        source.blocked = false
+        // Let the stale provider return after the newer selection has committed.
+        let drainUntil = Date().addingTimeInterval(0.1)
+        while Date() < drainUntil { _ = RunLoop.current.run(mode: .default, before: drainUntil) }
+        precondition(host.selectedURL == latest && errors.isEmpty, "Late cancelled loads must not replace playback or report errors")
+        let working = host.surfaces.first
+        host.select(URL(fileURLWithPath: "/transaction/bad")); wait { !host.isLoading }
+        precondition(host.selectedURL == latest && host.surfaces.first === working,
+                     "Failed loads must retain the active surface")
+        precondition(errors.count == 1, "Only the current failed load should report an error")
+        print("Selection transactions passed: retain active surface, latest wins, late cancellation, failed load")
+    }
+
+    static func smokeVideoPreparation(url: URL) throws {
+        guard let screen = NSScreen.main else { throw SceneError.invalid("A display is required for preparation checks") }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(12)
+            while !condition() && Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            precondition(condition(), "Video preparation timed out")
+        }
+        var errors = [String]()
+        let scene = try LocalSceneSource.read(url)
+        let clock = SceneClock()
+        let hub = SharedVideoHub(scene: scene, clock: clock) { errors.append($0) }
+        let candidate = try WallpaperSurface(screen: screen, playable: scene, clock: clock, sharedHub: hub) { errors.append($0) }
+        defer { candidate.close(); hub.close() }
+        hub.setMuted(true); hub.setPaused(false)
+        candidate.prepareForDisplay()
+        wait { candidate.isReadyForDisplay || !errors.isEmpty }
+        precondition(errors.isEmpty && candidate.isReadyForDisplay, "Real video must prepare a complete frame")
+        precondition(candidate.window.alphaValue == 0 && candidate.window.ignoresMouseEvents,
+                     "Preparation must remain invisible and noninteractive")
+        candidate.close(); hub.close()
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".mp4")
+        let badScene = SceneDescriptor(title: "Missing media", nodes: [SceneNode(content: .video(missing))])
+        let badClock = SceneClock()
+        let badHub = SharedVideoHub(scene: badScene, clock: badClock) { errors.append($0) }
+        let failed = try WallpaperSurface(screen: screen, playable: badScene, clock: badClock, sharedHub: badHub) { errors.append($0) }
+        defer { failed.close(); badHub.close() }
+        badHub.setMuted(true); badHub.setPaused(false)
+        failed.prepareForDisplay()
+        wait { !errors.isEmpty }
+        precondition(!failed.isReadyForDisplay && failed.window.alphaValue == 0,
+                     "A decoder failure must never reveal the candidate")
+        failed.close(); badHub.close()
+        precondition(!failed.window.isVisible, "Cancelled or failed candidate windows must close")
+        print("Video preparation passed: shared decoder first frame, invisible preparation, decoder failure, teardown")
+    }
+
     static func smokeResume(url: URL) throws {
         let suite = "Idlesse.ResumeTest." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
@@ -464,6 +585,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         Coverage rest/resume thresholds: \(coverageMonitor.policy.restThreshold) / \(coverageMonitor.policy.resumeThreshold)
         Coverage stable samples: \(coverageMonitor.policy.stableSamples)
         Covered surfaces: \(surfaces.filter(\.isCovered).count)
+        Menu strip timing: \(surfaces.map { "\($0.displayID): \($0.menuStripTiming)" }.joined(separator: "; "))
         Crossfade seconds: \(transitionDuration)
         """
     }
@@ -475,7 +597,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var lastReloadError: String?
     private(set) var revision = 0
     var sceneTime: TimeInterval { clock.time }
-    private let source: SceneSource = LocalSceneSource()
+    private var source: SceneSource = LocalSceneSource()
     private var scopeStarted = false
     private var retiring: [WallpaperSurface] = []
     private var retiringURL: URL?
@@ -501,6 +623,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
     var onShowSettings: (() -> Void)?
+    var onShowLibrary: (() -> Void)?
     var onShowPreview: (() -> Void)?
     private lazy var displayAssignmentController = DisplayAssignmentController(wallpaper: self)
     /// Menu items contributed by the host (next/previous, recents). Rebuilt on every menu open.
@@ -586,7 +709,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         activeSharedVideoHub?.setPaused(CoverageRestPolicy.shouldRestSharedPlayback(
             globalPause: shouldPause, displayResting: resting))
     }
+    private var desktopReveal = DesktopRevealPolicy()
+
     private func pollCoverage() {
+        guard desktopReveal.allowsCoverage(at: ProcessInfo.processInfo.systemUptime) else { return }
         guard presentsWindows, coveragePauseEnabled, !surfaces.isEmpty, !suspended else { return }
         var own = Set<CGWindowID>()
         for surface in surfaces {
@@ -648,7 +774,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             }
             self?.select(url)
         }
-        onShowPreview?()
+        onShowLibrary?()
         if let owner = presentingWindow?() {
             panel.beginSheetModal(for: owner, completionHandler: completion)
         } else {
@@ -680,7 +806,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     var onManualSelection: (() -> Void)?
-    /// Fires after any successful non-reload selection with the adopted URL.
+    /// Fires after any successful (non-reload) selection with the adopted URL.
     var onSelectionCommitted: ((URL) -> Void)?
 
     func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil) {
@@ -725,8 +851,33 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     candidateClock.pointerEnabled = reloading && self.clock.pointerEnabled
                     candidateClock.audioEnabled = reloading && self.clock.audioEnabled && playable.usesAudio
                 }
+                var preparationError: String?
                 let (replacement, newHub) = self.suspended ? ([], nil) :
-                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request)
+                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request, onError: { [weak self] message in
+                        if adopted { self?.stop(); self?.showError(message) }
+                        else { preparationError = message }
+                    })
+                let preparedGeneration = self.surfaceGeneration
+                defer {
+                    if !adopted { replacement.forEach { $0.close() }; newHub?.close() }
+                }
+                if self.presentsWindows && !replacement.isEmpty {
+                    newHub?.setMuted(true)
+                    newHub?.setPaused(false)
+                    replacement.forEach { $0.prepareForDisplay() }
+                    let deadline = ProcessInfo.processInfo.systemUptime + 10
+                    while !replacement.allSatisfy({ $0.isReadyForDisplay }) {
+                        try Task.checkCancellation()
+                        guard request == self.generation, preparedGeneration == self.surfaceGeneration, !self.suspended else { throw CancellationError() }
+                        if let preparationError { throw SceneError.invalid(preparationError) }
+                        guard ProcessInfo.processInfo.systemUptime < deadline else { throw WallpaperError.preparationTimeout }
+                        try await Task.sleep(nanoseconds: 30_000_000)
+                        replacement.forEach { $0.refreshPreparation() }
+                    }
+                    try Task.checkCancellation()
+                    guard request == self.generation, preparedGeneration == self.surfaceGeneration, !self.suspended else { throw CancellationError() }
+                    if let preparationError { throw SceneError.invalid(preparationError) }
+                }
                 let fade = !reloading && self.presentsWindows && !self.suspended && !self.shouldPause &&
                     !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && self.transitionDuration > 0 && !self.surfaces.isEmpty
                 if fade {
@@ -768,7 +919,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 replacement.forEach { $0.setMuted(!self.soundEnabled) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
-                    replacement.forEach { $0.window.alphaValue = fade ? 0 : 1; $0.show(paused: self.shouldPause) }
+                    replacement.forEach {
+                        self.configureDesktopInteraction($0)
+                        $0.window.alphaValue = fade ? 0 : 1
+                        $0.show(paused: self.shouldPause)
+                    }
                     if fade { self.beginTransition() }
                 }
                 self.ensureStatusItem()
@@ -781,6 +936,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.onStart?()
             } catch {
                 guard !Task.isCancelled, request == self.generation else { return }
+                if error is CancellationError {
+                    if let previousURL = self.selectedURL, let previousScene = self.playable {
+                        self.watch(url: previousURL, scene: previousScene)
+                    }
+                    return
+                }
                 if reloading {
                     self.lastReloadError = error.localizedDescription
                     self.updateMenu()
@@ -803,19 +964,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int, onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         let hasVideo = playable.allNodes.contains { $0.kind == .video }
-        let hasCreativeLayers = playable.allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .gradient, .shader].contains($0.kind) || $0.needsComposition }
         let sharesSceneAcrossDisplays = sameWallpaperOnAllDisplays || playable.canvas == .desktopSpan
-        let needsMetal = playable.canvas == .desktopSpan || playable.requiresMetal ||
-            ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1" ||
-            (WallpaperSurface.liveMenuStripEnabled && hasCreativeLayers)
+        let needsMetal = WallpaperSurface.usesMetal(playable, menuAnimation: WallpaperSurface.liveMenuStripEnabled)
         let sharedHub = (sharesSceneAcrossDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
+            if let onError { onError(message); return }
             self.stop()
             self.showError(message)
         } : nil
@@ -844,6 +1003,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         sharedHub: screenHub, securityScope: screenScope) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
+                        if let onError { onError(message); return }
                         self.stop()
                         self.showError(message)
                     }
@@ -971,12 +1131,25 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     @objc func revealDesktop() {
+        // Wake covered surfaces before the system animation exposes them. This
+        // preserves explicit pause/bedtime state and avoids waiting for polling.
+        guard desktopReveal.begin() else { return }
+        let started = ProcessInfo.processInfo.systemUptime
+        coverageMonitor.reset()
+        for surface in surfaces { surface.setCovered(false) }
+        applySharedHubPause()
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = ["1"]
         configuration.activates = false
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
             configuration: configuration) { [weak self] _, error in
-                if let error { DispatchQueue.main.async { self?.showError(error.localizedDescription) } }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.desktopReveal.complete(at: ProcessInfo.processInfo.systemUptime, succeeded: error == nil)
+                    let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000
+                    NSLog("Idlesse desktop reveal dispatch completed in %.1f ms", elapsed)
+                    if let error { self.showError(error.localizedDescription) }
+                }
             }
     }
 
@@ -1302,37 +1475,35 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             (suspended ? "Waiting for your display" : (shouldPause && selectedIsAnimated ? "Scene paused" : "Wallpaper running"))
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
         if let lastReloadError { menu.addItem(withTitle: "Edit not applied: " + lastReloadError, action: nil, keyEquivalent: "") }
-        if let selectedURL { menu.addItem(withTitle: selectedURL.lastPathComponent, action: nil, keyEquivalent: "") }
+        if let playable { menu.addItem(withTitle: playable.title, action: nil, keyEquivalent: "") }
+        let sceneMenu = NSMenu()
         if let playable, !playable.parameters.isEmpty {
-            let controls = addItem(menu, "Scene Controls…", #selector(editControls))
+            let controls = addItem(sceneMenu, "Scene Controls…", #selector(editControls))
             controls.isEnabled = !isLoading
         }
         if playable?.usesPointer == true {
-            let pointer = addItem(menu, "Enable Pointer Response", #selector(togglePointer))
+            let pointer = addItem(sceneMenu, "Enable Pointer Response", #selector(togglePointer))
             pointer.state = clock.pointerEnabled ? .on : .off
             pointer.isEnabled = !isLoading
         }
         if playable?.usesAudio == true {
-            let audio = addItem(menu, "Enable Audio Response", #selector(toggleAudio))
+            let audio = addItem(sceneMenu, "Enable Audio Response", #selector(toggleAudio))
             audio.state = clock.audioEnabled ? .on : .off
             audio.isEnabled = !isLoading
         }
+        if isRunning {
+            let sound = addItem(sceneMenu, "Play Wallpaper Audio", #selector(toggleSound))
+            sound.state = soundEnabled ? .on : .off
+            addItem(sceneMenu, "Stop Wallpaper", #selector(self.stop))
+        }
+        if !sceneMenu.items.isEmpty {
+            let scene = NSMenuItem(title: "Scene", action: nil, keyEquivalent: "")
+            sceneMenu.autoenablesItems = false
+            scene.submenu = sceneMenu
+            menu.addItem(scene)
+        }
         menu.addItem(.separator())
-        addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
-        let transition = NSMenuItem(title: "Scene Transition", action: nil, keyEquivalent: "")
-        let choices = NSMenu()
-        for seconds in [0.0, 0.5, 1.0, 2.0] {
-            let item = addItem(choices, seconds == 0 ? "Instant" : "\(seconds) seconds", #selector(changeTransition(_:)))
-            item.representedObject = seconds
-            item.state = transitionDuration == seconds ? .on : .off
-        }
-        choices.addItem(.separator())
-        for style in TransitionStyle.allCases {
-            let item = addItem(choices, style.title, #selector(changeTransitionStyle(_:)))
-            item.representedObject = style.rawValue
-            item.state = transitionStyle == style ? .on : .off
-        }
-        transition.submenu = choices; menu.addItem(transition)
+        addItem(menu, "Open Library…", #selector(openLibrary))
         if NSScreen.screens.count > 1 {
             let displaysItem = NSMenuItem(title: "Displays", action: nil, keyEquivalent: "")
             let displayMenu = NSMenu()
@@ -1350,22 +1521,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
         pause.isEnabled = isRunning && selectedIsAnimated
-        let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
-        stop.isEnabled = isRunning || isLoading
-        let sound = addItem(menu, "Play Wallpaper Audio", #selector(toggleSound))
-        sound.state = soundEnabled ? .on : .off
-        sound.isEnabled = isRunning
         if let extras = extraMenuItemsProvider?(), !extras.isEmpty {
             menu.addItem(.separator())
             extras.forEach(menu.addItem)
         }
         menu.addItem(.separator())
-        addItem(menu, "Show Preview", #selector(showPreview))
-        if let comfort {
-            comfort.addDesktopIconsItem(to: menu)
-            let item = menu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
-            item.target = comfort
-        }
         addItem(menu, "Settings…", #selector(showAppSettings))
         addItem(menu, "Quit Idlesse", #selector(quit))
         menu.autoenablesItems = false
@@ -1373,6 +1533,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         onStateChange?()
     }
 
+    @objc private func openLibrary() { onShowLibrary?() }
     @objc private func showAppSettings() { onShowSettings?() }
     @objc private func showDisplayAssignments() { displayAssignmentController.present() }
     @objc private func toggleSound() { soundEnabled.toggle() }
@@ -1407,7 +1568,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         surfaces.forEach { _ = $0.updateScene(playable) }
         updateMenu()
     }
-    @objc private func editControls() {
+    var currentSceneTitle: String? {
+        selectedURL?.pathExtension.lowercased() == "idlesse" ? playable?.title : nil
+    }
+    var canPausePlayback: Bool { isRunning && selectedIsAnimated }
+    var hasSceneControls: Bool { playable?.parameters.isEmpty == false && !isLoading }
+    var hasVideoContent: Bool { playable?.allNodes.contains { $0.kind == .video } == true }
+    @objc func editControls() {
         guard let original = playable, !isLoading else { return }
         SceneParameterControls.present(scene: original, window: nil) { [weak self] parameters in
             guard let self, self.playable?.parameters == original.parameters, !self.isLoading,
@@ -1463,11 +1630,13 @@ private final class MenuBarStrip {
     private let layer = CAMetalLayer()
     private let height: CGFloat
     private(set) var frames = 0
-    var onFirstDrawable: (() -> Void)?
+    let timing = MirrorPresentationTiming()
+    var onDrawableCatchUp: (() -> Void)?
     private let acquisition = DispatchQueue(label: "Idlesse.MenuStrip.Drawable", qos: .userInteractive)
     // Accessed only on the main thread. At most one ready drawable and one request.
     private var readyDrawable: CAMetalDrawable?
     private var acquiring = false
+    private var recovery = MirrorFrameRecovery()
     private func requestDrawable() {
         guard !acquiring, readyDrawable == nil else { return }
         acquiring = true
@@ -1477,7 +1646,9 @@ private final class MenuBarStrip {
                 guard let self else { return }
                 self.acquiring = false
                 self.readyDrawable = drawable
-                if drawable != nil && self.frames == 0 { self.onFirstDrawable?() }
+                if self.recovery.drawableReady(available: drawable != nil) {
+                    self.onDrawableCatchUp?()
+                }
             }
         }
     }
@@ -1499,33 +1670,52 @@ private final class MenuBarStrip {
         window.setFrame(frame, display: false)
         window.isReleasedWhenClosed = false
         window.title = "Idlesse Menu Strip Experiment"
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        layer.opacity = 0
         let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
         view.wantsLayer = true
         layer.pixelFormat = .bgra8Unorm
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.framebufferOnly = false
-        layer.maximumDrawableCount = 2
+        // The narrow strip can still have a drawable awaiting presentation when
+        // the next copy arrives. A third slot avoids starving its asynchronous
+        // acquisition without ever blocking the main wallpaper renderer.
+        layer.maximumDrawableCount = 3
         layer.allowsNextDrawableTimeout = true
         view.layer = layer
         window.contentView = view
     }
-    func copy(command: MTLCommandBuffer, texture: MTLTexture) {
+    func copy(command: MTLCommandBuffer, source: CAMetalDrawable) {
         guard window.isVisible else { return }
+        let texture = source.texture
         let scale = CGFloat(texture.width) / max(1, window.frame.width)
         let rows = min(texture.height, max(1, Int((height * scale).rounded())))
         let size = CGSize(width: texture.width, height: rows)
         if layer.device == nil { layer.device = texture.device }
         if layer.drawableSize != size { layer.drawableSize = size }
-        guard let target = readyDrawable else { requestDrawable(); return }
+        guard let target = readyDrawable else { timing.recordMiss(); recovery.missedCopy(); requestDrawable(); return }
         readyDrawable = nil
         guard target.texture.width == texture.width, target.texture.height == rows,
-              let blit = command.makeBlitCommandEncoder() else { requestDrawable(); return }
+              let blit = command.makeBlitCommandEncoder() else { recovery.missedCopy(); requestDrawable(); return }
         blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
             sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
             sourceSize: MTLSize(width: texture.width, height: rows, depth: 1),
             to: target.texture, destinationSlice: 0, destinationLevel: 0,
             destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
         blit.endEncoding()
+        let pair = timing.makePair()
+        source.addPresentedHandler { drawable in pair.record(source: true, time: drawable.presentedTime) }
+        target.addPresentedHandler { drawable in pair.record(source: false, time: drawable.presentedTime) }
+        command.addCompletedHandler { [weak self] command in
+            guard command.status == .completed else { return }
+            DispatchQueue.main.async { [weak self] in
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self?.layer.opacity = 1
+                CATransaction.commit()
+            }
+        }
         command.present(target)
         frames += 1
         requestDrawable()

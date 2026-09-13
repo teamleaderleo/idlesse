@@ -124,6 +124,7 @@ struct RendererDiagnostics {
 protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
+    var isReadyForDisplay: Bool { get }
     var presentedFrameCount: Int? { get }
     var gpuTotals: (seconds: Double, frames: Int)? { get }
     func setPaused(_ paused: Bool)
@@ -137,6 +138,7 @@ protocol SceneRenderer: AnyObject {
 }
 
 extension SceneRenderer {
+    var isReadyForDisplay: Bool { true }
     func refreshSceneTime() { view.needsDisplay = true }
     func setMuted(_ muted: Bool) {}
     func updateScene(_ scene: SceneDescriptor) -> Bool { false }
@@ -204,7 +206,7 @@ final class AnimatedImageRenderer: SceneRenderer {
             loopCount: loops, frameCount: frames)
     }
 
-    init(url: URL, bounds: NSRect) throws {
+    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 1 else {
             throw SceneError.invalid("Not an animated image.")
@@ -219,6 +221,7 @@ final class AnimatedImageRenderer: SceneRenderer {
         self.count = count
         self.delays = delays
         view = canvas
+        canvas.fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
         canvas.frame = bounds
         canvas.scalingMode = .fill
         canvas.backdropColor = .clear
@@ -290,6 +293,7 @@ final class StaticImageRenderer: SceneRenderer {
         }
         let canvas = ImageCanvasView(frame: bounds)
         canvas.scalingMode = .fill
+        canvas.fillFocus = playable.focus.map { CGPoint(x: $0.x, y: $0.y) }
         canvas.currentImage = image
         view = canvas
     }
@@ -526,6 +530,7 @@ final class SharedVideoHub {
 }
 
 final class VideoRenderer: SceneRenderer {
+    var isReadyForDisplay: Bool { (view as? VideoWallpaperView)?.playerLayer.isReadyForDisplay == true }
     let view: NSView
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
@@ -562,7 +567,7 @@ final class VideoRenderer: SceneRenderer {
         // A focus needs the source dimensions, which are only known once the item is
         // ready. The looper swaps items per cycle, so this follows the queue's
         // current item rather than the template.
-        if focus != nil || bleed?.isEmpty == false {
+        do {
             sizeObservation = queue.observe(\.currentItem?.presentationSize, options: [.initial, .new]) { [weak view] player, _ in
                 guard let size = player.currentItem?.presentationSize, size.width > 0, size.height > 0 else { return }
                 DispatchQueue.main.async { view?.presentationSize = size }
@@ -593,6 +598,7 @@ final class VideoRenderer: SceneRenderer {
 
 /// Array order is back to front. Normal alpha composition only.
 final class LayeredSceneRenderer: SceneRenderer {
+    var isReadyForDisplay: Bool { zip(children, nodes).allSatisfy { !$0.1.visible || $0.0.isReadyForDisplay } }
     let view: NSView
     private var children: [SceneRenderer] = []
     private var nodes: [SceneNode] = []
@@ -628,17 +634,17 @@ final class LayeredSceneRenderer: SceneRenderer {
                 let child: SceneRenderer
                 switch node.content {
                 case .image(let url):
-                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds) {
+                    if let animated = try? AnimatedImageRenderer(url: url, bounds: bounds, focus: playable.focus) {
                         child = animated
                     } else {
-                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, assetURL: url, kind: .image), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
+                        child = try StaticImageRenderer(playable: SceneDescriptor(title: playable.title, nodes: [node], focus: playable.focus), bounds: bounds, scale: scale, pixelLimit: CGFloat(imagePixels))
                     }
                     (child.view as? ImageCanvasView)?.backdropColor = .clear
                 case .video(let url): child = VideoRenderer(url: url, bounds: bounds, focus: playable.focus, bleed: playable.bleed, onError: onError)
                 case .particles, .text, .shape, .shader: throw SceneError.invalid("This creative layer requires Metal.")
                 case .gradient: child = try GradientRenderer(bounds: bounds, clock: clock, onError: onError)
                 case .group(let nodes):
-                    child = try LayeredSceneRenderer(playable: SceneDescriptor(title: node.displayName, nodes: nodes),
+                    child = try LayeredSceneRenderer(playable: SceneDescriptor(title: node.displayName, nodes: nodes, focus: playable.focus, bleed: playable.bleed),
                         bounds: bounds, scale: scale, clock: clock, onError: onError, imagePixels: imagePixels)
                     child.view.layer?.allowsGroupOpacity = true
                 }
@@ -667,7 +673,7 @@ final class LayeredSceneRenderer: SceneRenderer {
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
         // The recursive resource check above preflights every subtree before mutation.
         for (index, node) in scene.nodes.enumerated() where node.kind == .group {
-            guard children[order[index]].updateScene(SceneDescriptor(title: node.displayName, nodes: node.children)) else { return false }
+            guard children[order[index]].updateScene(SceneDescriptor(title: node.displayName, nodes: node.children, focus: scene.focus, bleed: scene.bleed)) else { return false }
         }
         let containers = view.subviews
         let reordered = order.map { containers[$0] }
@@ -678,6 +684,10 @@ final class LayeredSceneRenderer: SceneRenderer {
         view.subviews = reordered
         let bounds = view.bounds
         for (index, node) in nodes.enumerated() {
+            if let canvas = children[index].view as? ImageCanvasView {
+                canvas.fillFocus = scene.focus.map { CGPoint(x: $0.x, y: $0.y) }
+            }
+            if let video = children[index].view as? VideoWallpaperView { video.focus = scene.focus }
             children[index].view.alphaValue = node.visible ? node.opacity : 0
             let t = node.transform
             var matrix = CATransform3DMakeTranslation((0.5 + (t.x ?? 0)) * bounds.width,

@@ -129,6 +129,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.modes.refresh()
         }
         comfort.onShowSettings = { [weak self] in self?.showLibrary(); self?.appSettings.present(tab: 1) }
+        wallpaper.onShowLibrary = { [weak self] in self?.showLibrary() }
         wallpaper.onShowSettings = { [weak self] in self?.showSettings() }
         comfort.start()
         appSettings.modes = modes
@@ -164,13 +165,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         nextButton.toolTip = "Next picture (→)"
         let revealButton = NSButton(title: "Show in Finder", target: self, action: #selector(revealImage))
         settingsButton = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
-        let wallpaperButton = NSButton(title: "Wallpaper…", target: wallpaper, action: #selector(WallpaperController.chooseWallpaper))
-        wallpaperButton.bezelStyle = .rounded
-        let sceneButton = NSButton(title: "Studio…", target: self, action: #selector(showScenePreview))
-        sceneButton.bezelStyle = .rounded
-        let libraryButton = NSButton(title: "Library…", target: self, action: #selector(showLibrary))
-        libraryButton.bezelStyle = .rounded
-        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton, wallpaperButton, sceneButton, libraryButton])
+        let controls = NSStackView(views: [pauseButton, nextButton, revealButton, settingsButton])
         controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         for button in [pauseButton!, nextButton, revealButton, settingsButton!] {
@@ -245,7 +240,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private func stepWallpaper(delta: Int) {
         do {
             try prepareLibrary()
-            library?.cycle(delta: delta)
+            library?.cycle(delta: delta, from: wallpaper.selectedURL)
         } catch {
             NSSound.beep()
         }
@@ -256,22 +251,17 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         recentSceneURLs = Array(recentSceneURLs.prefix(5))
     }
     private func menuExtras() -> [NSMenuItem] {
+        guard library?.hasCycleCandidates == true else { return [] }
         var items: [NSMenuItem] = []
         let next = NSMenuItem(title: "Next Wallpaper  (⌃⌥⌘→)", action: #selector(nextWallpaper), keyEquivalent: "")
         next.target = self
-        next.isEnabled = wallpaper.isRunning
+        next.isEnabled = true
+        next.toolTip = "Next wallpaper in the current Library view"
         let previous = NSMenuItem(title: "Previous Wallpaper  (⌃⌥⌘←)", action: #selector(previousWallpaper), keyEquivalent: "")
         previous.target = self
-        previous.isEnabled = wallpaper.isRunning
+        previous.isEnabled = true
+        previous.toolTip = "Previous wallpaper in the current Library view"
         items += [next, previous]
-        let recents = recentSceneURLs.filter { $0 != wallpaper.selectedURL }.prefix(4)
-        for url in recents {
-            let item = NSMenuItem(title: SceneLibraryController.displayTitle(url.deletingPathExtension().lastPathComponent),
-                action: #selector(applyRecent(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = url as NSURL
-            items.append(item)
-        }
         return items
     }
     @objc private func nextWallpaper() { stepWallpaper(delta: 1) }
@@ -339,7 +329,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
 
-    @objc private func showSettings() { showLibrary() }
+    @objc private func showSettings() { appSettings.present(tab: 0) }
 
     private func showSaverSettings(asSheet: Bool = false) {
         let settingsWindow = settingsController.window
@@ -460,9 +450,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             item.target = wallpaper
             wallpaperMenu.addItem(item)
         }
-        let show = NSMenuItem(title: "Screen Saver Preview", action: #selector(showPreview), keyEquivalent: "")
-        show.target = self
-        wallpaperMenu.addItem(show)
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
@@ -486,6 +473,24 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 }
 
 let app = NSApplication.shared
+
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-video-preparation"), CommandLine.arguments.count > index + 1 {
+    do { try WallpaperController.smokeVideoPreparation(url: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(EXIT_SUCCESS) }
+    catch { fputs("Video preparation checks failed: \(error)\n", stderr); exit(EXIT_FAILURE) }
+}
+
+if CommandLine.arguments.contains("--smoke-selection-transactions") {
+    do { try WallpaperController.smokeSelectionTransactions(); exit(EXIT_SUCCESS) }
+    catch { fputs("Selection transaction checks failed: \(error)\n", stderr); exit(EXIT_FAILURE) }
+}
+
+if CommandLine.arguments.contains("--smoke-home") {
+    do {
+        try HomeWindowController.smokeTest()
+        print("Home checks passed: toolbar search/import, navigation, settings routing")
+        exit(0)
+    } catch { fputs("Home check failed: \(error.localizedDescription)\n", stderr); exit(1) }
+}
 
 if let index = CommandLine.arguments.firstIndex(of: "--smoke-library"), CommandLine.arguments.count > index + 1 {
     do {

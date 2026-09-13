@@ -57,7 +57,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let sameDisplaysButton = NSButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private var rows: [SidebarRow] = []
     private var currentRow: SidebarRow = .library
-    private var previousSortBeforeRecent: Int?
+    private var sidebarItem: NSSplitViewItem?
     private var refreshTimer: Timer?
 
     private let nowPlayingButton = NSButton(title: "No Wallpaper", target: nil, action: nil)
@@ -66,6 +66,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let pauseButton = NSButton(frame: .zero)
     private let nextButton = NSButton(frame: .zero)
     private var nowPlayingPopover: NSPopover?
+    private var refreshPlaybackPopover: (() -> Void)?
     private var cachedThumbnailURL: URL?
     private var cachedThumbnail: NSImage?
 
@@ -90,6 +91,22 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         // main.swift installs the legacy Settings owner before AppSettings is
         // created. Home becomes the sheet/panel owner as soon as it exists.
         wallpaper.presentingWindow = { [weak library] in library?.window }
+        library.onScopeChange = { [weak self] scope in
+            guard let self else { return }
+            self.refreshSidebar()
+            let row = self.rows.first { row in
+                switch (row, scope) {
+                case (.library, .library), (.favorites, .favorites), (.recent, .recent): return true
+                case (.collection(let id, _), .collection(let target)): return id == target
+                default: return false
+                }
+            } ?? .library
+            self.showLibraryScope(row)
+            if let index = self.rows.firstIndex(of: row) {
+                self.sidebar.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            }
+        }
+        library.useHomeNavigation()
         installShell()
         installToolbar()
         buildDisplaysView()
@@ -122,7 +139,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func presentWindow() {
         library.show()
-        window.title = "Idlesse"
+        window.title = currentRow.title
         window.deminiaturize(nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -153,7 +170,9 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 260
-        sidebarItem.canCollapse = false
+        sidebarItem.canCollapse = true
+        self.sidebarItem = sidebarItem
+        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: "Idlesse.home.sidebarHidden")
 
         let contentController = NSViewController()
         contentController.view = contentHost
@@ -251,85 +270,38 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     private func showLibraryScope(_ row: SidebarRow) {
+        library.setSearchEnabled(true)
         currentRow = row
         libraryView.isHidden = false
         displaysView.isHidden = true
-        if previousSortBeforeRecent != nil, row != .recent {
-            if let sort = sortPopup(), let old = previousSortBeforeRecent, sort.numberOfItems > old {
-                sort.selectItem(at: old)
-                sendAction(of: sort)
-            }
-            previousSortBeforeRecent = nil
-        }
+        window.title = row.title
         switch row {
-        case .library:
-            selectFilter(title: "All Wallpapers")
-        case .favorites:
-            selectFilter(title: "Favorites")
-        case .recent:
-            selectFilter(title: "All Wallpapers")
-            if let sort = sortPopup() {
-                if previousSortBeforeRecent == nil { previousSortBeforeRecent = sort.indexOfSelectedItem }
-                sort.selectItem(withTitle: "Recently Opened")
-                sendAction(of: sort)
-            }
-        case .collection(let id, _):
-            selectFilter(collectionID: id)
-        default:
-            break
+        case .library: library.setScope(.library)
+        case .favorites: library.setScope(.favorites)
+        case .recent: library.setScope(.recent)
+        case .collection(let id, _): library.setScope(.collection(id))
+        default: break
         }
         library.refreshEmbedded()
     }
 
     private func showDisplays() {
+        library.setSearchEnabled(false)
+        library.stopLivePreview()
         currentRow = .displays
+        window.title = "Displays"
         activateDisplaysDestination?()
         libraryView.isHidden = true
         displaysView.isHidden = false
         refreshDisplaysSummary()
     }
 
-    /// Drive the Library's existing filter/sort controls so there is one source
-    /// of truth for Sources, collections, search, selection and scheduling.
-    private func selectFilter(title: String) {
-        guard let popup = filterPopup(), popup.itemTitles.contains(title) else { return }
-        popup.selectItem(withTitle: title)
-        sendAction(of: popup)
-    }
+    private func rotationSummary() -> String? { library.rotationSummary }
 
-    private func selectFilter(collectionID: String) {
-        guard let popup = filterPopup(),
-              let index = popup.itemArray.firstIndex(where: { ($0.representedObject as? String) == collectionID }) else { return }
-        popup.selectItem(at: index)
-        sendAction(of: popup)
-    }
-
-    private func sendAction(of popup: NSPopUpButton) {
-        guard let action = popup.action else { return }
-        NSApp.sendAction(action, to: popup.target, from: popup)
-    }
-
-    private func filterPopup() -> NSPopUpButton? {
-        popups(in: libraryView).first { $0.itemTitles.contains("All Wallpapers") && $0.itemTitles.contains("Favorites") }
-    }
-
-    private func sortPopup() -> NSPopUpButton? {
-        popups(in: libraryView).first { $0.itemTitles.contains("Recently Opened") && $0.itemTitles.contains("Name") }
-    }
-
-    private func popups(in view: NSView) -> [NSPopUpButton] {
-        var result: [NSPopUpButton] = []
-        if let popup = view as? NSPopUpButton { result.append(popup) }
-        for child in view.subviews { result.append(contentsOf: popups(in: child)) }
-        return result
-    }
-
-    private func rotationSummary() -> String? {
-        for popup in popups(in: libraryView) {
-            guard let first = popup.itemTitles.first, first.hasPrefix("Collections · Rotating") else { continue }
-            return first.replacingOccurrences(of: "Collections · ", with: "")
-        }
-        return nil
+    @objc private func toggleSidebar() {
+        guard let sidebarItem else { return }
+        sidebarItem.isCollapsed.toggle()
+        UserDefaults.standard.set(sidebarItem.isCollapsed, forKey: "Idlesse.home.sidebarHidden")
     }
 
     // MARK: - Displays destination
@@ -438,6 +410,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     // MARK: - Now Playing
 
+    private static let searchItem = NSToolbarItem.Identifier("Idlesse.Home.Search")
+    private static let importItem = NSToolbarItem.Identifier("Idlesse.Home.Import")
+    private static let transportItem = NSToolbarItem.Identifier("Idlesse.Home.Transport")
+    private static let settingsItem = NSToolbarItem.Identifier("Idlesse.Home.Settings")
     private static let nowPlayingItem = NSToolbarItem.Identifier("Idlesse.Home.NowPlaying")
 
     private func installToolbar() {
@@ -448,29 +424,62 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         toolbar.autosavesConfiguration = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        window.titleVisibility = .hidden
+        window.titleVisibility = .visible
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.nowPlayingItem]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.nowPlayingItem, .flexibleSpace]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.searchItem {
+            return library.makeSearchToolbarItem(identifier: itemIdentifier)
+        }
+        if itemIdentifier == Self.importItem {
+            return library.makeImportToolbarItem(identifier: itemIdentifier)
+        }
+        if itemIdentifier == .toggleSidebar {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
+            item.label = "Sidebar"
+            item.target = self
+            item.action = #selector(toggleSidebar)
+            return item
+        }
+        if itemIdentifier == Self.settingsItem {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+            item.label = "Settings"
+            item.toolTip = "Idlesse Settings (⌘,)"
+            item.target = self
+            item.action = #selector(openPreferences)
+            return item
+        }
+        if itemIdentifier == Self.transportItem {
+            configureTransport(previousButton, symbol: "backward.end.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
+            configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
+            configureTransport(nextButton, symbol: "forward.end.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
+            let transport = NSStackView(views: [previousButton, pauseButton, nextButton])
+            transport.spacing = 4
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.view = transport
+            item.label = "Playback"
+            return item
+        }
         guard itemIdentifier == Self.nowPlayingItem else { return nil }
-        configureTransport(previousButton, symbol: "backward.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
-        configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
-        configureTransport(nextButton, symbol: "forward.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
         nowPlayingButton.isBordered = false
         nowPlayingButton.target = self
         nowPlayingButton.action = #selector(showNowPlaying)
         nowPlayingButton.imagePosition = .imageLeading
         nowPlayingButton.alignment = .left
-        nowPlayingButton.toolTip = "Now Playing"
+        nowPlayingButton.toolTip = "Current wallpaper and playback options"
+        nowPlayingButton.font = .systemFont(ofSize: 13, weight: .medium)
+        (nowPlayingButton.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
         destinationLabel.font = .systemFont(ofSize: 11)
         destinationLabel.textColor = .secondaryLabelColor
         destinationLabel.lineBreakMode = .byTruncatingTail
@@ -479,9 +488,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 0
-        labels.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-        labels.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
-        let controls = NSStackView(views: [previousButton, pauseButton, nextButton, labels])
+        labels.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let controls = NSStackView(views: [labels])
         controls.spacing = 7
         controls.alignment = .centerY
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -494,19 +502,25 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private func configureTransport(_ button: NSButton, symbol: String, label: String, action: Selector) {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         button.isBordered = false
+        button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.setAccessibilityLabel(label)
         button.target = self
         button.action = action
         button.toolTip = label
     }
 
-    @objc private func previousWallpaper() { library.cycle(delta: -1); refreshState() }
-    @objc private func nextWallpaper() { library.cycle(delta: 1); refreshState() }
+    @objc private func previousWallpaper() { library.cycle(delta: -1, from: wallpaper.selectedURL); refreshState() }
+    @objc private func nextWallpaper() { library.cycle(delta: 1, from: wallpaper.selectedURL); refreshState() }
+    @objc private func openPreferences() { wallpaper.onShowSettings?() }
+
     @objc private func togglePause() { wallpaper.togglePause(); refreshState() }
 
     @objc private func showNowPlaying() {
+        nowPlayingPopover?.close()
         let popover = NSPopover()
         let controller = NSViewController()
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 128))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: wallpaper.hasSceneControls ? 180 : 142))
         let title = NSTextField(labelWithString: nowPlayingButton.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         let destination = NSTextField(labelWithString: destinationLabel.stringValue)
@@ -514,7 +528,16 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let stop = NSButton(title: "Stop", target: self, action: #selector(stopWallpaper))
         stop.bezelStyle = .rounded
         stop.isEnabled = wallpaper.selectedURL != nil
-        let stack = NSStackView(views: [title, destination, stop])
+        let pause = NSButton(title: wallpaper.pausedByUser ? "Resume" : "Pause", target: self, action: #selector(togglePopoverPause))
+        pause.isEnabled = wallpaper.canPausePlayback
+        let sound = NSButton(checkboxWithTitle: "Wallpaper Sound", target: self, action: #selector(togglePopoverSound))
+        sound.state = wallpaper.soundEnabled ? .on : .off
+        sound.isEnabled = wallpaper.hasVideoContent
+        let controls = NSButton(title: "Scene Controls…", target: self, action: #selector(openSceneControls))
+        controls.isHidden = !wallpaper.hasSceneControls
+        let playback = NSStackView(views: [pause, stop])
+        playback.spacing = 8
+        let stack = NSStackView(views: [title, destination, playback, sound, controls])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -529,7 +552,32 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         popover.contentViewController = controller
         popover.behavior = .transient
         nowPlayingPopover = popover
+        refreshPlaybackPopover = { [weak self, weak popover, weak title, weak destination, weak pause, weak stop, weak sound, weak controls] in
+            guard let self, let popover, popover.isShown else { return }
+            title?.stringValue = self.nowPlayingButton.title
+            destination?.stringValue = self.destinationLabel.stringValue
+            pause?.title = self.wallpaper.pausedByUser ? "Resume" : "Pause"
+            pause?.isEnabled = self.wallpaper.canPausePlayback
+            stop?.isEnabled = self.wallpaper.selectedURL != nil
+            sound?.state = self.wallpaper.soundEnabled ? .on : .off
+            sound?.isEnabled = self.wallpaper.hasVideoContent
+            controls?.isHidden = !self.wallpaper.hasSceneControls
+            popover.contentSize = NSSize(width: 320, height: self.wallpaper.hasSceneControls ? 180 : 142)
+        }
         popover.show(relativeTo: nowPlayingButton.bounds, of: nowPlayingButton, preferredEdge: .maxY)
+    }
+
+    @objc private func togglePopoverPause(_ sender: NSButton) {
+        wallpaper.togglePause()
+        sender.title = wallpaper.pausedByUser ? "Resume" : "Pause"
+        refreshState()
+    }
+    @objc private func togglePopoverSound(_ sender: NSButton) {
+        wallpaper.soundEnabled = sender.state == .on
+    }
+    @objc private func openSceneControls() {
+        nowPlayingPopover?.close()
+        wallpaper.editControls()
     }
 
     @objc private func stopWallpaper() {
@@ -540,7 +588,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func refreshState() {
         let url = wallpaper.selectedURL
-        let title = url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
+        library.updatePlayingURL(url)
+        let title = wallpaper.currentSceneTitle ?? url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
         nowPlayingButton.title = title
         let standardized = url?.standardizedFileURL
         if standardized != cachedThumbnailURL {
@@ -550,13 +599,19 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         nowPlayingButton.image = cachedThumbnail ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
         pauseButton.image = NSImage(systemSymbolName: wallpaper.pausedByUser ? "play.fill" : "pause.fill",
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
-        pauseButton.isEnabled = url != nil
-        previousButton.isEnabled = url != nil
-        nextButton.isEnabled = true
+        pauseButton.toolTip = wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper"
+        pauseButton.setAccessibilityLabel(pauseButton.toolTip)
+        pauseButton.isEnabled = wallpaper.canPausePlayback
+        previousButton.isEnabled = library.hasCycleCandidates
+        nextButton.isEnabled = library.hasCycleCandidates
+        previousButton.toolTip = library.hasCycleCandidates ? "Previous wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
+        nextButton.toolTip = library.hasCycleCandidates ? "Next wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
         let count = NSScreen.screens.count
         var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
+        if wallpaper.isLoading { parts.insert("Loading…", at: 0) }
         if let rotation = rotationSummary() { parts.append(rotation) }
         destinationLabel.stringValue = parts.joined(separator: " · ")
+        refreshPlaybackPopover?()
         refreshDisplaysSummary()
     }
 
@@ -582,11 +637,25 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     static func smokeTest() throws {
+        let selection = UserDefaults.standard.object(forKey: "Idlesse.library.selectedID")
+        defer {
+            if let selection { UserDefaults.standard.set(selection, forKey: "Idlesse.library.selectedID") }
+            else { UserDefaults.standard.removeObject(forKey: "Idlesse.library.selectedID") }
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-home-smoke-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let index = folder.appendingPathComponent("index.json")
         let library = try SceneLibraryController(indexURL: index, onUse: { _ in }, onEdit: { _, _ in })
+        for content in [SceneNode.Content.image(URL(fileURLWithPath: "/image.png")),
+                        .video(URL(fileURLWithPath: "/video.mp4"))] {
+            let plain = SceneDescriptor(title: "Plain", nodes: [SceneNode(content: content)])
+            precondition(WallpaperSurface.usesMetal(plain, menuAnimation: true),
+                         "Menu animation must select Metal for plain images and videos")
+            if ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] != "1" {
+                precondition(!WallpaperSurface.usesMetal(plain, menuAnimation: false))
+            }
+        }
         let wallpaper = WallpaperController()
         wallpaper.presentsWindows = false
         let comfort = DesktopComfortController()
@@ -601,6 +670,15 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         precondition(home.rows.contains(.library) && home.rows.contains(.displays))
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
+        precondition(home.window.toolbar!.items.map(\.itemIdentifier).contains(Self.settingsItem))
+        let searchItem = home.window.toolbar!.items.first { $0.itemIdentifier == Self.searchItem }
+        precondition(searchItem is NSSearchToolbarItem)
+        precondition(home.window.toolbar!.items.contains { $0.itemIdentifier == Self.importItem })
+        var openedSettings = false
+        wallpaper.onShowSettings = { openedSettings = true }
+        home.openPreferences()
+        precondition(openedSettings)
+
         precondition(displayDestination.view.superview === home.displaysView)
         home.showLibraryScope(.favorites)
         precondition(home.currentRow == .favorites && !home.libraryView.isHidden)

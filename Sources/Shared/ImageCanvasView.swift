@@ -1,6 +1,8 @@
 import AppKit
 
 final class ImageCanvasView: NSView {
+    /// Unit coordinates measured from the top-left; only used for aspect fill.
+    var fillFocus: CGPoint? { didSet { needsDisplay = true } }
     var currentImage: NSImage? {
         didSet { needsDisplay = true }
     }
@@ -65,7 +67,7 @@ final class ImageCanvasView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func destinationRect(for image: NSImage) -> NSRect {
+    func destinationRect(for image: NSImage) -> NSRect {
         let source = image.size
         guard source.width > 0, source.height > 0 else { return .zero }
 
@@ -81,6 +83,13 @@ final class ImageCanvasView: NSView {
 
         let width = source.width * scale
         let height = source.height * scale
+
+        if scalingMode == .fill, let focus = fillFocus,
+           focus.x.isFinite, focus.y.isFinite {
+            return NSRect(x: bounds.minX - (width - bounds.width) * min(1, max(0, focus.x)),
+                          y: bounds.minY - (height - bounds.height) * (1 - min(1, max(0, focus.y))),
+                          width: width, height: height)
+        }
 
         return NSRect(
             x: bounds.midX - width / 2,

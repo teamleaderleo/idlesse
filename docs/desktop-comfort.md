@@ -187,3 +187,34 @@ Installed build 15 verification: after Show / Restore Windows, both wallpaper
 surfaces were at -2147483600, above Forecast and Month at -2147483601.
 The smoke suite checks same-renderer retention and click handling through the
 widget-hidden transition. Wallpaper/Library/export/resume checks passed.
+
+### Reveal and menu-strip recovery
+
+Show / Restore Windows wakes coverage-resting surfaces immediately, preserving
+explicit pause state, and gives the system animation a one-second grace period after successful
+dispatch before coverage sampling resumes. Coverage stays suspended while dispatch
+is pending; failed dispatch releases it immediately. Concurrent launch requests are coalesced. The
+Mission Control completion log measures dispatch only, not visible animation latency.
+
+The menu strip requests a fresh shared compositor frame after any missed drawable,
+including resize/pause transitions, rather than recovering only on its first frame.
+This does not establish atomic presentation between the two windows or remove
+macOS menu-bar material effects. Visual hitch/blur qualification remains open.
+
+Copy Diagnostics includes menu-strip presentation timing per surface: matched
+source/mirror drawable pairs, mean absolute skew, maximum skew, and missed copies.
+Callbacks may arrive in either order; invalid/unpresented timestamps are excluded.
+Metrics retain counters only. These timestamps measure reported presentation, not
+physical panel scanout or menu-bar blur. A disabled entry means no strip exists.
+
+A live check on the existing two-surface Hina video returned disabled for both
+strips. Plain video can currently use Standard even when menu animation is enabled;
+the renderer-selection condition still needs reconciliation before timing that path.
+
+The renderer-selection mismatch is fixed: enabled menu animation selects Metal
+for plain images/videos as well as creative scenes, and shared video preparation
+uses the same selection predicate. Home smoke covers both plain media types with
+the setting on/off. With the existing Hina wallpaper, a local sample reported
+1,330 paired frames at 1.06 ms mean absolute skew (12.50 ms maximum, 2 misses)
+on display 3, and 1,166 pairs at 3.96 ms (16.67 ms maximum, 246 misses) on display 1.
+This is one sample, not atomic synchronization or a hardware scanout guarantee.

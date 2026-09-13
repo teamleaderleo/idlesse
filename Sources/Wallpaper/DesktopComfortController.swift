@@ -32,12 +32,22 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
     static let desktopVisibilityChanged = Notification.Name("Idlesse.DesktopVisibilityChanged")
     var desktopIconsVisible: Bool { !UserDefaults.standard.bool(forKey: "comfort.keepDesktopFilesHidden") }
 
+    private var widgetVisibilityCheckedAt = -Double.infinity
+    private var cachedWidgetVisibility = true
     var desktopWidgetsVisible: Bool {
-        CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
-        return !((CFPreferencesCopyAppValue("StandardHideWidgets" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
+        let now = ProcessInfo.processInfo.systemUptime
+        // Home refreshes twice a second. Synchronizing another process's defaults
+        // on every refresh adds unnecessary synchronous work to desktop interaction.
+        if now - widgetVisibilityCheckedAt >= 5 {
+            CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
+            cachedWidgetVisibility = !((CFPreferencesCopyAppValue("StandardHideWidgets" as CFString, "com.apple.WindowManager" as CFString) as? Bool) ?? false)
+            widgetVisibilityCheckedAt = now
+        }
+        return cachedWidgetVisibility
     }
 
     @objc func toggleDesktopWidgets() {
+        widgetVisibilityCheckedAt = -Double.infinity
         guard !changingDesktopWidgets else { return }
         let visible = !desktopWidgetsVisible
         changingDesktopWidgets = true
@@ -54,6 +64,7 @@ final class DesktopComfortController: NSObject, NSMenuItemValidation {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.changingDesktopWidgets = false
+                self.widgetVisibilityCheckedAt = -Double.infinity
                 self.updateDesktopIconsItems()
                 NotificationCenter.default.post(name: Self.desktopVisibilityChanged, object: nil)
                 if let failure {
