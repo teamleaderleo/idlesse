@@ -361,9 +361,10 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private func normalized(_ value: SceneFraming) -> [Double] {
         let focus = value.focus?.clamped ?? .centre
         let bleed = value.bleed?.clamped ?? SceneBleed()
-        return [focus.x, focus.y, bleed.top, bleed.left, bleed.bottom, bleed.right, value.tone?.clamped.soften ?? 0, value.tone?.clamped.exposure ?? 0,
-                value.tone?.clamped.contrast ?? 0, value.tone?.clamped.saturation ?? 0]
-            .map { ($0 * 10000).rounded() / 10000 }
+        let tone = value.tone?.clamped ?? SceneTone()
+        let values: [Double] = [focus.x, focus.y, bleed.top, bleed.left, bleed.bottom, bleed.right,
+                                tone.soften, tone.exposure, tone.contrast, tone.saturation]
+        return values.map { ($0 * 10000).rounded() / 10000 }
     }
 
     /// One line per display: how much of the frame it keeps, and whether the crop
