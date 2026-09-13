@@ -14,7 +14,8 @@ window.fastExport=async(folder,stem,animation,count,width,height,url)=>{
 // Lossless frames for x265: raw pixels straight off the canvas, one POST each, so
 // nothing is PNG-compressed, base64-encoded and decoded again on the way. Each
 // POST waits for the host to hand the frame to the encoder, which paces the loop.
-window.rawExport=async(folder,stem,animation,count,width,height,url)=>{
+// `first` renders a slice of a longer loop, so several pages can split one export.
+window.rawExport=async(folder,stem,animation,count,width,height,url,first=0)=>{
  if(!Number.isInteger(count)||count<1||count>5400||width!==3840||height!==2160)throw new Error("Export budget exceeded");
  const meta=await window.prepare(folder,stem,width,height,animation);
  const gl=document.querySelector('canvas').getContext('webgl2')??document.querySelector('canvas').getContext('webgl');
@@ -23,7 +24,7 @@ window.rawExport=async(folder,stem,animation,count,width,height,url)=>{
  const spent={draw:0,read:0,send:0};
  for(let i=0;i<count;i++){
   let t=performance.now();
-  window.frame(i/60,'draw');
+  window.frame((first+i)/60,'draw');
   spent.draw+=performance.now()-t;t=performance.now();
   gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
   spent.read+=performance.now()-t;t=performance.now();
