@@ -191,8 +191,9 @@ widget-hidden transition. Wallpaper/Library/export/resume checks passed.
 ### Reveal and menu-strip recovery
 
 Show / Restore Windows wakes coverage-resting surfaces immediately, preserving
-explicit pause state, and gives the system animation a one-second grace period
-before coverage sampling resumes. Concurrent launch requests are coalesced. The
+explicit pause state, and gives the system animation a one-second grace period after successful
+dispatch before coverage sampling resumes. Coverage stays suspended while dispatch
+is pending; failed dispatch releases it immediately. Concurrent launch requests are coalesced. The
 Mission Control completion log measures dispatch only, not visible animation latency.
 
 The menu strip requests a fresh shared compositor frame after any missed drawable,

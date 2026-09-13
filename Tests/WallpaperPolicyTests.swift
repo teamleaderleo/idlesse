@@ -3,6 +3,18 @@ import AppKit
 @main
 enum WallpaperPolicyTests {
     static func main() {
+        var reveal = DesktopRevealPolicy()
+        precondition(reveal.allowsCoverage(at: 0))
+        precondition(reveal.begin())
+        precondition(!reveal.begin(), "Pending reveal must reject a duplicate toggle")
+        precondition(!reveal.allowsCoverage(at: 5), "Slow system dispatch must not re-rest wallpaper")
+        reveal.complete(at: 5, succeeded: true)
+        precondition(!reveal.allowsCoverage(at: 5.99))
+        precondition(reveal.allowsCoverage(at: 6))
+        precondition(reveal.begin(), "Restore must work after the previous dispatch completes")
+        reveal.complete(at: 7, succeeded: false)
+        precondition(reveal.allowsCoverage(at: 7), "A failed request should not retain animation grace")
+
         let policy = CoverageRestPolicy()
         precondition(policy.restThreshold == 0.95)
         precondition(policy.resumeThreshold == 0.85)

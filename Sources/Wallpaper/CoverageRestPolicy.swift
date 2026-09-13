@@ -75,3 +75,26 @@ struct CoverageRestPolicy: Equatable {
         }
     }
 }
+
+/// The system may take longer than the animation grace period to accept a
+/// reveal request. Keep coverage suspended through dispatch, then through the
+/// animation; a second click during dispatch must not toggle it back.
+struct DesktopRevealPolicy {
+    private(set) var pending = false
+    private var graceUntil: TimeInterval = 0
+
+    mutating func begin() -> Bool {
+        guard !pending else { return false }
+        pending = true
+        return true
+    }
+
+    mutating func complete(at time: TimeInterval, succeeded: Bool) {
+        pending = false
+        graceUntil = succeeded ? time + 1 : time
+    }
+
+    func allowsCoverage(at time: TimeInterval) -> Bool {
+        !pending && time >= graceUntil
+    }
+}

@@ -590,11 +590,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         activeSharedVideoHub?.setPaused(CoverageRestPolicy.shouldRestSharedPlayback(
             globalPause: shouldPause, displayResting: resting))
     }
-    private var desktopRevealGraceUntil: TimeInterval = 0
-    private var desktopRevealPending = false
+    private var desktopReveal = DesktopRevealPolicy()
 
     private func pollCoverage() {
-        guard ProcessInfo.processInfo.systemUptime >= desktopRevealGraceUntil else { return }
+        guard desktopReveal.allowsCoverage(at: ProcessInfo.processInfo.systemUptime) else { return }
         guard presentsWindows, coveragePauseEnabled, !surfaces.isEmpty, !suspended else { return }
         var own = Set<CGWindowID>()
         for surface in surfaces {
@@ -981,10 +980,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     @objc func revealDesktop() {
         // Wake covered surfaces before the system animation exposes them. This
         // preserves explicit pause/bedtime state and avoids waiting for polling.
-        guard !desktopRevealPending else { return }
-        desktopRevealPending = true
+        guard desktopReveal.begin() else { return }
         let started = ProcessInfo.processInfo.systemUptime
-        desktopRevealGraceUntil = started + 1
         coverageMonitor.reset()
         for surface in surfaces { surface.setCovered(false) }
         applySharedHubPause()
@@ -995,7 +992,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             configuration: configuration) { [weak self] _, error in
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    self.desktopRevealPending = false
+                    self.desktopReveal.complete(at: ProcessInfo.processInfo.systemUptime, succeeded: error == nil)
                     let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000
                     NSLog("Idlesse desktop reveal dispatch completed in %.1f ms", elapsed)
                     if let error { self.showError(error.localizedDescription) }
