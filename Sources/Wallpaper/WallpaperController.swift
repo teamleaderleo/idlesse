@@ -1523,7 +1523,10 @@ private final class MenuBarStrip {
         layer.pixelFormat = .bgra8Unorm
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.framebufferOnly = false
-        layer.maximumDrawableCount = 2
+        // The narrow strip can still have a drawable awaiting presentation when
+        // the next copy arrives. A third slot avoids starving its asynchronous
+        // acquisition without ever blocking the main wallpaper renderer.
+        layer.maximumDrawableCount = 3
         layer.allowsNextDrawableTimeout = true
         view.layer = layer
         window.contentView = view

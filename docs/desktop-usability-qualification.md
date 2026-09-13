@@ -39,3 +39,21 @@ The measured skew is an observed limitation of the current two-window presentati
 path, not evidence that macOS cannot support a different implementation. No claim
 of zero hitch, atomic presentation, global FPS improvement, or energy improvement
 is made. The long-running qualification goal remains open.
+
+## Drawable-buffer trial
+
+The menu strip now permits three drawables (previously two); the ready/request
+queue remains bounded to one each. Only the narrow strip gains a buffer.
+With the existing wallpaper, before/after samples were:
+
+| Buffer count | Display | Paired frames | Missed copies | Mean absolute skew | Maximum |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2 | 3 | 9658 | 195 | 0.62 ms | 25.00 ms |
+| 2 | 1 | 9066 | 2279 | 4.96 ms | 33.34 ms |
+| 3 | 3 | 3725 | 57 | 0.80 ms | 25.00 ms |
+| 3 | 1 | 3873 | 16 | 0.85 ms | 50.00 ms |
+
+These are sequential, unequal-duration live samples, not controlled benchmarks.
+The display-1 missed-copy ratio and mean improved markedly, but worst-case skew
+increased; do not infer atomic synchronization or universally lower latency.
+The main renderer does not wait for the strip and no additional decoder is used.
