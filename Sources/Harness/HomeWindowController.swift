@@ -269,6 +269,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     private func showLibraryScope(_ row: SidebarRow) {
+        library.setSearchEnabled(true)
         currentRow = row
         libraryView.isHidden = false
         displaysView.isHidden = true
@@ -284,6 +285,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     private func showDisplays() {
+        library.setSearchEnabled(false)
         library.stopLivePreview()
         currentRow = .displays
         window.title = "Displays"
@@ -407,6 +409,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     // MARK: - Now Playing
 
+    private static let searchItem = NSToolbarItem.Identifier("Idlesse.Home.Search")
+    private static let importItem = NSToolbarItem.Identifier("Idlesse.Home.Import")
     private static let transportItem = NSToolbarItem.Identifier("Idlesse.Home.Transport")
     private static let settingsItem = NSToolbarItem.Identifier("Idlesse.Home.Settings")
     private static let nowPlayingItem = NSToolbarItem.Identifier("Idlesse.Home.NowPlaying")
@@ -423,15 +427,21 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.searchItem {
+            return library.makeSearchToolbarItem(identifier: itemIdentifier)
+        }
+        if itemIdentifier == Self.importItem {
+            return library.makeImportToolbarItem(identifier: itemIdentifier)
+        }
         if itemIdentifier == .toggleSidebar {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
@@ -607,6 +617,9 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
         precondition(home.window.toolbar!.items.map(\.itemIdentifier).contains(Self.settingsItem))
+        let searchItem = home.window.toolbar!.items.first { $0.itemIdentifier == Self.searchItem }
+        precondition(searchItem is NSSearchToolbarItem)
+        precondition(home.window.toolbar!.items.contains { $0.itemIdentifier == Self.importItem })
         var openedSettings = false
         wallpaper.onShowSettings = { openedSettings = true }
         home.openPreferences()

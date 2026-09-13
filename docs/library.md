@@ -199,3 +199,18 @@ each wallpaper surface views its rectangle within the union of connected display
 enabled. Gaps and unequal monitor sizes are preserved. Studio and exports show the entire
 scene in their own canvas aspect ratio. Video players still follow the existing approximate
 clock behavior.
+
+### Home toolbar and preview verification
+
+Home hosts Library search in an `NSSearchToolbarItem` and Import in a native
+window toolbar button. Library still owns the query and import action; its
+standalone window retains the content controls. Search is disabled in Displays
+and re-enabled when returning to a Library scope. Media type, sorting, view mode,
+inspector, collections, and sources remain in the content row.
+
+`--smoke-home` exercises toolbar construction, destination navigation, and
+Settings routing without presenting desktop surfaces. Library smoke coverage
+continues to include canceled preview loading and muted video setup/teardown.
+The development window was also checked with an existing video: successive
+screenshots showed advancing preview frames, followed by a successful Stop
+Preview. This is a functional UI check, not a frame-rate or energy measurement.

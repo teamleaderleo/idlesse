@@ -477,6 +477,14 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
 let app = NSApplication.shared
 
+if CommandLine.arguments.contains("--smoke-home") {
+    do {
+        try HomeWindowController.smokeTest()
+        print("Home checks passed: toolbar search/import, navigation, settings routing")
+        exit(0)
+    } catch { fputs("Home check failed: \(error.localizedDescription)\n", stderr); exit(1) }
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--smoke-library"), CommandLine.arguments.count > index + 1 {
     do {
         let video = CommandLine.arguments.count > index + 2 ? URL(fileURLWithPath: CommandLine.arguments[index + 2]) : nil

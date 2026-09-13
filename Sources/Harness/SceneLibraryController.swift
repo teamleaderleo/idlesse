@@ -22,6 +22,33 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var homeNavigation = false
     var onScopeChange: ((Scope) -> Void)?
     private let mediaFilter = NSPopUpButton()
+    private let importButton = NSButton(title: "Import…", target: nil, action: nil)
+
+    /// Home owns the toolbar, while Library retains the search query and import actions.
+    func makeSearchToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        if let stack = search.superview as? NSStackView { stack.removeArrangedSubview(search) }
+        search.removeFromSuperview()
+        let item = NSSearchToolbarItem(itemIdentifier: identifier)
+        item.searchField = search
+        item.label = "Search Wallpapers"
+        item.toolTip = "Search the current Library selection"
+        return item
+    }
+
+    func makeImportToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        if let stack = importButton.superview as? NSStackView { stack.removeArrangedSubview(importButton) }
+        importButton.removeFromSuperview()
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Import Wallpapers"
+        item.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "Import Wallpapers")
+        item.toolTip = "Import wallpapers…"
+        item.target = self
+        item.action = #selector(addScenes)
+        return item
+    }
+
+    func setSearchEnabled(_ enabled: Bool) { search.isEnabled = enabled }
+
     private func revealImportedScope() {
         guard homeNavigation else { return }
         scope = .library
@@ -246,7 +273,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sort.target = self; sort.action = #selector(filterChanged)
         sort.selectItem(at: min(max(0, UserDefaults.standard.integer(forKey: "Idlesse.library.sortMode")), sort.numberOfItems - 1))
         pendingFilterTitle = UserDefaults.standard.string(forKey: "Idlesse.library.filterTitle")
-        let add = NSButton(title: "Import…", target: self, action: #selector(addScenes))
+        importButton.target = self
+        importButton.action = #selector(addScenes)
         collectionActions.addItem(withTitle: "Collections…")
         collectionActions.target = self
         collectionActions.action = #selector(collectionAction)
@@ -263,7 +291,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         inspectorButton.target = self
         inspectorButton.action = #selector(toggleInspector)
         inspectorButton.state = UserDefaults.standard.object(forKey: "Idlesse.library.inspectorVisible") as? Bool == false ? .off : .on
-        let toolbar = NSStackView(views: [search, filter, mediaFilter, sort, viewModeControl, inspectorButton, collectionActions, sourceActions, add])
+        let toolbar = NSStackView(views: [search, filter, mediaFilter, sort, viewModeControl, inspectorButton, collectionActions, sourceActions, importButton])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -338,7 +366,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         livePreviewButton.toolTip = "Play a muted preview here without changing the desktop"
         let primary = NSStackView(views: [apply, livePreviewButton, edit, more, clearSearchButton])
         primary.spacing = 10
-        for button in [add, apply, edit] { button.bezelStyle = .rounded }
+        for button in [importButton, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
         apply.contentTintColor = .white
         detail.font = .systemFont(ofSize: 12)
@@ -808,6 +836,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                         self.detail.stringValue = "Preview: " + message
                         self.stopLivePreview()
                     })
+                guard token == self.liveGeneration, !Task.isCancelled else {
+                    renderer.releaseResources()
+                    return
+                }
                 self.previewHost.renderer = renderer
                 self.liveAccess = opened.access
                 renderer.setMuted(true)
