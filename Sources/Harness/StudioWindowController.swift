@@ -1699,7 +1699,9 @@ final class StudioWindowController: NSObject, NSWindowDelegate {
         if discarded { document.clearRecovery() }
         return discarded
     }
-    var acceptsDocumentCommands: Bool { window.isVisible && !saving }
+    var acceptsDocumentCommands: Bool {
+        window.isKeyWindow && window.attachedSheet == nil && !saving
+    }
     private func commitFieldEdits() {
         if nameField.currentEditor() != nil { renameNode() }
         else if transformFields.contains(where: { $0.currentEditor() != nil }) { editTransform() }

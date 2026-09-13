@@ -401,12 +401,27 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func saveStudio() { scenePreview.saveDocument() }
-    @objc private func saveStudioAs() { scenePreview.saveAsDocument() }
-    @objc private func duplicateStudioLayer() { scenePreview.duplicateLayer() }
+    private var activeFramingEditor: MediaFramingController? {
+        framingEditors.values.first { $0.window?.isKeyWindow == true }
+    }
+    @objc private func saveStudio() {
+        if let editor = activeFramingEditor { editor.saveDocument() }
+        else if scenePreview.acceptsDocumentCommands { scenePreview.saveDocument() }
+    }
+    @objc private func saveStudioAs() {
+        guard scenePreview.acceptsDocumentCommands else { return }
+        scenePreview.saveAsDocument()
+    }
+    @objc private func duplicateStudioLayer() {
+        guard scenePreview.acceptsDocumentCommands else { return }
+        scenePreview.duplicateLayer()
+    }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(togglePause) || menuItem.action == #selector(nextImage) {
             return window.isKeyWindow && !window.isMiniaturized
+        }
+        if menuItem.action == #selector(saveStudio), let editor = activeFramingEditor {
+            return editor.acceptsSaveCommand
         }
         if [#selector(saveStudio), #selector(saveStudioAs), #selector(duplicateStudioLayer)].contains(menuItem.action) {
             return scenePreview.acceptsDocumentCommands
