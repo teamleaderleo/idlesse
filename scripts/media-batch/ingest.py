@@ -17,7 +17,8 @@ happens; --preview stops there. Texture upscaling is the only billable step. It
 runs only when the lobby has never been upscaled, is quoted from past runs first,
 is capped by restore_modal.py's 15-minute timeout with no retries, and needs a
 yes at the prompt or --yes. Installing over an existing export archives the old
-file first and copies over it in place, so Library bookmarks keep resolving.
+file first, then renames the new one over it atomically, so a wallpaper playing
+it never reads a half-written file and Library bookmarks resolve by path.
 """
 import argparse, datetime, importlib.util, json, math, os, re, shutil, struct, subprocess, sys, tempfile, zipfile
 from pathlib import Path
@@ -271,8 +272,13 @@ def install(staged_dir, title, output, replace, clear_framing, log):
                 shutil.copy2(output / name, archive / name)
         log(f'Archived the previous export in {archive}')
     for name in (video, f'{title}.jpg', f'{title}-Restored-4K60.source.json'):
-        # cp over rather than move: the Library bookmark keeps its inode.
-        shutil.copyfile(staged_dir / name, output / name)
+        # Copy beside the target, then rename over it. The rename is atomic, so a
+        # wallpaper playing the old file keeps reading the old inode until it
+        # reloads, instead of decoding a file being truncated and rewritten under
+        # it. Library bookmarks resolve by path, so a new inode is found.
+        partial = output / f'.{name}.partial'
+        shutil.copyfile(staged_dir / name, partial)
+        os.replace(partial, output / name)
     sidecar = output / f'{title}-Restored-4K60.framing.json'
     if clear_framing and sidecar.exists():
         data = json.loads(sidecar.read_text())

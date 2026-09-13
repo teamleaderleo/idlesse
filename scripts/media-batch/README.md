@@ -188,7 +188,7 @@ python3 scripts/media-batch/ingest.py --reframe ".../<Title>-Restored-4K60.mp4" 
 or press **Re-render Camera…** in the editor, which runs exactly that. It reads
 the camera the export was made with from its `.source.json`, composes the crop on
 top, exports locally from the existing upscaled textures, archives the old file
-in `superseded-<date>/`, copies over it in place, and removes the crop box and
+in `superseded-<date>/`, renames the new file over it atomically (a playing wallpaper keeps the old inode until it reloads), and removes the crop box and
 focus from the sidecar while keeping adjustments. The app never passes `--yes`,
 so a scene that still needs upscaling stops at the quote. The button appears
 once `ingest.py` has run on this Mac, because each run records its location in
