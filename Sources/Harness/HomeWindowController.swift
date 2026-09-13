@@ -518,7 +518,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func showNowPlaying() {
         let popover = NSPopover()
         let controller = NSViewController()
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 128))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: wallpaper.hasSceneControls ? 180 : 142))
         let title = NSTextField(labelWithString: nowPlayingButton.title)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         let destination = NSTextField(labelWithString: destinationLabel.stringValue)
@@ -526,7 +526,16 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let stop = NSButton(title: "Stop", target: self, action: #selector(stopWallpaper))
         stop.bezelStyle = .rounded
         stop.isEnabled = wallpaper.selectedURL != nil
-        let stack = NSStackView(views: [title, destination, stop])
+        let pause = NSButton(title: wallpaper.pausedByUser ? "Resume" : "Pause", target: self, action: #selector(togglePopoverPause))
+        pause.isEnabled = wallpaper.selectedURL != nil
+        let sound = NSButton(checkboxWithTitle: "Wallpaper Sound", target: self, action: #selector(togglePopoverSound))
+        sound.state = wallpaper.soundEnabled ? .on : .off
+        sound.isEnabled = wallpaper.hasVideoContent
+        let controls = NSButton(title: "Scene Controls…", target: self, action: #selector(openSceneControls))
+        controls.isHidden = !wallpaper.hasSceneControls
+        let playback = NSStackView(views: [pause, stop])
+        playback.spacing = 8
+        let stack = NSStackView(views: [title, destination, playback, sound, controls])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -542,6 +551,19 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         popover.behavior = .transient
         nowPlayingPopover = popover
         popover.show(relativeTo: nowPlayingButton.bounds, of: nowPlayingButton, preferredEdge: .maxY)
+    }
+
+    @objc private func togglePopoverPause(_ sender: NSButton) {
+        wallpaper.togglePause()
+        sender.title = wallpaper.pausedByUser ? "Resume" : "Pause"
+        refreshState()
+    }
+    @objc private func togglePopoverSound(_ sender: NSButton) {
+        wallpaper.soundEnabled = sender.state == .on
+    }
+    @objc private func openSceneControls() {
+        nowPlayingPopover?.close()
+        wallpaper.editControls()
     }
 
     @objc private func stopWallpaper() {
@@ -599,6 +621,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     }
 
     static func smokeTest() throws {
+        let selection = UserDefaults.standard.object(forKey: "Idlesse.library.selectedID")
+        defer {
+            if let selection { UserDefaults.standard.set(selection, forKey: "Idlesse.library.selectedID") }
+            else { UserDefaults.standard.removeObject(forKey: "Idlesse.library.selectedID") }
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-home-smoke-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }

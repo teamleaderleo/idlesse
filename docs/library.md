@@ -236,3 +236,27 @@ view cannot restart its only wallpaper through Next/Previous. The menu omits
 these commands when unavailable; Home disables them with explanatory tooltips.
 When available, transport still advances relative to the playing URL, independently
 of poster selection. Smoke checks cover zero, one, and multiple candidates.
+
+### Preview and interaction polish
+
+Concurrent requests for the same card thumbnail share one queued job and fan out
+the result to their consumers. Failed work also clears the pending request.
+Repeated selection of the same row/card preserves a live preview instead of
+restarting it, and cached poster pixels remain visible while their revision is
+checked. Inspector actions are grouped into playback and editing rows.
+
+The current-wallpaper popover includes Pause/Resume, Stop, wallpaper sound for
+video content, and Scene Controls when the current scene exposes parameters.
+These act on the desktop wallpaper, independently of Library preview selection.
+
+Home/Library smoke tests restore their browsing preference changes. Tests cover
+duplicate thumbnail requests, unchanged-row live preview continuity, and existing
+4K video preview setup. A live UI check verified popover Pause/Resume and the
+compact inspector. These checks do not establish an overall scrolling FPS gain.
+
+Desktop cleanup in this pass ignores the trailing click of a double-click on the
+wallpaper. Widget preference synchronization is bounded to once per five seconds
+instead of every Home refresh; Idlesse widget toggles refresh immediately.
+External macOS widget-setting changes can take up to five seconds to appear.
+The original Mission Control reveal hitch and menu-strip visual parity still
+need dedicated on-display qualification; this pass does not claim they are fixed.

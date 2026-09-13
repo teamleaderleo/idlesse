@@ -91,11 +91,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
+    private var pendingThumbnails: [String: [(NSImage) -> Void]] = [:]
+    private var thumbnailJobsStarted = 0
     private let scroll = NSScrollView()
     private let right = NSStackView()
     private let gridScroll = NSScrollView()
     private let gridView = LibraryGridView()
     private let poster = NSImageView()
+    private var posterItemID: String?
     private let livePreviewButton = NSButton(title: "Play Preview", target: nil, action: nil)
     private let previewHost = ScenePreviewHost()
     private var liveTask: Task<Void, Never>?
@@ -317,12 +320,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         gridScroll.drawsBackground = false
         gridView.autoresizingMask = [.width]
         gridView.onSelect = { [weak self] item in
-            self?.selected = item
-            if let index = self?.items.firstIndex(where: { $0.id == item.id }) {
-                self?.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-                self?.table.scrollRowToVisible(index)
+            guard let self, self.selected?.id != item.id else { return }
+            self.selected = item
+            if let index = self.items.firstIndex(where: { $0.id == item.id }) {
+                self.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                self.table.scrollRowToVisible(index)
             }
-            self?.preview()
+            self.preview()
         }
         gridView.onMenu = { [weak self] item in
             let menu = NSMenu()
@@ -367,8 +371,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         livePreviewButton.action = #selector(toggleLivePreview)
         livePreviewButton.bezelStyle = .rounded
         livePreviewButton.toolTip = "Play a muted preview here without changing the desktop"
-        let primary = NSStackView(views: [apply, livePreviewButton, edit, more, clearSearchButton])
-        primary.spacing = 10
+        let playbackActions = NSStackView(views: [apply, livePreviewButton])
+        playbackActions.spacing = 8
+        let editingActions = NSStackView(views: [edit, more])
+        editingActions.spacing = 8
+        let primary = NSStackView(views: [playbackActions, editingActions, clearSearchButton])
+        primary.spacing = 8
         for button in [importButton, apply, edit] { button.bezelStyle = .rounded }
         apply.bezelColor = .controlAccentColor
         apply.contentTintColor = .white
@@ -643,8 +651,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         gridView.update(items: items, selectedID: selected?.id)
         updateEmptyState(activeCollection: activeCollection)
         if let index = items.firstIndex(where: { $0.id == previous }) ?? (items.isEmpty ? nil : 0) {
-            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             selected = items[index]
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             gridView.select(id: selected?.id)
             preview()
             table.scrollRowToVisible(index)
@@ -689,7 +697,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     func requestThumbnail(for item: Item, completion: @escaping (NSImage) -> Void) {
         thumbnails.countLimit = 64
+        if pendingThumbnails[item.id] != nil {
+            pendingThumbnails[item.id]?.append(completion)
+            return
+        }
         guard let opened = try? open(item) else { return }
+        pendingThumbnails[item.id] = [completion]
+        thumbnailJobsStarted += 1
+        let finish: (NSImage?) -> Void = { [weak self] image in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let callbacks = self.pendingThumbnails.removeValue(forKey: item.id) ?? []
+                if let image { callbacks.forEach { $0(image) } }
+            }
+        }
         let posterAccess: SceneLibraryStore.Access? = item.entry.flatMap { try? store.accessPoster($0) }
         thumbnailQueue.async { [weak self, opened, posterAccess] in
             guard let self else { return }
@@ -697,7 +718,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
             if let image = self.thumbnails.object(forKey: key) {
-                DispatchQueue.main.async { completion(image) }
+                finish(image)
                 return
             }
             let image: CGImage?
@@ -718,10 +739,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 generator.maximumSize = CGSize(width: 320, height: 180)
                 image = try? generator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 600), actualTime: nil)
             } else { image = nil }
-            guard let image else { Self.appendThumbLine("THUMB-MISS \(source.path)"); return }
+            guard let image else { finish(nil); return }
             let result = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
             self.thumbnails.setObject(result, forKey: key, cost: Int(image.width * image.height * 4))
-            DispatchQueue.main.async { completion(result) }
+            finish(result)
         }
     }
     private static func listThumbnail(_ url: URL) -> CGImage? {
@@ -768,13 +789,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return nil
         }
     }
-    private static func appendThumbLine(_ line: String) {
-        guard let data = (line + "\n").data(using: .utf8) else { return }
-        let path = "/tmp/idlesse-thumb.log"
-        if FileManager.default.fileExists(atPath: path), let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
-            try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
-        } else { try? data.write(to: URL(fileURLWithPath: path)) }
-    }
     private static func decodedStill(_ url: URL) -> CGImage? {
         guard ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"].contains(url.pathExtension.lowercased()),
               let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -792,7 +806,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return context.makeImage() ?? full
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        selected = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        let next = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
+        guard next?.id != selected?.id else { return }
+        selected = next
         gridView.select(id: selected?.id)
         preview()
     }
@@ -875,7 +891,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         livePreviewButton.isEnabled = selected != nil
         task?.cancel(); task = nil; generation += 1
         let token = generation
-        poster.image = nil
+        if posterItemID != selected?.id { poster.image = nil }
+        posterItemID = selected?.id
         favorite.isEnabled = selected != nil
         updateApplyState()
         edit.isEnabled = selected != nil
@@ -1491,7 +1508,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
-        let preferenceKeys = ["Idlesse.library.inspectorVisible", "Idlesse.library.viewMode"]
+        let preferenceKeys = ["Idlesse.library.inspectorVisible", "Idlesse.library.viewMode",
+                              "Idlesse.library.selectedID", "Idlesse.library.sortMode", "Idlesse.library.filterTitle"]
         let preferences = preferenceKeys.map { UserDefaults.standard.object(forKey: $0) }
         defer {
             for (key, value) in zip(preferenceKeys, preferences) {
@@ -1580,6 +1598,18 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.updatePlayingURL(nil)
         precondition(controller.apply.title == "Set Wallpaper" && controller.apply.isEnabled)
 
+        let duplicateRequest = Item(id: "smoke.shared-thumbnail", title: "Undertow", builtin: controller.selected!.builtin, entry: nil)
+        let jobsBefore = controller.thumbnailJobsStarted
+        var thumbnailCompletions = 0
+        let thumbnailStart = ProcessInfo.processInfo.systemUptime
+        controller.requestThumbnail(for: duplicateRequest) { _ in thumbnailCompletions += 1 }
+        controller.requestThumbnail(for: duplicateRequest) { _ in thumbnailCompletions += 1 }
+        precondition(controller.thumbnailJobsStarted == jobsBefore + 1, "Duplicate requests must share one job")
+        let thumbDeadline = Date().addingTimeInterval(10)
+        while thumbnailCompletions < 2 && Date() < thumbDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        precondition(thumbnailCompletions == 2 && controller.pendingThumbnails[duplicateRequest.id] == nil)
+        print("Shared thumbnail: 2 consumers, 1 job, \(Int((ProcessInfo.processInfo.systemUptime - thumbnailStart) * 1000)) ms")
+
         let originalDetail = controller.detail.stringValue
         controller.reportTask("Importing 1 of 2…")
         precondition(controller.detail.stringValue == originalDetail, "Import status must not replace artwork details")
@@ -1593,6 +1623,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.previewHost.renderer != nil, controller.detail.stringValue)
         precondition(!applied, "Local preview must not apply a wallpaper")
         precondition(controller.previewHost.renderer?.diagnostics.audioMuted == true)
+        let liveGenerationBeforeReselect = controller.liveGeneration
+        controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        precondition(controller.liveGeneration == liveGenerationBeforeReselect && controller.previewHost.renderer != nil,
+                     "Reselecting the same row must preserve its live preview")
         controller.stopLivePreview()
         precondition(controller.previewHost.renderer == nil && controller.liveAccess == nil)
         controller.toggleLivePreview()

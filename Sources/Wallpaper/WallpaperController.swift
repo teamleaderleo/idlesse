@@ -17,7 +17,10 @@ private final class DesktopWindow: NSPanel {
             if let desktopMenu, let view = contentView { NSMenu.popUpContextMenu(desktopMenu(), with: event, for: view) }
             return
         }
-        if event.type == .leftMouseDown, let desktopClick { desktopClick(); return }
+        if event.type == .leftMouseDown, let desktopClick {
+            if event.clickCount == 1 { desktopClick() }
+            return
+        }
         super.sendEvent(event)
     }
 }
@@ -1396,7 +1399,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         surfaces.forEach { _ = $0.updateScene(playable) }
         updateMenu()
     }
-    @objc private func editControls() {
+    var hasSceneControls: Bool { playable?.parameters.isEmpty == false && !isLoading }
+    var hasVideoContent: Bool { playable?.allNodes.contains { $0.kind == .video } == true }
+    @objc func editControls() {
         guard let original = playable, !isLoading else { return }
         SceneParameterControls.present(scene: original, window: nil) { [weak self] parameters in
             guard let self, self.playable?.parameters == original.parameters, !self.isLoading,
