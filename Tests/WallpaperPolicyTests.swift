@@ -3,6 +3,16 @@ import AppKit
 @main
 enum WallpaperPolicyTests {
     static func main() {
+        var recovery = MirrorFrameRecovery()
+        precondition(!recovery.drawableReady(available: false))
+        precondition(recovery.drawableReady(available: true), "First static frame must catch up")
+        precondition(!recovery.drawableReady(available: true), "A ready callback must not repeat a redraw")
+        recovery.missedCopy()
+        recovery.missedCopy()
+        precondition(!recovery.drawableReady(available: false), "Timeout must preserve pending recovery")
+        precondition(recovery.drawableReady(available: true), "Paused source must recover a missed copy")
+        precondition(!recovery.drawableReady(available: true))
+
         let mirror = MirrorPresentationTiming()
         let lateSource = mirror.makePair()
         lateSource.record(source: false, time: 1.02)

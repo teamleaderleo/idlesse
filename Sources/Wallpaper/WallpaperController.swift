@@ -1483,7 +1483,7 @@ private final class MenuBarStrip {
     // Accessed only on the main thread. At most one ready drawable and one request.
     private var readyDrawable: CAMetalDrawable?
     private var acquiring = false
-    private var needsCatchUp = false
+    private var recovery = MirrorFrameRecovery()
     private func requestDrawable() {
         guard !acquiring, readyDrawable == nil else { return }
         acquiring = true
@@ -1493,8 +1493,7 @@ private final class MenuBarStrip {
                 guard let self else { return }
                 self.acquiring = false
                 self.readyDrawable = drawable
-                if drawable != nil && (self.frames == 0 || self.needsCatchUp) {
-                    self.needsCatchUp = false
+                if self.recovery.drawableReady(available: drawable != nil) {
                     self.onDrawableCatchUp?()
                 }
             }
@@ -1539,10 +1538,10 @@ private final class MenuBarStrip {
         let size = CGSize(width: texture.width, height: rows)
         if layer.device == nil { layer.device = texture.device }
         if layer.drawableSize != size { layer.drawableSize = size }
-        guard let target = readyDrawable else { timing.recordMiss(); needsCatchUp = true; requestDrawable(); return }
+        guard let target = readyDrawable else { timing.recordMiss(); recovery.missedCopy(); requestDrawable(); return }
         readyDrawable = nil
         guard target.texture.width == texture.width, target.texture.height == rows,
-              let blit = command.makeBlitCommandEncoder() else { needsCatchUp = true; requestDrawable(); return }
+              let blit = command.makeBlitCommandEncoder() else { recovery.missedCopy(); requestDrawable(); return }
         blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
             sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
             sourceSize: MTLSize(width: texture.width, height: rows, depth: 1),

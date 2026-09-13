@@ -43,3 +43,16 @@ final class MirrorPresentationTiming {
         }
     }
 }
+
+/// A missed copy must be retried even when the source is paused or static.
+/// Only an available drawable consumes the request; repeated ready callbacks
+/// must not create an unbounded redraw loop.
+struct MirrorFrameRecovery {
+    private var pending = true
+    mutating func missedCopy() { pending = true }
+    mutating func drawableReady(available: Bool) -> Bool {
+        guard available && pending else { return false }
+        pending = false
+        return true
+    }
+}
