@@ -184,6 +184,11 @@ imports of each are free; all 34 lobbies still unupscaled here quote at about
 $0.18 together against $1.61 one by one. It refuses work estimated past 600
 seconds, leaving the 15-minute cap room.
 
+`--update-names` caches lobby names from SchaleDB's public student list, whose
+`DevName` is the lobby code (`CH0064` is `ch0064_home`); it matched 41 of 43
+hand-chosen titles, the other two only adding a suffix. `--list` then names every
+lobby, and recognises older installs by file name and by text receipts.
+
 In the app, **Wallpaper → Import Lobby…** does the same through this script. It
 lists every extracted lobby with its state (installed, free, or the upscale
 price), previews the selection, offers **Fit Camera** when the preview shows
@@ -203,7 +208,11 @@ video. To keep full detail, render the crop as the camera instead:
 python3 scripts/media-batch/ingest.py --reframe ".../<Title>-Restored-4K60.mp4" --from-sidecar
 ```
 
-or press **Re-render Camera…** in the editor, which runs exactly that. It reads
+or press **Re-render Camera…** in the editor, which runs exactly that. Azur Lane
+exports re-render the same way: the receipt's `kind` picks `build/azur-spine` or
+`build/azur-render` beside this workspace and `scripts/azur-lane/export.py`
+renders them from their original textures, so it is always local. A Live2D crop
+is stored as a whole-stage `view`, so the background is cropped with the model. It reads
 the camera the export was made with from its `.source.json`, composes the crop on
 top, exports locally from the existing upscaled textures, archives the old file
 in `superseded-<date>/`, renames the new file over it atomically (a playing wallpaper keeps the old inode until it reloads), and removes the crop box and

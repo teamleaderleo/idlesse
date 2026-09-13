@@ -46,6 +46,7 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
     private let fitButton = NSButton(title: "Fit Camera", target: nil, action: nil)
     private let upscaleButton = NSButton(title: "Upscale Together…", target: nil, action: nil)
     private let chooseButton = NSButton(title: "Folder or ZIP…", target: nil, action: nil)
+    private let namesButton = NSButton(title: "Look Up Names", target: nil, action: nil)
 
     init(pipeline: MediaPipeline, onInstalled: @escaping (URL) -> Void) {
         self.pipeline = pipeline
@@ -76,7 +77,9 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         hideInstalled.state = .on
         hideInstalled.target = self; hideInstalled.action = #selector(filter)
         chooseButton.target = self; chooseButton.action = #selector(chooseSource)
-        let toolbar = NSStackView(views: [search, hideInstalled, NSView(), chooseButton])
+        namesButton.target = self; namesButton.action = #selector(lookUpNames)
+        namesButton.toolTip = "Name unnamed lobbies from SchaleDB's public character list"
+        let toolbar = NSStackView(views: [search, hideInstalled, NSView(), namesButton, chooseButton])
         toolbar.spacing = 10
 
         for (id, title, width) in [("title", "Name", 150.0), ("asset", "Asset", 125.0), ("state", "Status", 175.0)] {
@@ -268,6 +271,15 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
     }
 
     // MARK: Actions
+
+    @objc private func lookUpNames() {
+        status.stringValue = "Looking up names…"
+        start(["--update-names"], onEvent: nil) { [weak self] succeeded, output in
+            guard let self else { return }
+            self.status.stringValue = Self.lastMessage(output)
+            if succeeded { self.reloadList(selecting: self.selectedLobby?.asset) }
+        }
+    }
 
     @objc private func chooseSource() {
         guard let window else { return }
@@ -466,6 +478,8 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         fitButton.isEnabled = !busy
         importButton.isEnabled = !busy && preview != nil
         chooseButton.isEnabled = !busy
+        namesButton.isEnabled = !busy
+        namesButton.isHidden = !lobbies.contains { $0.title == nil }
         importButton.title = (preview?["upscaled"] as? Bool ?? true) ? "Import" : "Upscale and Import…"
     }
 
@@ -498,16 +512,23 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         }
         wait("the lobby list") { controller.run == nil && !controller.lobbies.isEmpty }
         precondition(controller.shown.allSatisfy { $0.installed.isEmpty }, "installed lobbies are hidden by default")
-        guard let row = controller.shown.firstIndex(where: { !$0.upscaled }) else {
-            print("Lobby import smoke test passed (every lobby is already upscaled)")
+        guard let row = controller.shown.firstIndex(where: { !$0.upscaled }) ?? controller.shown.indices.first else {
+            print("Lobby import smoke test passed (nothing left to import)")
             return
         }
+        let paid = !controller.shown[row].upscaled
         controller.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         wait("the preview") { controller.run == nil && controller.preview != nil }
         precondition(controller.image.image != nil, "the preview image loads")
-        precondition(controller.preview?["upscaled"] as? Bool == false && controller.preview?["quote"] is [String: Any])
-        precondition(controller.importButton.title == "Upscale and Import…" && controller.info.stringValue.contains("at most $"),
-                     "the paid step is named, with its cap, before anything starts: \(controller.info.stringValue)")
+        if paid {
+            precondition(controller.preview?["upscaled"] as? Bool == false && controller.preview?["quote"] is [String: Any])
+            precondition(controller.importButton.title == "Upscale and Import…" && controller.info.stringValue.contains("at most $"),
+                         "the paid step is named, with its cap, before anything starts: \(controller.info.stringValue)")
+        } else {
+            precondition(controller.importButton.title == "Import" && controller.info.stringValue.contains("free"),
+                         "an upscaled lobby imports for free: \(controller.info.stringValue)")
+            precondition(!(controller.titleField.stringValue.isEmpty), "a named lobby fills in its name")
+        }
         if controller.preview?["clean"] as? Bool == false {
             precondition(!controller.fitButton.isHidden, "matte offers Fit Camera")
             controller.fitCamera()

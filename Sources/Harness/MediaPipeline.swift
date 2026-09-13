@@ -37,8 +37,11 @@ struct MediaPipeline {
         let url = media.deletingPathExtension().appendingPathExtension("source.json")
         guard let data = try? Data(contentsOf: url), data.count < 1_000_000,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["asset"] is String, object["animation"] is String else { return nil }
-        return object
+              object["animation"] is String else { return nil }
+        // A Blue Archive lobby names its asset; an Azur Lane export names its model and renderer.
+        let lobby = object["asset"] is String
+        let azur = object["id"] is String && ["spine", "live2d"].contains(object["kind"] as? String ?? "")
+        return lobby || azur ? object : nil
     }
 
     func run(_ arguments: [String]) -> PipelineRun {
