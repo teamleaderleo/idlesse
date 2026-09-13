@@ -47,7 +47,7 @@ def main():
    start=time.monotonic()
    with (a.job/(key+'.log')).open('w') as log:
     subprocess.run(['python3',str(scripts/'encode.py'),str(temp),str(frames),'3840','2160','models/'+key,key,item['animation']],cwd=root,stdout=log,stderr=log,check=True,timeout=1900)
-   verified=batch.probe(temp);stream=verified['streams'][0]
+   batch.normalize_colour(temp,a.job/(key+'.log'));verified=batch.probe(temp);stream=verified['streams'][0]
    rendered=json.loads(Path(str(temp)+'.json').read_text()) if Path(str(temp)+'.json').exists() else {}
    assert (stream['width'],stream['height'],stream['r_frame_rate'],int(stream['nb_read_frames']))==(3840,2160,'60/1',frames)
    if item['kind']=='live2d' and rendered.get('idleLoops',1)!=loops:raise RuntimeError(f"Renderer chose {rendered.get('idleLoops')} idle loops, export planned {loops}")

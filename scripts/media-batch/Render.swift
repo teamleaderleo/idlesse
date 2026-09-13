@@ -11,7 +11,7 @@ var encoderPipe:Pipe?
 if video {
  let p=Process(), pipe=Pipe()
  p.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/ffmpeg")
- p.arguments=["-hide_banner","-loglevel","error","-y","-f","image2pipe","-framerate","60","-i","pipe:0","-an","-c:v","hevc_videotoolbox","-b:v","40M","-pix_fmt","yuv420p","-tag:v","hvc1","-movflags","+faststart",output.path]
+ p.arguments=["-hide_banner","-loglevel","error","-y","-f","image2pipe","-framerate","60","-i","pipe:0","-an","-c:v","hevc_videotoolbox","-b:v","40M","-pix_fmt","yuv420p","-color_range","tv","-colorspace","smpte170m","-color_primaries","bt709","-color_trc","iec61966-2-1","-tag:v","hvc1","-movflags","+faststart+write_colr",output.path]
  p.standardInput=pipe
  try p.run();encoder=p;encoderPipe=pipe
 }
