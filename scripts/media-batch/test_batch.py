@@ -5,6 +5,8 @@ spec = importlib.util.spec_from_file_location('batch', pathlib.Path(__file__).wi
 batch = importlib.util.module_from_spec(spec); spec.loader.exec_module(batch)
 spec = importlib.util.spec_from_file_location('verify', pathlib.Path(__file__).with_name('verify.py'))
 verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
+import sys
+sys.modules.setdefault('verify', verify)
 spec = importlib.util.spec_from_file_location('ingest', pathlib.Path(__file__).with_name('ingest.py'))
 ingest = importlib.util.module_from_spec(spec); spec.loader.exec_module(ingest)
 
@@ -111,5 +113,37 @@ class CropCameraTests(unittest.TestCase):
         self.assertEqual(result['A_home'], {'default': [1.2, 0.5, 0.5], 'Idle_02': [2, 0.4, 0.4]})
         self.assertEqual(ingest.recipe_for(result, 'A_home', 'Idle_01'), [1.2, 0.5, 0.5])
         self.assertEqual(cams, {'A_home': [1.2, 0.5, 0.5]}, 'input is not mutated')
+
+class PaintedAreaTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('calibrate', pathlib.Path(__file__).with_name('calibrate.py'))
+        self.calibrate = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.calibrate)
+    def scene(self, box, notch=None, dark=None):
+        from PIL import Image, ImageDraw
+        im = Image.new('RGB', (1920, 1080), 'black')
+        d = ImageDraw.Draw(im)
+        d.rectangle(box, fill=(120, 160, 200))
+        if notch: d.rectangle(notch, fill='black')
+        if dark: d.rectangle(dark, fill=(0, 0, 0))
+        return im
+    def test_box_stays_inside_the_painted_area(self):
+        mask = self.calibrate.matte_mask(self.scene((200, 100, 1700, 1000)))
+        x, y, w, h = self.calibrate.largest_box([mask])
+        self.assertGreaterEqual(x, 200 / 1920); self.assertGreaterEqual(y, 100 / 1080)
+        self.assertLessEqual(x + w, 1700 / 1920 + 1e-9); self.assertLessEqual(y + h, 1000 / 1080 + 1e-9)
+        self.assertGreater(h, 0.75)
+    def test_dark_art_inside_the_picture_is_not_matte(self):
+        mask = self.calibrate.matte_mask(self.scene((0, 0, 1920, 1080), dark=(800, 400, 1100, 700)))
+        self.assertEqual(self.calibrate.largest_box([mask]), (0.0, 0.0, 1.0, 1.0))
+    def test_a_corner_notch_shrinks_the_box_without_recentering_on_it(self):
+        full = self.calibrate.matte_mask(self.scene((0, 0, 1920, 1080), notch=(0, 800, 300, 1080)))
+        x, y, w, h = self.calibrate.largest_box([full])
+        self.assertGreater(w, 0.7)
+        self.assertTrue(x * 1920 >= 300 or (y + h) * 1080 <= 800)
+    def test_every_frame_of_the_loop_counts(self):
+        a = self.calibrate.matte_mask(self.scene((0, 0, 1920, 1080), notch=(0, 0, 400, 1080)))
+        b = self.calibrate.matte_mask(self.scene((0, 0, 1920, 1080), notch=(1520, 0, 1920, 1080)))
+        x, y, w, h = self.calibrate.largest_box([a, b])
+        self.assertGreaterEqual(x * 1920, 400); self.assertLessEqual((x + w) * 1920, 1520 + 1e-6)
 
 if __name__ == '__main__': unittest.main()

@@ -18,6 +18,7 @@ from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 import importlib.util
+from collections import deque
 
 spec = importlib.util.spec_from_file_location('verify', Path(__file__).with_name('verify.py'))
 verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
@@ -118,6 +119,94 @@ def next_camera(camera, e):
     if zoom > start * MAX_ZOOM_STEP:
         zoom = start * MAX_ZOOM_STEP
     return [round(zoom, 4), round(cx, 4), round(cy, 4)]
+
+
+# --- fitting by the painted area -------------------------------------------
+#
+# The step solver above zooms on the imbalance of matte across edges, which is
+# right for a strip and wrong for an irregular painted area: on a lobby whose art
+# has a notch in one corner it recentres towards the notch and zooms far past
+# what is needed. Measuring the painted area directly avoids that: render the
+# whole scene zoomed out, mark the matte, and frame the largest box that is clear
+# of it through the whole loop.
+
+
+def matte_mask(im, gw=192, gh=108):
+    """Matte reachable from the frame edge, on a coarse grid. Dark art inside the
+    picture never connects to the edge through matte-coloured pixels, so flood
+    filling from the border separates the renderer's background from painted black."""
+    small = im.convert('RGB').resize((gw, gh))
+    px = small.load()
+    tol = verify.MATTE_TOLERANCE + 2  # resampling blends edges slightly
+    def is_matte(c):
+        return any(all(abs(c[i] - m[i]) <= tol for i in range(3)) for m in verify.RENDER_MATTES)
+    mask = [[False] * gw for _ in range(gh)]
+    queue = deque((x, y) for x in range(gw) for y in (0, gh - 1))
+    queue.extend((x, y) for y in range(gh) for x in (0, gw - 1))
+    seen = set()
+    while queue:
+        x, y = queue.popleft()
+        if (x, y) in seen or not (0 <= x < gw and 0 <= y < gh):
+            continue
+        seen.add((x, y))
+        if not is_matte(px[x, y]):
+            continue
+        mask[y][x] = True
+        queue.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+    return mask
+
+def largest_box(masks, gw=192, gh=108, centre=(0.5, 0.5)):
+    """The largest frame-shaped box clear of matte in every mask, as a unit
+    (x, y, w, h); the one nearest `centre` when several tie."""
+    union = [[any(m[y][x] for m in masks) for x in range(gw)] for y in range(gh)]
+    # Grow each matte cell by one so the box keeps clear of resampled edges.
+    grown = [[union[y][x] or any(union[yy][xx] for yy in (y-1, y, y+1) for xx in (x-1, x, x+1) if 0 <= yy < gh and 0 <= xx < gw) for x in range(gw)] for y in range(gh)]
+    prefix = [[0] * (gw + 1) for _ in range(gh + 1)]
+    for y in range(gh):
+        row = 0
+        for x in range(gw):
+            row += grown[y][x]
+            prefix[y + 1][x + 1] = prefix[y][x + 1] + row
+    def empty(x, y, w, h):
+        return prefix[y + h][x + w] - prefix[y][x + w] - prefix[y + h][x] + prefix[y][x] == 0
+    for h in range(gh, 8, -1):
+        w = round(h * gw / gh)
+        best = None
+        for y in range(gh - h + 1):
+            for x in range(gw - w + 1):
+                if empty(x, y, w, h):
+                    d = (x + w / 2 - centre[0] * gw) ** 2 + (y + h / 2 - centre[1] * gh) ** 2
+                    if best is None or d < best[0]:
+                        best = (d, x, y)
+        if best:
+            _, x, y = best
+            return (x / gw, y / gh, w / gw, h / gh)
+    return None
+
+
+def fit_to_painted_area(workspace, server, asset, stem, animation, duration, bounds, apply, samples=8):
+    """A camera framing the largest matte-free box of the whole scene, or None.
+
+    `apply(camera)` must install a recipe in the workspace. The scene is sampled
+    with the skeleton's bounds contained in the frame rather than covering it,
+    since the default cover fit already crops away art the box could use.
+    """
+    if not bounds or not bounds.get('width') or not bounds.get('height'):
+        return None
+    across, down = 1920 / bounds['width'], 1080 / bounds['height']
+    overview = [round(min(across, down) / max(across, down), 4), 0.5, 0.5]
+    apply(overview)
+    masks = []
+    for i in range(samples):
+        with tempfile.TemporaryDirectory() as tmp:
+            im, _ = render(workspace, server, asset, stem, animation, Path(tmp) / 'f', 1920, 1080, duration * i / samples)
+        masks.append(matte_mask(im))
+    box = largest_box(masks)
+    if not box:
+        return None
+    zoom, cx, cy = overview
+    x, y, w, h = box
+    return [round(zoom / max(w, h), 4), round(cx + (x + w / 2 - 0.5) / zoom, 4), round(cy + (y + h / 2 - 0.5) / zoom, 4)]
 
 
 def clean(edges):

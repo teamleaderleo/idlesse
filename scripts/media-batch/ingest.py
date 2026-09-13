@@ -625,6 +625,20 @@ def main():
         # textures: same skeleton and framing, and free).
         preview_args = argparse.Namespace(asset=target.asset_path, stem=stem, animation=animation, seconds=0.0)
         edges, image, duration = calibrate.worst_edges(target.workspace, server, preview_args, 1920, 1080, 4)
+        # An import fits only when it has to; a re-render asked to fit re-frames even a clean camera.
+        if a.fit and duration and (a.reframe or not calibrate.clean(edges)) and target.kind != 'live2d':
+            # Frame the largest painted area first; it keeps far more of an irregular
+            # scene than stepping the zoom towards the matte does.
+            with tempfile.TemporaryDirectory() as tmp:
+                _, meta = calibrate.render(target.workspace, server, target.asset_path, stem, animation, Path(tmp) / 'm', 64, 36, 0)
+            boxed = calibrate.fit_to_painted_area(target.workspace, server, target.asset_path, stem, animation, duration,
+                                                  meta.get('bounds'), lambda recipe: target.apply(calibrate, recipe))
+            if boxed:
+                camera = boxed
+                target.apply(calibrate, camera)
+                changed = True
+                edges, image, duration = calibrate.worst_edges(target.workspace, server, preview_args, 1920, 1080, 4)
+                log(f'  fitted to the painted area: {camera} -> worst matte {edges["_native"]}px')
         if a.fit and duration:
             for round_ in range(8):
                 if calibrate.clean(edges):
