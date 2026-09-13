@@ -1,6 +1,21 @@
 # Idlesse Library
 
-Open Library from the preview window or Wallpaper menu (Command-L).
+Open Library from the menu extra (Open Library…) or Wallpaper menu (Command-L).
+
+Home owns Library/Favorites/Recent/collection navigation through `SceneLibraryController.Scope`.
+It no longer locates dropdowns by walking the view hierarchy. Recent shows only opened
+items and does not change the saved sort mode. Media filtering remains independent.
+The sidebar can be collapsed with its toolbar button.
+
+List and Grid share a resizable, hideable inspector. Its visibility and divider position
+persist. Grid cards offer explicit context-menu actions; hovering never applies a wallpaper.
+The menu extra groups scene controls under Scene, opens Library for browsing, and leaves
+transition defaults in Settings. The legacy screen-saver preview remains an internal
+utility rather than a normal wallpaper navigation destination.
+
+Follow-up work in #107/#108: move browser actions into the native window toolbar,
+separate task progress from item details, and add richer selected/current metadata.
+The present inspector displays the existing poster; it does not run an animated preview.
 
 - Eight bundled scenes currently ship with the app: Desk Clock, After Hours, Undertow,
   Fireflies, Ripple, Audio Aurora, Aurora, and Breathing Aurora.
@@ -26,7 +41,7 @@ Open Library from the preview window or Wallpaper menu (Command-L).
   This works for individual imports and entries from a Source.
 - Drop supported scene/media files onto the scene list to use the individual import
   pipeline. Unsupported dropped files are ignored.
-- Adding individual scenes clears the search, opens Imported, and selects the first
+- Adding individual scenes clears the search, returns Home to Library (Imported in the standalone browser), and selects the first
   added scene. Video playability is probed asynchronously. Imports/conversions run
   sequentially in one cancellable batch and refresh the Library once on completion.
   Each file is attempted independently; failed imports are reported together while

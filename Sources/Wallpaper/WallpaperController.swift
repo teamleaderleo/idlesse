@@ -501,6 +501,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
     var onShowSettings: (() -> Void)?
+    var onShowLibrary: (() -> Void)?
     var onShowPreview: (() -> Void)?
     private lazy var displayAssignmentController = DisplayAssignmentController(wallpaper: self)
     /// Menu items contributed by the host (next/previous, recents). Rebuilt on every menu open.
@@ -1302,37 +1303,35 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             (suspended ? "Waiting for your display" : (shouldPause && selectedIsAnimated ? "Scene paused" : "Wallpaper running"))
         menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
         if let lastReloadError { menu.addItem(withTitle: "Edit not applied: " + lastReloadError, action: nil, keyEquivalent: "") }
-        if let selectedURL { menu.addItem(withTitle: selectedURL.lastPathComponent, action: nil, keyEquivalent: "") }
+        if let playable { menu.addItem(withTitle: playable.title, action: nil, keyEquivalent: "") }
+        let sceneMenu = NSMenu()
         if let playable, !playable.parameters.isEmpty {
-            let controls = addItem(menu, "Scene Controls…", #selector(editControls))
+            let controls = addItem(sceneMenu, "Scene Controls…", #selector(editControls))
             controls.isEnabled = !isLoading
         }
         if playable?.usesPointer == true {
-            let pointer = addItem(menu, "Enable Pointer Response", #selector(togglePointer))
+            let pointer = addItem(sceneMenu, "Enable Pointer Response", #selector(togglePointer))
             pointer.state = clock.pointerEnabled ? .on : .off
             pointer.isEnabled = !isLoading
         }
         if playable?.usesAudio == true {
-            let audio = addItem(menu, "Enable Audio Response", #selector(toggleAudio))
+            let audio = addItem(sceneMenu, "Enable Audio Response", #selector(toggleAudio))
             audio.state = clock.audioEnabled ? .on : .off
             audio.isEnabled = !isLoading
         }
+        if isRunning {
+            let sound = addItem(sceneMenu, "Play Wallpaper Audio", #selector(toggleSound))
+            sound.state = soundEnabled ? .on : .off
+            addItem(sceneMenu, "Stop Wallpaper", #selector(self.stop))
+        }
+        if !sceneMenu.items.isEmpty {
+            let scene = NSMenuItem(title: "Scene", action: nil, keyEquivalent: "")
+            sceneMenu.autoenablesItems = false
+            scene.submenu = sceneMenu
+            menu.addItem(scene)
+        }
         menu.addItem(.separator())
-        addItem(menu, "Choose Wallpaper…", #selector(chooseWallpaper))
-        let transition = NSMenuItem(title: "Scene Transition", action: nil, keyEquivalent: "")
-        let choices = NSMenu()
-        for seconds in [0.0, 0.5, 1.0, 2.0] {
-            let item = addItem(choices, seconds == 0 ? "Instant" : "\(seconds) seconds", #selector(changeTransition(_:)))
-            item.representedObject = seconds
-            item.state = transitionDuration == seconds ? .on : .off
-        }
-        choices.addItem(.separator())
-        for style in TransitionStyle.allCases {
-            let item = addItem(choices, style.title, #selector(changeTransitionStyle(_:)))
-            item.representedObject = style.rawValue
-            item.state = transitionStyle == style ? .on : .off
-        }
-        transition.submenu = choices; menu.addItem(transition)
+        addItem(menu, "Open Library…", #selector(openLibrary))
         if NSScreen.screens.count > 1 {
             let displaysItem = NSMenuItem(title: "Displays", action: nil, keyEquivalent: "")
             let displayMenu = NSMenu()
@@ -1350,22 +1349,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         let pause = addItem(menu, pausedByUser ? "Resume Scene" : "Pause Scene", #selector(togglePause))
         pause.isEnabled = isRunning && selectedIsAnimated
-        let stop = addItem(menu, "Stop Wallpaper", #selector(self.stop))
-        stop.isEnabled = isRunning || isLoading
-        let sound = addItem(menu, "Play Wallpaper Audio", #selector(toggleSound))
-        sound.state = soundEnabled ? .on : .off
-        sound.isEnabled = isRunning
         if let extras = extraMenuItemsProvider?(), !extras.isEmpty {
             menu.addItem(.separator())
             extras.forEach(menu.addItem)
         }
         menu.addItem(.separator())
-        addItem(menu, "Show Preview", #selector(showPreview))
-        if let comfort {
-            comfort.addDesktopIconsItem(to: menu)
-            let item = menu.addItem(withTitle: "Bedtime Display…", action: #selector(DesktopComfortController.showSettings), keyEquivalent: "")
-            item.target = comfort
-        }
         addItem(menu, "Settings…", #selector(showAppSettings))
         addItem(menu, "Quit Idlesse", #selector(quit))
         menu.autoenablesItems = false
@@ -1373,6 +1361,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         onStateChange?()
     }
 
+    @objc private func openLibrary() { onShowLibrary?() }
     @objc private func showAppSettings() { onShowSettings?() }
     @objc private func showDisplayAssignments() { displayAssignmentController.present() }
     @objc private func toggleSound() { soundEnabled.toggle() }

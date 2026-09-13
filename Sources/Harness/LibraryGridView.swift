@@ -84,6 +84,7 @@ typealias LibraryItem = SceneLibraryController.Item
 
 final class LibraryGridView: NSView {
     var onSelect: ((LibraryItem) -> Void)?
+    var onMenu: ((LibraryItem) -> NSMenu)?
     var onDoubleAction: ((LibraryItem) -> Void)?
     var onRequestThumbnail: ((LibraryItem, @escaping (NSImage) -> Void) -> Void)?
 
@@ -207,6 +208,7 @@ final class LibraryGridView: NSView {
             } else {
                 card = reusableCards.popLast() ?? LibraryCardView(frame: .zero)
                 card.onClick = { [weak self] item in self?.selectFromUser(item) }
+                card.onMenu = { [weak self] item in self?.onMenu?(item) }
                 card.onDoubleClick = { [weak self] item in self?.doubleActionFromUser(item) }
                 changed = card.configure(item: item)
                 activeCards[index] = card
@@ -260,6 +262,13 @@ final class LibraryGridView: NSView {
 }
 
 final class LibraryCardView: NSView {
+    override var isFlipped: Bool { true }
+    var onMenu: ((LibraryItem) -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let item else { return nil }
+        onClick?(item)
+        return onMenu?(item)
+    }
     private(set) var item: LibraryItem?
     var isSelected = false {
         didSet { updateBorder() }
@@ -322,11 +331,11 @@ final class LibraryCardView: NSView {
         titleLabel.stringValue = SceneLibraryController.displayTitle(item.title)
         let mediaPath = item.entry?.relativeMediaPath?.lowercased() ?? ""
         if mediaPath.hasSuffix(".mp4") || mediaPath.hasSuffix(".mov") || item.entry?.mediaType == "video" {
-            badgeLabel.stringValue = "VIDEO"
+            badgeLabel.stringValue = "Video"
         } else if item.builtin != nil || mediaPath.hasSuffix(".idlesse") || item.entry?.mediaType == "scene" {
-            badgeLabel.stringValue = "INTERACTIVE SCENE"
+            badgeLabel.stringValue = "Scene"
         } else {
-            badgeLabel.stringValue = "IMAGE"
+            badgeLabel.stringValue = "Image"
         }
         return changed
     }

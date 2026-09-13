@@ -15,6 +15,42 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let url: URL
         let access: SceneLibraryStore.Access?
     }
+    enum Scope: Equatable {
+        case library, favorites, recent, collection(String)
+    }
+    private(set) var scope: Scope = .library
+    private var homeNavigation = false
+    var onScopeChange: ((Scope) -> Void)?
+    private let mediaFilter = NSPopUpButton()
+    private func revealImportedScope() {
+        guard homeNavigation else { return }
+        scope = .library
+        mediaFilter.selectItem(at: 0)
+        onScopeChange?(.library)
+    }
+    var rotationSummary: String? {
+        rotationTimer == nil ? nil : "Rotating every \(rotationMinutes)m"
+    }
+    func useHomeNavigation() {
+        homeNavigation = true
+        filter.isHidden = true
+        mediaFilter.isHidden = false
+        pendingFilterTitle = nil
+        setScope(.library)
+    }
+    func setScope(_ scope: Scope) {
+        self.scope = scope
+        pendingFilterTitle = nil
+        filter.selectItem(at: 0)
+        if case .collection(let id) = scope,
+           let index = filter.itemArray.firstIndex(where: { ($0.representedObject as? String) == id }) {
+            filter.selectItem(at: index)
+        }
+        reload()
+    }
+    private let inspectorButton = NSButton(checkboxWithTitle: "Inspector", target: nil, action: nil)
+    private let browserSplit = NSSplitViewController()
+    private var inspectorItem: NSSplitViewItem?
     private let store: SceneLibraryStore
     private let table = NSTableView()
     private let search = NSSearchField()
@@ -181,7 +217,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         viewModeControl.target = self
         viewModeControl.action = #selector(viewModeChanged)
         viewModeControl.selectedSegment = UserDefaults.standard.integer(forKey: "Idlesse.library.viewMode")
-        let toolbar = NSStackView(views: [search, filter, sort, viewModeControl, collectionActions, sourceActions, add])
+        mediaFilter.addItems(withTitles: ["All Media", "Videos", "Scenes", "Images"])
+        mediaFilter.isHidden = true
+        mediaFilter.target = self
+        mediaFilter.action = #selector(mediaFilterChanged)
+        inspectorButton.target = self
+        inspectorButton.action = #selector(toggleInspector)
+        inspectorButton.state = UserDefaults.standard.object(forKey: "Idlesse.library.inspectorVisible") as? Bool == false ? .off : .on
+        let toolbar = NSStackView(views: [search, filter, mediaFilter, sort, viewModeControl, inspectorButton, collectionActions, sourceActions, add])
         toolbar.spacing = 10
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Scene"))
         column.width = 280
@@ -210,6 +253,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 self?.table.scrollRowToVisible(index)
             }
             self?.preview()
+        }
+        gridView.onMenu = { [weak self] item in
+            let menu = NSMenu()
+            guard let self else { return menu }
+            self.selected = item
+            for (title, action) in [("Set Wallpaper", #selector(useScene)),
+                                    ("Edit in Studio", #selector(editScene)),
+                                    ("Make a Copy in Studio", #selector(duplicateScene)),
+                                    (self.store.catalog.favorites.contains(item.id) ? "Remove Favorite" : "Add Favorite", #selector(toggleFavorite))] {
+                let entry = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+                entry.target = self
+            }
+            return menu
         }
         gridView.onDoubleAction = { [weak self] item in
             self?.selected = item
@@ -247,33 +303,62 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 12
-        for view in [toolbar, scroll, right, gridScroll] {
+        let browser = NSView()
+        let browserController = NSViewController()
+        browserController.view = browser
+        let browserItem = NSSplitViewItem(viewController: browserController)
+        browserItem.minimumThickness = 240
+        let inspectorController = NSViewController()
+        let inspector = NSView()
+        inspectorController.view = inspector
+        let pane = NSSplitViewItem(viewController: inspectorController)
+        pane.minimumThickness = 300
+        pane.maximumThickness = 600
+        pane.canCollapse = true
+        inspectorItem = pane
+        browserSplit.addSplitViewItem(browserItem)
+        browserSplit.addSplitViewItem(pane)
+        browserSplit.splitView.isVertical = true
+        browserSplit.splitView.autosaveName = "IdlesseLibraryInspector"
+        browserSplit.splitView.dividerStyle = .thin
+        for view in [toolbar, browserSplit.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
+        for view in [scroll, gridScroll] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            browser.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: browser.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: browser.trailingAnchor),
+                view.topAnchor.constraint(equalTo: browser.topAnchor),
+                view.bottomAnchor.constraint(equalTo: browser.bottomAnchor),
+            ])
+        }
+        right.translatesAutoresizingMaskIntoConstraints = false
+        inspector.addSubview(right)
         poster.translatesAutoresizingMaskIntoConstraints = false
+        primary.orientation = .vertical
+        primary.alignment = .leading
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
-            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
-            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            search.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
-            scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
-            scroll.widthAnchor.constraint(equalToConstant: 300),
-            right.topAnchor.constraint(equalTo: scroll.topAnchor),
-            right.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 22),
-            right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            right.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            search.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            browserSplit.view.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
+            browserSplit.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            browserSplit.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            browserSplit.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            right.topAnchor.constraint(equalTo: inspector.topAnchor, constant: 12),
+            right.leadingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: 16),
+            right.trailingAnchor.constraint(equalTo: inspector.trailingAnchor, constant: -16),
+            right.bottomAnchor.constraint(lessThanOrEqualTo: inspector.bottomAnchor, constant: -12),
             poster.widthAnchor.constraint(equalTo: right.widthAnchor),
             poster.heightAnchor.constraint(equalTo: poster.widthAnchor, multiplier: 9.0 / 16.0),
             heading.widthAnchor.constraint(equalTo: right.widthAnchor),
             detail.widthAnchor.constraint(equalTo: right.widthAnchor),
-            gridScroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 18),
-            gridScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            gridScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            gridScroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
+        pane.isCollapsed = inspectorButton.state == .off
         viewModeChanged()
     }
 
@@ -281,9 +366,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let isGrid = viewModeControl.selectedSegment == 1
         UserDefaults.standard.set(viewModeControl.selectedSegment, forKey: "Idlesse.library.viewMode")
         scroll.isHidden = isGrid
-        right.isHidden = isGrid
         gridScroll.isHidden = !isGrid
         if isGrid { gridView.update(items: items, selectedID: selected?.id) }
+    }
+
+    @objc private func mediaFilterChanged() { reload() }
+
+    @objc private func toggleInspector() {
+        let visible = inspectorButton.state == .on
+        inspectorItem?.isCollapsed = !visible
+        UserDefaults.standard.set(visible, forKey: "Idlesse.library.inspectorVisible")
     }
 
     weak var hostWindow: NSWindow?
@@ -405,6 +497,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
         items = allItems().filter { item in
             let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
+            if homeNavigation {
+                let path = item.entry?.relativeMediaPath?.lowercased() ?? ""
+                let isVideo = path.hasSuffix(".mp4") || path.hasSuffix(".mov") || item.entry?.mediaType == "video"
+                let isScene = item.builtin != nil || path.hasSuffix(".idlesse") || item.entry?.mediaType == "scene"
+                if mediaFilter.indexOfSelectedItem == 1 && !isVideo { return false }
+                if mediaFilter.indexOfSelectedItem == 2 && !isScene { return false }
+                if mediaFilter.indexOfSelectedItem == 3 && (isVideo || isScene) { return false }
+                switch scope {
+                case .favorites: return matches && store.catalog.favorites.contains(item.id)
+                case .recent: return matches && store.catalog.recent[item.id] != nil
+                case .library, .collection: break
+                }
+            }
             if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
             switch filter.indexOfSelectedItem {
             case 1: return matches && item.builtin != nil
@@ -430,7 +535,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let b = Self.fuzzyScore(query: search.stringValue, in: $1.title) ?? .infinity
                 if a != b { return a < b }
             }
-            if sort.indexOfSelectedItem == 1 {
+            if (homeNavigation && scope == .recent) || sort.indexOfSelectedItem == 1 {
                 let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
                 if a != b { return a > b }
             }
@@ -853,7 +958,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let firstNew = self.store.catalog.entries.first { $0.sourceID == source.id && !oldIDs.contains($0.id) }?.id
                     ?? self.store.catalog.entries.first { $0.sourceID == source.id && $0.availability == .present }?.id
                 self.search.stringValue = ""
-                self.filter.selectItem(at: 2)
+                self.filter.selectItem(at: 2); self.revealImportedScope()
                 self.reload(selecting: firstNew)
                 self.detail.stringValue = "\(source.name): \(self.store.catalog.entries.filter { $0.sourceID == source.id && $0.availability == .present }.count) wallpapers in Library."
             } catch {
@@ -980,7 +1085,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                     failures.append("\(source.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-            if firstID != nil { self.search.stringValue = ""; self.filter.selectItem(at: 2) }
+            if firstID != nil { self.search.stringValue = ""; self.filter.selectItem(at: 2); self.revealImportedScope() }
             self.reload(selecting: firstID)
             if !failures.isEmpty {
                 if let handler = self.importFailureHandler { handler(failures); return }
@@ -1095,13 +1200,17 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         alert.beginSheetModal(for: presentationWindow!) { [weak self] result in
             guard let self, result == .alertFirstButtonReturn else { return }
             do {
-                if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0) }
+                if deleting, let activeID { try self.store.removeCollection(activeID); self.filter.selectItem(at: 0); self.revealImportedScope() }
                 else if renaming, let activeID { try self.store.renameCollection(activeID, name: field.stringValue) }
                 else {
                     let collection = try self.store.createCollection(name: field.stringValue)
                     self.reload()
                     self.filter.selectItem(at: self.filter.itemArray.firstIndex { ($0.representedObject as? String) == collection.id }!)
                     self.search.stringValue = ""
+                    if self.homeNavigation {
+                        self.scope = .collection(collection.id)
+                        self.onScopeChange?(self.scope)
+                    }
                 }
                 self.reload()
             } catch { self.detail.stringValue = error.localizedDescription }
@@ -1212,6 +1321,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
 
     static func smokeTest(outputURL: URL, videoURL: URL? = nil) throws {
+        let preferenceKeys = ["Idlesse.library.inspectorVisible", "Idlesse.library.viewMode"]
+        let preferences = preferenceKeys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(preferenceKeys, preferences) {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("library-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
         let raw = folder.appendingPathComponent("revision.png")
@@ -1225,6 +1342,23 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         var applied = false
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
             onUse: { _ in applied = true }, onEdit: { _, asCopy in copied = asCopy })
+        let originalSort = controller.sort.indexOfSelectedItem
+        controller.useHomeNavigation()
+        controller.setScope(.recent)
+        precondition(controller.items.isEmpty, "Recent excludes wallpapers never opened")
+        precondition(controller.sort.indexOfSelectedItem == originalSort, "Recent must preserve browser sort")
+        controller.setScope(.library)
+        controller.viewModeControl.selectedSegment = 1
+        controller.viewModeChanged()
+        precondition(!controller.right.isHidden, "Grid must retain selection details")
+        controller.inspectorButton.state = .off
+        controller.toggleInspector()
+        precondition(controller.inspectorItem?.isCollapsed == true)
+        controller.inspectorButton.state = .on
+        controller.toggleInspector()
+        controller.viewModeControl.selectedSegment = 0
+        controller.viewModeChanged()
+        controller.homeNavigation = false
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects([raw as NSURL, folder.appendingPathComponent("ignored.txt") as NSURL])
@@ -1271,6 +1405,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.reload()
         precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
         precondition(controller.collectionActions.itemArray.contains { $0.title == "Rename Collection…" })
+        controller.homeNavigation = true
+        controller.setScope(.favorites)
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        try controller.store.used(controller.selected!.id)
+        controller.setScope(.recent)
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        precondition(controller.sort.indexOfSelectedItem == originalSort)
+        controller.setScope(.collection(collection.id))
+        precondition(controller.items.count == 1 && controller.selected?.title == "Undertow")
+        controller.homeNavigation = false
         controller.collectionActions.selectItem(withTitle: "Shuffle Collection")
         controller.collectionAction()
         precondition(applied && controller.rotationTimer != nil)
@@ -1302,6 +1446,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
         root.cacheDisplay(in: root.bounds, to: bitmap)
         try bitmap.representation(using: .png, properties: [:])!.write(to: outputURL, options: .withoutOverwriting)
+        controller.viewModeControl.selectedSegment = 1
+        controller.viewModeChanged()
+        root.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        let gridBitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)!
+        root.cacheDisplay(in: root.bounds, to: gridBitmap)
+        let gridOutput = outputURL.deletingPathExtension().appendingPathExtension("grid.png")
+        try gridBitmap.representation(using: .png, properties: [:])!.write(to: gridOutput, options: .withoutOverwriting)
+        precondition(!controller.right.isHidden && controller.inspectorItem?.isCollapsed == false)
         controller.search.stringValue = "No matching scene"
         controller.reload()
         precondition(controller.items.isEmpty && !controller.apply.isEnabled)

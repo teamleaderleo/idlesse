@@ -57,7 +57,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let sameDisplaysButton = NSButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private var rows: [SidebarRow] = []
     private var currentRow: SidebarRow = .library
-    private var previousSortBeforeRecent: Int?
+    private var sidebarItem: NSSplitViewItem?
     private var refreshTimer: Timer?
 
     private let nowPlayingButton = NSButton(title: "No Wallpaper", target: nil, action: nil)
@@ -90,6 +90,22 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         // main.swift installs the legacy Settings owner before AppSettings is
         // created. Home becomes the sheet/panel owner as soon as it exists.
         wallpaper.presentingWindow = { [weak library] in library?.window }
+        library.onScopeChange = { [weak self] scope in
+            guard let self else { return }
+            self.refreshSidebar()
+            let row = self.rows.first { row in
+                switch (row, scope) {
+                case (.library, .library), (.favorites, .favorites), (.recent, .recent): return true
+                case (.collection(let id, _), .collection(let target)): return id == target
+                default: return false
+                }
+            } ?? .library
+            self.showLibraryScope(row)
+            if let index = self.rows.firstIndex(of: row) {
+                self.sidebar.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            }
+        }
+        library.useHomeNavigation()
         installShell()
         installToolbar()
         buildDisplaysView()
@@ -122,7 +138,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func presentWindow() {
         library.show()
-        window.title = "Idlesse"
+        window.title = currentRow.title
         window.deminiaturize(nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -153,7 +169,9 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 260
-        sidebarItem.canCollapse = false
+        sidebarItem.canCollapse = true
+        self.sidebarItem = sidebarItem
+        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: "Idlesse.home.sidebarHidden")
 
         let contentController = NSViewController()
         contentController.view = contentHost
@@ -254,82 +272,32 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         currentRow = row
         libraryView.isHidden = false
         displaysView.isHidden = true
-        if previousSortBeforeRecent != nil, row != .recent {
-            if let sort = sortPopup(), let old = previousSortBeforeRecent, sort.numberOfItems > old {
-                sort.selectItem(at: old)
-                sendAction(of: sort)
-            }
-            previousSortBeforeRecent = nil
-        }
+        window.title = row.title
         switch row {
-        case .library:
-            selectFilter(title: "All Wallpapers")
-        case .favorites:
-            selectFilter(title: "Favorites")
-        case .recent:
-            selectFilter(title: "All Wallpapers")
-            if let sort = sortPopup() {
-                if previousSortBeforeRecent == nil { previousSortBeforeRecent = sort.indexOfSelectedItem }
-                sort.selectItem(withTitle: "Recently Opened")
-                sendAction(of: sort)
-            }
-        case .collection(let id, _):
-            selectFilter(collectionID: id)
-        default:
-            break
+        case .library: library.setScope(.library)
+        case .favorites: library.setScope(.favorites)
+        case .recent: library.setScope(.recent)
+        case .collection(let id, _): library.setScope(.collection(id))
+        default: break
         }
         library.refreshEmbedded()
     }
 
     private func showDisplays() {
         currentRow = .displays
+        window.title = "Displays"
         activateDisplaysDestination?()
         libraryView.isHidden = true
         displaysView.isHidden = false
         refreshDisplaysSummary()
     }
 
-    /// Drive the Library's existing filter/sort controls so there is one source
-    /// of truth for Sources, collections, search, selection and scheduling.
-    private func selectFilter(title: String) {
-        guard let popup = filterPopup(), popup.itemTitles.contains(title) else { return }
-        popup.selectItem(withTitle: title)
-        sendAction(of: popup)
-    }
+    private func rotationSummary() -> String? { library.rotationSummary }
 
-    private func selectFilter(collectionID: String) {
-        guard let popup = filterPopup(),
-              let index = popup.itemArray.firstIndex(where: { ($0.representedObject as? String) == collectionID }) else { return }
-        popup.selectItem(at: index)
-        sendAction(of: popup)
-    }
-
-    private func sendAction(of popup: NSPopUpButton) {
-        guard let action = popup.action else { return }
-        NSApp.sendAction(action, to: popup.target, from: popup)
-    }
-
-    private func filterPopup() -> NSPopUpButton? {
-        popups(in: libraryView).first { $0.itemTitles.contains("All Wallpapers") && $0.itemTitles.contains("Favorites") }
-    }
-
-    private func sortPopup() -> NSPopUpButton? {
-        popups(in: libraryView).first { $0.itemTitles.contains("Recently Opened") && $0.itemTitles.contains("Name") }
-    }
-
-    private func popups(in view: NSView) -> [NSPopUpButton] {
-        var result: [NSPopUpButton] = []
-        if let popup = view as? NSPopUpButton { result.append(popup) }
-        for child in view.subviews { result.append(contentsOf: popups(in: child)) }
-        return result
-    }
-
-    private func rotationSummary() -> String? {
-        for popup in popups(in: libraryView) {
-            guard let first = popup.itemTitles.first, first.hasPrefix("Collections · Rotating") else { continue }
-            return first.replacingOccurrences(of: "Collections · ", with: "")
-        }
-        return nil
+    @objc private func toggleSidebar() {
+        guard let sidebarItem else { return }
+        sidebarItem.isCollapsed.toggle()
+        UserDefaults.standard.set(sidebarItem.isCollapsed, forKey: "Idlesse.home.sidebarHidden")
     }
 
     // MARK: - Displays destination
@@ -450,19 +418,27 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         toolbar.autosavesConfiguration = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        window.titleVisibility = .hidden
+        window.titleVisibility = .visible
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
+        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.settingsItem]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == .toggleSidebar {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
+            item.label = "Sidebar"
+            item.target = self
+            item.action = #selector(toggleSidebar)
+            return item
+        }
         if itemIdentifier == Self.settingsItem {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")

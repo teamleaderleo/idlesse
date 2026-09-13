@@ -129,6 +129,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.modes.refresh()
         }
         comfort.onShowSettings = { [weak self] in self?.showLibrary(); self?.appSettings.present(tab: 1) }
+        wallpaper.onShowLibrary = { [weak self] in self?.showLibrary() }
         wallpaper.onShowSettings = { [weak self] in self?.showSettings() }
         comfort.start()
         appSettings.modes = modes
@@ -264,14 +265,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         previous.target = self
         previous.isEnabled = wallpaper.isRunning
         items += [next, previous]
-        let recents = recentSceneURLs.filter { $0 != wallpaper.selectedURL }.prefix(4)
-        for url in recents {
-            let item = NSMenuItem(title: SceneLibraryController.displayTitle(url.deletingPathExtension().lastPathComponent),
-                action: #selector(applyRecent(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = url as NSURL
-            items.append(item)
-        }
         return items
     }
     @objc private func nextWallpaper() { stepWallpaper(delta: 1) }
@@ -460,9 +453,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             item.target = wallpaper
             wallpaperMenu.addItem(item)
         }
-        let show = NSMenuItem(title: "Screen Saver Preview", action: #selector(showPreview), keyEquivalent: "")
-        show.target = self
-        wallpaperMenu.addItem(show)
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
