@@ -30,7 +30,8 @@ window.rawExport=async(folder,stem,animation,count,width,height,url)=>{
   const response=await fetch(`${url}/${i}`,{method:'POST',body:pixels});
   spent.send+=performance.now()-t;
   if(!response.ok)throw new Error('Frame write rejected');
-  if((i+1)%60===0)window.webkit?.messageHandlers?.progress?.postMessage([i+1,count]);
+  // Report often: on a busy Mac x265 can take over a minute for 60 frames, and the host gives up after 120 seconds of silence.
+  if((i+1)%5===0||i+1===count)window.webkit?.messageHandlers?.progress?.postMessage([i+1,count]);
  }
  return {...meta,frames:count,encodeSeconds:(performance.now()-started)/1000,stageSeconds:Object.fromEntries(Object.entries(spent).map(([k,v])=>[k,v/1000]))};
 };

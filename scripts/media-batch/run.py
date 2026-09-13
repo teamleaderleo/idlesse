@@ -41,7 +41,7 @@ def run(argv, log, cwd=None, timeout=1200, env=None, progress=None):
             for line in process.stdout:
                 stream.write(line)
                 match = re.match(rb'Frame (\d+)', line)
-                if match:
+                if match and int(match.group(1)) % 60 == 0:
                     print(progress(int(match.group(1))), flush=True)
         finally:
             timer.cancel()
