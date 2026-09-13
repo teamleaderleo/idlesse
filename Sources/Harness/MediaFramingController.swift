@@ -574,6 +574,61 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         precondition(!controller.resetButton.isEnabled && !controller.saveButton.isEnabled)
         controller.undo.undo()
         precondition(controller.framing.bleed == SceneBleed(left: 0.2), "reset is undoable")
+
+        // Real mouse handling, driven through the overlay as AppKit would.
+        let window = controller.window!
+        window.setContentSize(NSSize(width: 1100, height: 760))
+        window.contentView?.layoutSubtreeIfNeeded()
+        controller.canvas.layoutSubtreeIfNeeded()
+        // No event loop runs here, so close the implicit group the steps above
+        // opened, and group each gesture the way one event would.
+        controller.undo.removeAllActions()
+        controller.undo.groupsByEvent = false
+        controller.undo.beginUndoGrouping(); controller.reset(); controller.undo.endUndoGrouping()
+        let overlay = controller.canvas.overlay
+        func at(_ u: Double, _ v: Double) -> NSPoint {
+            let r = controller.canvas.contentRect
+            return overlay.convert(NSPoint(x: r.minX + CGFloat(u) * r.width, y: r.minY + CGFloat(v) * r.height), to: nil)
+        }
+        func event(_ type: NSEvent.EventType, _ point: NSPoint, clicks: Int = 1) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func drag(from a: (Double, Double), to b: (Double, Double)) {
+            controller.undo.beginUndoGrouping(); defer { controller.undo.endUndoGrouping() }
+            overlay.mouseDown(with: event(.leftMouseDown, at(a.0, a.1)))
+            overlay.mouseDragged(with: event(.leftMouseDragged, at((a.0 + b.0) / 2, (a.1 + b.1) / 2)))
+            overlay.mouseDragged(with: event(.leftMouseDragged, at(b.0, b.1)))
+            overlay.mouseUp(with: event(.leftMouseUp, at(b.0, b.1)))
+        }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.01 }
+        precondition(overlay.isFlipped && controller.canvas.contentRect.width > 100, "canvas laid out")
+        drag(from: (0.2, 0.1), to: (0.8, 0.7))
+        var b = controller.canvas.bleed
+        precondition(near(b.left, 0.2) && near(b.top, 0.1) && near(b.right, 0.2) && near(b.bottom, 0.3),
+                     "the first drag draws a box: \(b)")
+        drag(from: (0.2, 0.4), to: (0.1, 0.4))
+        b = controller.canvas.bleed
+        precondition(near(b.left, 0.1) && near(b.right, 0.2), "dragging the left edge moves only that edge: \(b)")
+        drag(from: (0.5, 0.4), to: (0.55, 0.35))
+        b = controller.canvas.bleed
+        precondition(near(b.left, 0.15) && near(b.right, 0.15) && near(b.top, 0.05) && near(b.bottom, 0.35),
+                     "dragging inside slides the box without resizing: \(b)")
+        drag(from: (0.5, 0.4), to: (-0.5, 0.4))
+        b = controller.canvas.bleed
+        precondition(b.left >= 0 && near(1 - b.left - b.right, 0.7), "sliding stops at the frame edge: \(b)")
+        let point = at(0.3, 0.6)
+        controller.undo.beginUndoGrouping()
+        overlay.mouseDown(with: event(.leftMouseDown, point, clicks: 2))
+        overlay.mouseUp(with: event(.leftMouseUp, point, clicks: 2))
+        controller.undo.endUndoGrouping()
+        precondition(near(controller.framing.focus?.x ?? 0, 0.3) && near(controller.framing.focus?.y ?? 0, 0.6),
+                     "double-click sets the focus: \(String(describing: controller.framing.focus))")
+        controller.undo.undo()
+        precondition(controller.framing.focus == nil || controller.framing.focus == .centre, "focus change undoes")
+        controller.undo.undo()
+        precondition(near(controller.canvas.bleed.left, 0.15), "each drag is one undo step: \(controller.canvas.bleed)")
+        precondition(controller.summary.stringValue.contains("% of the frame"), "per-display summary is shown")
         controller.saveButton.isEnabled = false
         controller.close()
         print("Media framing smoke test passed")
@@ -597,7 +652,7 @@ final class MediaFramingCanvas: NSView {
     var onChange: ((SceneFocus, SceneBleed, SceneFraming?) -> Void)?
 
     private let host = NSView()
-    private let overlay = Overlay()
+    fileprivate let overlay = Overlay()
     private var playerLayer: AVPlayerLayer?
     private var imageLayer: CALayer?
 
@@ -670,7 +725,7 @@ final class MediaFramingCanvas: NSView {
         overlay.needsDisplay = true
     }
 
-    private final class Overlay: NSView {
+    fileprivate final class Overlay: NSView {
         weak var canvas: MediaFramingCanvas?
         override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
@@ -773,7 +828,9 @@ final class MediaFramingCanvas: NSView {
             let left = withinY && abs(p.x - r.minX) <= slop, right = withinY && abs(p.x - r.maxX) <= slop
             let top = withinX && abs(p.y - r.minY) <= slop, bottom = withinX && abs(p.y - r.maxY) <= slop
             if left || right || top || bottom { return .edges(left: left, right: right, top: top, bottom: bottom) }
-            if r.contains(p) { return .move }
+            // Without a crop the box is the whole frame, so there is nothing to
+            // move: a drag inside it draws the first box instead.
+            if r.contains(p) { return canvas.bleed.clamped.isEmpty ? .draw(origin: p) : .move }
             return canvas.contentRect.insetBy(dx: -slop, dy: -slop).contains(p) ? .draw(origin: p) : nil
         }
 

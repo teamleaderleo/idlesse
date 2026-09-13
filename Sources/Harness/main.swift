@@ -659,6 +659,26 @@ if let index = CommandLine.arguments.firstIndex(of: "--smoke-wallpaper"),
     }
 }
 
+// Opens only the framing editor, with no wallpaper, status item or hot keys, so a
+// file can be framed from a script (or tested) without disturbing a running copy.
+if let index = CommandLine.arguments.firstIndex(of: "--frame"), CommandLine.arguments.count > index + 1 {
+    let url = URL(fileURLWithPath: (CommandLine.arguments[index + 1] as NSString).expandingTildeInPath)
+    guard MediaFramingController.canFrame(url), FileManager.default.fileExists(atPath: url.path) else {
+        fputs("Framing needs an existing picture or video: \(url.path)\n", stderr); exit(2)
+    }
+    app.setActivationPolicy(.regular)
+    final class StandaloneFraming: NSObject, NSApplicationDelegate {
+        let editor: MediaFramingController
+        init(_ editor: MediaFramingController) { self.editor = editor }
+        func applicationDidFinishLaunching(_ notification: Notification) { editor.show() }
+        func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    }
+    let editor = MediaFramingController(media: url) { _ in print("Saved framing for \(url.lastPathComponent)") }
+    let standalone = StandaloneFraming(editor)
+    app.delegate = standalone
+    app.run()
+    exit(0)
+}
 if CommandLine.arguments.contains("--smoke-framing") {
     _ = NSApplication.shared
     do { try MediaFramingController.smokeTest(); exit(0) }
