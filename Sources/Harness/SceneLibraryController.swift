@@ -84,6 +84,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let store: SceneLibraryStore
     private let table = NSTableView()
     private let search = NSSearchField()
+    private var pendingSearch: DispatchWorkItem?
     private let filter = NSPopUpButton()
     private let sort = NSPopUpButton()
     private let viewModeControl = NSSegmentedControl(labels: ["List", "Grid"], trackingMode: .selectOne, target: nil, action: nil)
@@ -273,6 +274,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         thumbnails.totalCostLimit = 64 * 1024 * 1024
         search.placeholderString = "Search wallpapers"
         search.delegate = self
+        search.target = self
+        search.action = #selector(commitSearch)
+        search.sendsWholeSearchString = true
         filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         filter.target = self; filter.action = #selector(filterChanged)
         sort.addItems(withTitles: ["Name", "Recently Opened"])
@@ -587,8 +591,16 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             clearSearchButton.isHidden = true
         }
     }
-    func controlTextDidChange(_ obj: Notification) { reload() }
+    func controlTextDidChange(_ obj: Notification) {
+        pendingSearch?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        pendingSearch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+    @objc private func commitSearch() { reload() }
     private func reload(selecting id: String? = nil) {
+        pendingSearch?.cancel()
+        pendingSearch = nil
         reloadSourceActions()
         let previous = id ?? selected?.id
         let collectionID = filter.selectedItem?.representedObject as? String
@@ -609,9 +621,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
-        items = allItems().filter { item in
-            let matches = Self.fuzzyScore(query: search.stringValue, in: item.title) != nil
-            let mediaType = item.builtin != nil ? "scene" : item.entry?.inferredMediaType
+        let catalog = allItems()
+        let query = search.stringValue
+        let scores: [String: Double] = query.isEmpty ? [:] : catalog.reduce(into: [:]) { scores, item in
+            scores[item.id] = Self.fuzzyScore(query: query, in: item.title)
+        }
+        let collectionPositions: [String: Int] = (activeCollection?.sceneIDs ?? []).enumerated().reduce(into: [:]) { positions, entry in
+            if positions[entry.element] == nil { positions[entry.element] = entry.offset }
+        }
+        let needsMediaType = homeNavigation ? mediaFilter.indexOfSelectedItem > 0 : (4...6).contains(filter.indexOfSelectedItem)
+        items = catalog.filter { item in
+            let matches = query.isEmpty || scores[item.id] != nil
+            guard matches else { return false }
+            let mediaType = needsMediaType ? (item.builtin != nil ? "scene" : item.entry?.inferredMediaType) : nil
             if homeNavigation {
                 if mediaFilter.indexOfSelectedItem == 1 && mediaType != "video" { return false }
                 if mediaFilter.indexOfSelectedItem == 2 && mediaType != "scene" { return false }
@@ -622,7 +644,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 case .library, .collection: break
                 }
             }
-            if let activeCollection { return matches && activeCollection.sceneIDs.contains(item.id) }
+            if activeCollection != nil { return collectionPositions[item.id] != nil }
             switch filter.indexOfSelectedItem {
             case 1: return matches && item.builtin != nil
             case 2: return matches && item.entry != nil
@@ -633,12 +655,12 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             default: return matches
             }
         }.sorted {
-            if let activeCollection {
-                return activeCollection.sceneIDs.firstIndex(of: $0.id)! < activeCollection.sceneIDs.firstIndex(of: $1.id)!
+            if activeCollection != nil {
+                return (collectionPositions[$0.id] ?? Int.max) < (collectionPositions[$1.id] ?? Int.max)
             }
-            if !search.stringValue.isEmpty {
-                let a = Self.fuzzyScore(query: search.stringValue, in: $0.title) ?? .infinity
-                let b = Self.fuzzyScore(query: search.stringValue, in: $1.title) ?? .infinity
+            if !query.isEmpty {
+                let a = scores[$0.id] ?? .infinity
+                let b = scores[$1.id] ?? .infinity
                 if a != b { return a < b }
             }
             if (homeNavigation && scope == .recent) || sort.indexOfSelectedItem == 1 {
@@ -1493,6 +1515,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         } catch { reportTask(error.localizedDescription) }
     }
     func windowWillClose(_ notification: Notification) {
+        pendingSearch?.cancel(); pendingSearch = nil
         stopLivePreview()
         conversionTask?.cancel()
         task?.cancel(); generation += 1
@@ -1501,6 +1524,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     func windowDidMove(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     func windowDidResize(_ notification: Notification) { (notification.object as? NSWindow)?.saveManagedFrame(name: "IdlesseLibrary") }
     deinit {
+        pendingSearch?.cancel()
         previewObservers.forEach(NotificationCenter.default.removeObserver)
         liveTask?.cancel()
         previewHost.stop()
@@ -1718,6 +1742,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.clearSearch()
         precondition(controller.search.stringValue.isEmpty && controller.items.count == 8 && controller.clearSearchButton.isHidden,
             "Clearing the search must restore browsing")
+        let beforeTyping = controller.items.map(\.id)
+        controller.search.stringValue = "Aurora"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        controller.search.stringValue = "Undertow"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        precondition(controller.items.map(\.id) == beforeTyping, "Typing should not rebuild synchronously")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        precondition(controller.items.count == 1 && controller.items.first?.title == "Undertow")
+        controller.search.stringValue = "Aurora"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        controller.commitSearch()
+        precondition(controller.pendingSearch == nil && controller.items.allSatisfy { $0.title.contains("Aurora") })
+        controller.clearSearch()
         precondition(Self.fuzzyScore(query: "", in: "Anything") == 0)
         precondition(Self.fuzzyScore(query: "undertow", in: "Undertow") != nil)
         precondition(Self.fuzzyScore(query: "xqz", in: "Undertow") == nil)

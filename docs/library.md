@@ -260,3 +260,12 @@ instead of every Home refresh; Idlesse widget toggles refresh immediately.
 External macOS widget-setting changes can take up to five seconds to appear.
 The original Mission Control reveal hitch and menu-strip visual parity still
 need dedicated on-display qualification; this pass does not claim they are fixed.
+
+### Search work
+
+Typing coalesces result refreshes with a 120 ms delay. Return commits immediately;
+explicit navigation/clearing cancels a pending search, as does closing Library.
+Each nonempty query scores each title once and reuses scores for sorting. Ordinary
+browsing skips media-type inference unless a type filter is active, and collection
+membership/order uses one lookup map per refresh. Smoke checks cover rapid query
+replacement and immediate commit. Live UI checks cover typing, Return, and clear.
