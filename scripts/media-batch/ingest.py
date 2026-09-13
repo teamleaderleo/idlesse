@@ -39,6 +39,9 @@ CONTAINER_SECONDS = L4_PER_SECOND + 8 * CPU_CORE_PER_SECOND + 16 * MEMORY_GIB_PE
 # loosely from past runs; the quote rounds up rather than down.
 STARTUP_SECONDS = 120
 TIMEOUT_SECONDS = 900
+# The most estimated work one job is allowed to take on, leaving the cap room
+# for a slow container rather than cutting a batch off half-way.
+BATCH_SECONDS = 600
 
 
 def ensure_pillow(workspace):
@@ -61,9 +64,62 @@ def register_with_app(workspace):
     Only paths are recorded. The app runs --reframe without --yes, so it can never
     start a paid upscale: a lobby that still needs one stops at the quote.
     """
+    # An app launched from the Finder gets a minimal PATH without Homebrew's ffmpeg
+    # or a user-installed modal, so hand over the PATH this shell found them on.
     for key, value in (('IdlessePipelineInterpreter', sys.executable), ('IdlessePipelineScript', str(Path(__file__).resolve())),
-                       ('IdlessePipelineWorkspace', str(workspace))):
+                       ('IdlessePipelineWorkspace', str(workspace)), ('IdlessePipelinePath', os.environ.get('PATH', ''))):
         subprocess.run(['defaults', 'write', APP_DEFAULTS, key, '-string', value], check=False, capture_output=True)
+
+
+def emit(enabled, event, **fields):
+    """One machine-readable line for the app; plain logs stay human text."""
+    if enabled:
+        print('IDLESSE ' + json.dumps({'event': event, **fields}), flush=True)
+
+
+def known_titles(workspace, output):
+    """Titles already chosen for an asset: installed receipts first, then local plans."""
+    titles, installed = {}, {}
+    for plan in sorted(HERE.glob('plans/*.json')) + [HERE / 'batch.json']:
+        try:
+            for item in json.loads(plan.read_text())['items']:
+                titles.setdefault(item['id'], item['title'])
+        except (OSError, ValueError, KeyError):
+            continue
+    for receipt in output.glob('*-Restored-4K60.source.json'):
+        try:
+            data = json.loads(receipt.read_text())
+        except ValueError:
+            continue
+        if data.get('asset'):
+            titles[data['asset']] = data.get('title') or titles.get(data['asset'])
+            installed.setdefault(data['asset'], []).append(str(receipt.with_name(receipt.name.replace('.source.json', '.mp4'))))
+    return titles, installed
+
+
+def list_lobbies(workspace, output):
+    titles, installed = known_titles(workspace, output)
+    lobbies = []
+    for folder in sorted((workspace / 'assets-pc').iterdir()):
+        if not folder.is_dir() or not list(folder.glob('*.skel')):
+            continue
+        asset = folder.name
+        upscaled = restored_complete(workspace, asset)
+        entry = {'asset': asset, 'title': titles.get(asset) or default_title(asset), 'installed': installed.get(asset, []),
+                 'upscaled': upscaled}
+        if not upscaled:
+            entry['quote'] = quote(workspace, asset)
+        lobbies.append(entry)
+    return lobbies
+
+
+def find_modal():
+    found = shutil.which('modal')
+    if found:
+        return found
+    for candidate in sorted(Path.home().glob('Library/Python/*/bin/modal'), reverse=True):
+        return str(candidate)
+    return None
 
 
 def load(name):
@@ -223,8 +279,10 @@ def past_rate(workspace):
     return seconds / megapixels if megapixels else 1.5
 
 
-def quote(workspace, asset):
-    pngs = sorted((workspace / 'assets-pc' / asset).glob('*.png'))
+def quote(workspace, assets):
+    """Estimate for one Modal job upscaling `assets` (an id or a list): one startup, shared."""
+    assets = [assets] if isinstance(assets, str) else list(assets)
+    pngs = [p for asset in assets for p in sorted((workspace / 'assets-pc' / asset).glob('*.png'))]
     megapixels = sum(math.prod(png_size(p)) for p in pngs) / 1e6
     work = megapixels * past_rate(workspace)
     estimate = STARTUP_SECONDS + work
@@ -235,7 +293,11 @@ def quote(workspace, asset):
 
 def confirm_paid(workspace, asset, yes):
     q = quote(workspace, asset)
-    print(f'\nUpscaling {asset} needs one Modal L4 job: {q["textures"]} texture(s), {q["megapixels"]} MP.')
+    if q['estimateSeconds'] > BATCH_SECONDS:
+        raise SystemExit(f'That is about {q["estimateSeconds"]}s of work, too close to the {TIMEOUT_SECONDS}s cap for one job; '
+                         'upscale fewer lobbies at a time.')
+    names = asset if isinstance(asset, str) else asset[0] if len(asset) == 1 else f'{len(asset)} lobbies together'
+    print(f'\nUpscaling {names} needs one Modal L4 job: {q["textures"]} texture(s), {q["megapixels"]} MP.')
     print(f'  Estimate ~{q["estimateSeconds"]}s of container time (~{q["gpuSeconds"]}s on the GPU), about ${q["estimateUSD"]:.2f}.')
     print(f'  Hard cap: {TIMEOUT_SECONDS // 60} minutes, one container, no retries, so at most about ${q["capUSD"]:.2f}.')
     print('  Estimate uses list prices and your past runs; Modal bills the actual time.')
@@ -253,6 +315,41 @@ def prepare_free_restore(workspace, asset, job):
     with zipfile.ZipFile(job / 'restored.zip', 'w', zipfile.ZIP_STORED) as archive:
         for png in sorted((workspace / 'assets-pc' / asset).glob('*.png')):
             archive.write(workspace / 'assets-ai-batch' / asset / png.name, f'{asset}/{png.name}')
+
+
+def upscale_batch(workspace, assets, yes, json_events, log):
+    """Upscale several lobbies in one Modal job, so each pays for its GPU seconds and not its own startup."""
+    for asset in assets:
+        safe_name(asset)
+        if not list((workspace / 'assets-pc' / asset).glob('*.skel')):
+            raise SystemExit(f'No lobby {asset} in assets-pc.')
+    pending = sorted({asset for asset in assets if not restored_complete(workspace, asset)})
+    skipped = sorted(set(assets) - set(pending))
+    if skipped:
+        log(f'Already upscaled, skipping: {", ".join(skipped)}')
+    if not pending:
+        emit(json_events, 'upscaled', assets=[], skipped=skipped)
+        log('Nothing to upscale.')
+        return
+    modal = find_modal()
+    if not modal:
+        raise SystemExit('Upscaling needs the modal CLI, and it is not installed.')
+    confirm_paid(workspace, pending, yes)
+    job = workspace / f'upscale-{datetime.datetime.now():%Y%m%d-%H%M%S}'
+    job.mkdir()
+    plan = job / 'plan.json'
+    plan.write_text(json.dumps({'schema': 1, 'model': PLAN_MODEL, 'source': PLAN_SOURCE, 'items': [
+        {'id': asset, 'title': asset, 'stem': stem_of(workspace, asset), 'animation': 'Idle_01', 'seconds': 1}
+        for asset in pending]}, indent=2))
+    subprocess.run([sys.executable, str(HERE / 'run.py'), '--root', str(workspace), '--output', str(job / 'out'),
+                    '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal, '--restore-only'], check=True)
+    missing = [asset for asset in pending if not restored_complete(workspace, asset)]
+    if missing:
+        raise SystemExit(f'The job finished but these are not fully upscaled: {", ".join(missing)}')
+    report = job / 'restored.zip.json'
+    seconds = json.loads(report.read_text()).get('seconds') if report.exists() else None
+    emit(json_events, 'upscaled', assets=pending, skipped=skipped, gpuSeconds=seconds)
+    log(f'Upscaled {len(pending)} lobbies; importing them is now local and free.')
 
 
 # --- install -----------------------------------------------------------------
@@ -304,6 +401,8 @@ def main():
     p.add_argument('--animation', default='Idle_01')
     p.add_argument('--crop', type=float, nargs=4, metavar=('X', 'Y', 'W', 'H'),
                    help='Unit box of the current frame to keep, from its top-left')
+    p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Use this camera recipe (before --crop)')
+    p.add_argument('--fit', action='store_true', help='Zoom and recentre the camera until the preview shows no matte')
     p.add_argument('--from-sidecar', action='store_true', help='With --reframe, use the crop box saved by the framing editor')
     p.add_argument('--preview', action='store_true', help='Render and measure the preview, then stop')
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
@@ -311,12 +410,22 @@ def main():
     p.add_argument('--yes', action='store_true', help='Start a quoted paid upscale without prompting')
     p.add_argument('--workspace', type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
+    p.add_argument('--upscale', nargs='+', metavar='ASSET',
+                   help='Upscale these lobbies together in one quoted Modal job, so later imports are free')
+    p.add_argument('--list', action='store_true', help='Print every extracted lobby as JSON, with install and upscale state')
+    p.add_argument('--json', action='store_true', help='Also print IDLESSE-prefixed JSON events, for the app')
     a = p.parse_args()
     workspace = a.workspace.expanduser().resolve()
     ensure_pillow(workspace)
     calibrate = load('calibrate')
     register_with_app(workspace)
     log = lambda message: print(message, flush=True)
+    if a.list:
+        print(json.dumps(list_lobbies(workspace, (a.output or DEFAULT_OUTPUT).expanduser().resolve()), indent=2))
+        return
+    if a.upscale:
+        upscale_batch(workspace, a.upscale, a.yes, a.json, log)
+        return
 
     receipt = None
     if a.reframe:
@@ -353,10 +462,10 @@ def main():
             asset = adopt_source(a.source, workspace, a.asset)
         animation = a.animation
         title = a.title or default_title(asset)
-        if not title:
+        if not title and not a.preview:
             raise SystemExit(f'{asset} has no readable name; pass --title.')
         output = (a.output or DEFAULT_OUTPUT).expanduser().resolve()
-    title = safe_name(title)
+    title = safe_name(title) if title else None
     stem = stem_of(workspace, asset)
 
     # Camera: the recipe the installed export was rendered with when re-framing,
@@ -364,23 +473,37 @@ def main():
     cameras_path = workspace / 'cameras.json'
     cameras = json.loads(cameras_path.read_text()) if cameras_path.exists() else {}
     base = (receipt or {}).get('camera') or recipe_for(cameras, stem, animation)
+    if a.camera:
+        base = [round(v, 4) for v in a.camera]
     camera = crop_to_camera(base, a.crop) if a.crop else base
     original_cameras = cameras_path.read_text() if cameras_path.exists() else None
-    changed = a.crop is not None and camera != recipe_for(cameras, stem, animation)
+    changed = camera is not None and camera != recipe_for(cameras, stem, animation)
     job = workspace / f'ingest-{asset}-{datetime.datetime.now():%Y%m%d-%H%M%S}'
-    job.mkdir()
     keep_camera = False
     server = calibrate.serve(workspace)
     try:
-        if changed:
-            write_cameras(cameras_path, with_recipe(cameras, stem, animation, camera))
+        def use_camera(recipe):
+            write_cameras(cameras_path, with_recipe(cameras, stem, animation, recipe))
             calibrate.rebundle(workspace)
+        if changed:
+            use_camera(camera)
             log(f'Camera for {stem}/{animation}: {base or "fit"} -> {camera}')
 
         # Preview from the original textures: same skeleton, same framing, and free.
         preview_args = argparse.Namespace(asset=f'assets-pc/{asset}', stem=stem, animation=animation, seconds=0.0)
         edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
-        preview = job / 'preview.png'
+        if a.fit and duration:
+            for round_ in range(8):
+                if calibrate.clean(edges):
+                    break
+                camera = calibrate.next_camera(camera or [1.0, 0.5, 0.5], edges)
+                use_camera(camera)
+                changed = True
+                edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
+                log(f'  fit round {round_ + 1}: {camera} -> worst matte {edges["_native"]}px')
+        previews = workspace / 'ingest-previews'
+        previews.mkdir(exist_ok=True)
+        preview = previews / f'{asset}-{animation}.png'
         image.save(preview)
         if not duration:
             meta_animations = []
@@ -392,19 +515,27 @@ def main():
         log(f'Preview {preview}')
         log(f'  {animation}: {duration:.3f}s loop; worst matte over the loop {matte}px '
             + ('(clean)' if calibrate.clean(edges) else '(MATTE: the camera leaves part of the frame uncovered)'))
+        free = restored_complete(workspace, asset)
+        emit(a.json, 'preview', asset=asset, title=title, animation=animation, image=str(preview), seconds=duration,
+             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free,
+             quote=None if free else quote(workspace, asset), replaces=str(output / f'{title}-Restored-4K60.mp4')
+             if title and (output / f'{title}-Restored-4K60.mp4').exists() else None)
         if a.preview:
             log('Preview only: nothing exported, camera left as it was.')
             return
+        # Before anything slow or paid: an existing wallpaper is only replaced on request.
+        if (output / f'{title}-Restored-4K60.mp4').exists() and not a.replace:
+            raise SystemExit(f'{title}-Restored-4K60.mp4 already exists in {output}; pass --replace to archive it and install over it.')
         if not calibrate.clean(edges) and not a.allow_matte:
             raise SystemExit('Stopping before export because the preview shows matte; adjust the crop or pass --allow-matte.')
 
-        free = restored_complete(workspace, asset)
+        job.mkdir()
         if free:
             prepare_free_restore(workspace, asset, job)
             modal = '/usr/bin/false'
             log('Textures were upscaled before; this export is local and free.')
         else:
-            modal = shutil.which('modal')
+            modal = find_modal()
             if not modal:
                 raise SystemExit('This lobby needs upscaling, and the modal CLI is not installed.')
             confirm_paid(workspace, asset, a.yes)
@@ -423,6 +554,7 @@ def main():
             write_cameras(tracked, with_recipe(json.loads(tracked.read_text()), stem, animation, camera))
             log(f'Recorded the camera in {tracked.relative_to(REPO)}; commit it to keep the recipe.')
         log(f'\nInstalled {final}')
+        emit(a.json, 'installed', path=str(final), camera=camera)
         log('A Library source watching that folder picks it up; otherwise Import… it once. '
             'If it is on the desktop now, it reloads the next time it is chosen.')
     finally:

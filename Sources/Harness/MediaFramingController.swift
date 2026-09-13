@@ -44,7 +44,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
     private let resetButton = NSButton(title: "Reset", target: nil, action: nil)
     private let rerenderButton = NSButton(title: "Re-render Camera…", target: nil, action: nil)
-    private var rerender: Process?
+    private var rerender: PipelineRun?
     private let tone = ToneBox()
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
@@ -141,7 +141,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         rerenderButton.action = #selector(rerenderCamera)
         rerenderButton.bezelStyle = .rounded
         rerenderButton.toolTip = "Render the video again with the crop box as its camera, for full sharpness"
-        rerenderButton.isHidden = Pipeline.current(for: media) == nil
+        rerenderButton.isHidden = MediaPipeline.discover() == nil || MediaPipeline.receipt(for: media) == nil
         let buttons = NSStackView(views: [resetButton, revertButton, NSView(), rerenderButton, saveButton])
         buttons.spacing = 10
 
@@ -179,34 +179,12 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
 
     // MARK: Re-render
 
-    /// The export pipeline, when this Mac has one and the file came out of it.
-    /// `ingest.py` records its own paths in the app's defaults each time it runs.
-    struct Pipeline {
-        let interpreter: URL
-        let script: URL
-        let workspace: URL
-        static func current(for media: URL) -> Pipeline? {
-            let defaults = UserDefaults.standard
-            guard let interpreter = defaults.string(forKey: "IdlessePipelineInterpreter"),
-                  let script = defaults.string(forKey: "IdlessePipelineScript"),
-                  let workspace = defaults.string(forKey: "IdlessePipelineWorkspace"),
-                  FileManager.default.isExecutableFile(atPath: interpreter),
-                  FileManager.default.fileExists(atPath: script) else { return nil }
-            let receipt = media.deletingPathExtension().appendingPathExtension("source.json")
-            guard let data = try? Data(contentsOf: receipt),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  object["asset"] is String, object["animation"] is String else { return nil }
-            return Pipeline(interpreter: URL(fileURLWithPath: interpreter), script: URL(fileURLWithPath: script),
-                            workspace: URL(fileURLWithPath: workspace))
-        }
-    }
-
     @objc private func rerenderCamera() {
         if let rerender {
-            rerender.terminate()
+            rerender.stop()
             return
         }
-        guard let pipeline = Pipeline.current(for: media), let window else { return }
+        guard let pipeline = MediaPipeline.discover(), MediaPipeline.receipt(for: media) != nil, let window else { return }
         guard !(framing.bleed?.clamped.isEmpty ?? true) else {
             summary.stringValue = "Draw a crop box first; the re-render makes that box the whole frame."
             return
@@ -224,32 +202,17 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    private func startRerender(_ pipeline: Pipeline) {
-        let process = Process()
-        process.executableURL = pipeline.interpreter
-        process.arguments = [pipeline.script.path, "--reframe", media.path, "--from-sidecar", "--workspace", pipeline.workspace.path]
-        process.currentDirectoryURL = pipeline.workspace
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        let output = OutputBuffer()
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            let line = output.append(data)
-            DispatchQueue.main.async { if let line { self?.summary.stringValue = line } }
-        }
-        process.terminationHandler = { [weak self] finished in
-            pipe.fileHandleForReading.readabilityHandler = nil
-            DispatchQueue.main.async { self?.finishRerender(finished, output: output.text) }
-        }
+    private func startRerender(_ pipeline: MediaPipeline) {
+        let run = pipeline.run(["--reframe", media.path, "--from-sidecar"])
+        run.onLine = { [weak self] line in self?.summary.stringValue = line }
+        run.onExit = { [weak self] succeeded, output in self?.finishRerender(succeeded: succeeded, stopped: run.stopped, output: output) }
         do {
-            try process.run()
+            try run.start()
         } catch {
             summary.stringValue = "Couldn’t start the pipeline: " + error.localizedDescription
             return
         }
-        rerender = process
+        rerender = run
         rerenderButton.title = "Stop Re-render"
         for control in [saveButton, revertButton, resetButton] { control.isEnabled = false }
         canvas.isEditable = false
@@ -257,20 +220,20 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         summary.stringValue = "Rendering a preview…"
     }
 
-    private func finishRerender(_ process: Process, output: String) {
+    private func finishRerender(succeeded: Bool, stopped: Bool, output: String) {
         rerender = nil
         rerenderButton.title = "Re-render Camera…"
         canvas.isEditable = true
         adjustments.forEach { $0.slider.isEnabled = true }
-        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+        guard succeeded else {
             framingChanged()
             let alert = NSAlert()
-            alert.messageText = process.terminationReason == .uncaughtSignal ? "Re-render stopped" : "Re-render didn’t finish"
+            alert.messageText = stopped ? "Re-render stopped" : "Re-render didn’t finish"
             alert.informativeText = output.split(separator: "\n").suffix(12).joined(separator: "\n")
             if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             return
         }
-        // The pipeline replaced the file in place and cleared the crop it used.
+        // The pipeline replaced the file and cleared the crop it used.
         saved = (try? SceneFraming.beside(media)) ?? nil ?? SceneFraming()
         framing = saved
         onSaved(media)
@@ -278,19 +241,6 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         canvas.setContent(size: nil)
         load()
         summary.stringValue = "Re-rendered. " + (output.split(separator: "\n").last(where: { $0.hasPrefix("Installed") }).map(String.init) ?? "")
-    }
-
-    /// Collects pipeline output from the reading thread; hands back the latest whole line.
-    private final class OutputBuffer: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
-        func append(_ chunk: Data) -> String? {
-            lock.lock(); defer { lock.unlock() }
-            data.append(chunk)
-            if data.count > 256_000 { data.removeFirst(data.count - 256_000) }
-            return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init)
-        }
     }
 
     private func load() {
@@ -483,7 +433,7 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        rerender?.terminate()
+        rerender?.stop()
         loadTask?.cancel()
         player?.pause()
         looper?.disableLooping()
@@ -574,6 +524,61 @@ final class MediaFramingController: NSWindowController, NSWindowDelegate {
         precondition(!controller.resetButton.isEnabled && !controller.saveButton.isEnabled)
         controller.undo.undo()
         precondition(controller.framing.bleed == SceneBleed(left: 0.2), "reset is undoable")
+
+        // Real mouse handling, driven through the overlay as AppKit would.
+        let window = controller.window!
+        window.setContentSize(NSSize(width: 1100, height: 760))
+        window.contentView?.layoutSubtreeIfNeeded()
+        controller.canvas.layoutSubtreeIfNeeded()
+        // No event loop runs here, so close the implicit group the steps above
+        // opened, and group each gesture the way one event would.
+        controller.undo.removeAllActions()
+        controller.undo.groupsByEvent = false
+        controller.undo.beginUndoGrouping(); controller.reset(); controller.undo.endUndoGrouping()
+        let overlay = controller.canvas.overlay
+        func at(_ u: Double, _ v: Double) -> NSPoint {
+            let r = controller.canvas.contentRect
+            return overlay.convert(NSPoint(x: r.minX + CGFloat(u) * r.width, y: r.minY + CGFloat(v) * r.height), to: nil)
+        }
+        func event(_ type: NSEvent.EventType, _ point: NSPoint, clicks: Int = 1) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func drag(from a: (Double, Double), to b: (Double, Double)) {
+            controller.undo.beginUndoGrouping(); defer { controller.undo.endUndoGrouping() }
+            overlay.mouseDown(with: event(.leftMouseDown, at(a.0, a.1)))
+            overlay.mouseDragged(with: event(.leftMouseDragged, at((a.0 + b.0) / 2, (a.1 + b.1) / 2)))
+            overlay.mouseDragged(with: event(.leftMouseDragged, at(b.0, b.1)))
+            overlay.mouseUp(with: event(.leftMouseUp, at(b.0, b.1)))
+        }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.01 }
+        precondition(overlay.isFlipped && controller.canvas.contentRect.width > 100, "canvas laid out")
+        drag(from: (0.2, 0.1), to: (0.8, 0.7))
+        var b = controller.canvas.bleed
+        precondition(near(b.left, 0.2) && near(b.top, 0.1) && near(b.right, 0.2) && near(b.bottom, 0.3),
+                     "the first drag draws a box: \(b)")
+        drag(from: (0.2, 0.4), to: (0.1, 0.4))
+        b = controller.canvas.bleed
+        precondition(near(b.left, 0.1) && near(b.right, 0.2), "dragging the left edge moves only that edge: \(b)")
+        drag(from: (0.5, 0.4), to: (0.55, 0.35))
+        b = controller.canvas.bleed
+        precondition(near(b.left, 0.15) && near(b.right, 0.15) && near(b.top, 0.05) && near(b.bottom, 0.35),
+                     "dragging inside slides the box without resizing: \(b)")
+        drag(from: (0.5, 0.4), to: (-0.5, 0.4))
+        b = controller.canvas.bleed
+        precondition(b.left >= 0 && near(1 - b.left - b.right, 0.7), "sliding stops at the frame edge: \(b)")
+        let point = at(0.3, 0.6)
+        controller.undo.beginUndoGrouping()
+        overlay.mouseDown(with: event(.leftMouseDown, point, clicks: 2))
+        overlay.mouseUp(with: event(.leftMouseUp, point, clicks: 2))
+        controller.undo.endUndoGrouping()
+        precondition(near(controller.framing.focus?.x ?? 0, 0.3) && near(controller.framing.focus?.y ?? 0, 0.6),
+                     "double-click sets the focus: \(String(describing: controller.framing.focus))")
+        controller.undo.undo()
+        precondition(controller.framing.focus == nil || controller.framing.focus == .centre, "focus change undoes")
+        controller.undo.undo()
+        precondition(near(controller.canvas.bleed.left, 0.15), "each drag is one undo step: \(controller.canvas.bleed)")
+        precondition(controller.summary.stringValue.contains("% of the frame"), "per-display summary is shown")
         controller.saveButton.isEnabled = false
         controller.close()
         print("Media framing smoke test passed")
@@ -597,7 +602,7 @@ final class MediaFramingCanvas: NSView {
     var onChange: ((SceneFocus, SceneBleed, SceneFraming?) -> Void)?
 
     private let host = NSView()
-    private let overlay = Overlay()
+    fileprivate let overlay = Overlay()
     private var playerLayer: AVPlayerLayer?
     private var imageLayer: CALayer?
 
@@ -670,7 +675,7 @@ final class MediaFramingCanvas: NSView {
         overlay.needsDisplay = true
     }
 
-    private final class Overlay: NSView {
+    fileprivate final class Overlay: NSView {
         weak var canvas: MediaFramingCanvas?
         override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
@@ -773,7 +778,9 @@ final class MediaFramingCanvas: NSView {
             let left = withinY && abs(p.x - r.minX) <= slop, right = withinY && abs(p.x - r.maxX) <= slop
             let top = withinX && abs(p.y - r.minY) <= slop, bottom = withinX && abs(p.y - r.maxY) <= slop
             if left || right || top || bottom { return .edges(left: left, right: right, top: top, bottom: bottom) }
-            if r.contains(p) { return .move }
+            // Without a crop the box is the whole frame, so there is nothing to
+            // move: a drag inside it draws the first box instead.
+            if r.contains(p) { return canvas.bleed.clamped.isEmpty ? .draw(origin: p) : .move }
             return canvas.contentRect.insetBy(dx: -slop, dy: -slop).contains(p) ? .draw(origin: p) : nil
         }
 

@@ -1316,6 +1316,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         importScenes(urls)
         return true
     }
+    /// Adds a file the export pipeline just installed, as if it were imported by hand.
+    func importInstalledMedia(_ url: URL) { importScenes([url]) }
     private func importScenes(_ urls: [URL]) {
         guard conversionTask == nil else {
             reportTask("An import is already running. Try again when it finishes.")

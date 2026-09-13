@@ -3,12 +3,14 @@ import Foundation
 /// A bounded index of references. Original media stays where the user put it.
 final class SceneLibraryStore {
     static let catalogVersion = 2
-    static let maxEntries = 128 // Compatibility alias: individually bookmarked entries.
-    static let maxIndividualEntries = 128
+    static let maxEntries = maxIndividualEntries // Compatibility alias: individually bookmarked entries.
+    /// Matches the Source bound. A bookmark is under a kilobyte in practice, so
+    /// the index-size cap below, not this count, is what bounds memory.
+    static let maxIndividualEntries = 4096
     static let maxSourceEntries = 4096
     static let maxSources = 32
     /// JSON remains a bounded compatibility/migration source until the SQLite catalog lands.
-    static let maxIndexBytes = 4_194_304
+    static let maxIndexBytes = 16_777_216
     static let maxBookmarkBytes = 16_384
 
     struct Entry: Codable, Equatable, Sendable {
@@ -304,7 +306,7 @@ final class SceneLibraryStore {
         }) { return existing }
         let individualCount = catalog.entries.filter { $0.bookmark != nil }.count
         guard individualCount < Self.maxIndividualEntries else {
-            throw failure("The Library supports up to 128 individually imported scenes. Add a Source for a larger folder.")
+            throw failure("The Library supports up to \(Self.maxIndividualEntries) individually imported scenes. Add a Source for a larger folder.")
         }
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }

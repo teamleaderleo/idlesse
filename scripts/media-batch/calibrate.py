@@ -88,6 +88,33 @@ def worst_edges(workspace, server, args, width, height, samples):
     return worst, shown, duration
 
 
+def next_camera(camera, e):
+    """One solver step: the recipe that should close the matte measured in `e`."""
+    zoom, cx, cy = camera
+    start = zoom
+    # Matte on one side alone is off-centre art and shifts away; matte
+    # summed across both sides is art too small for the frame, which no
+    # amount of shifting fixes. Zoom to close the total, then recentre on
+    # the imbalance. Shifting cx by d moves the art 512*zoom sample px.
+    # Any remaining matte gets corrected: the clean check above is in
+    # native pixels, and a gap under two sample pixels is still a gap.
+    span = e['left'] + e['right']
+    if span > 0:
+        zoom *= 512 / max(512 - span - 2, 1)
+        cx += ((e['left'] - e['right']) / 2) / (512 * zoom)
+    span = e['top'] + e['bottom']
+    if span > 0:
+        zoom *= 288 / max(288 - span - 2, 1)
+        cy += ((e['top'] - e['bottom']) / 2) / (288 * zoom)
+    # A wedge in a corner measures nearly the whole edge as depth, and
+    # the bar formula divides by what is left: it once "solved" Saori at
+    # zoom 302, a patch of art with no matte in it. Step instead, so the
+    # first clean round is the smallest zoom that covers the frame.
+    if zoom > start * MAX_ZOOM_STEP:
+        zoom = start * MAX_ZOOM_STEP
+    return [round(zoom, 4), round(cx, 4), round(cy, 4)]
+
+
 def clean(edges):
     return edges['_native'] <= verify.MATTE_TOLERANCE
 
@@ -175,29 +202,7 @@ def main():
                     print(f'  preview {out_root}/{a.stem}-{a.animation}-solved.png')
                     print('  Look at it: zero matte means the frame is covered, not that the crop is good.')
                     break
-                zoom, cx, cy = camera
-                start = zoom
-                # Matte on one side alone is off-centre art and shifts away; matte
-                # summed across both sides is art too small for the frame, which no
-                # amount of shifting fixes. Zoom to close the total, then recentre on
-                # the imbalance. Shifting cx by d moves the art 512*zoom sample px.
-                # Any remaining matte gets corrected: the clean check above is in
-                # native pixels, and a gap under two sample pixels is still a gap.
-                span = e['left'] + e['right']
-                if span > 0:
-                    zoom *= 512 / max(512 - span - 2, 1)
-                    cx += ((e['left'] - e['right']) / 2) / (512 * zoom)
-                span = e['top'] + e['bottom']
-                if span > 0:
-                    zoom *= 288 / max(288 - span - 2, 1)
-                    cy += ((e['top'] - e['bottom']) / 2) / (288 * zoom)
-                # A wedge in a corner measures nearly the whole edge as depth, and
-                # the bar formula divides by what is left: it once "solved" Saori at
-                # zoom 302, a patch of art with no matte in it. Step instead, so the
-                # first clean round is the smallest zoom that covers the frame.
-                if zoom > start * MAX_ZOOM_STEP:
-                    zoom = start * MAX_ZOOM_STEP
-                camera = [round(zoom, 4), round(cx, 4), round(cy, 4)]
+                camera = next_camera(camera, e)
             else:
                 print(f'\nno clean recipe within {a.rounds} rounds; last was {camera}')
             return

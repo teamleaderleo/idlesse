@@ -170,11 +170,29 @@ python3 scripts/media-batch/ingest.py hanako_home --crop 0.1 0 0.8 0.8 --preview
 
 It renders a free preview from the original textures and measures matte across
 the loop before anything else; `--preview` stops there, and matte stops the run
-unless `--allow-matte`. `--crop X Y W H` is a unit box of the current frame to
+unless `--allow-matte`. `--fit` runs the camera solver on the preview first, so a
+lobby whose art leaves a wedge uncovered is zoomed just enough to cover the
+frame; `--camera Z CX CY` pins a recipe instead. `--crop X Y W H` is a unit box of the current frame to
 keep, and becomes the camera. Upscaling is the only paid step: it runs only for
 a lobby never upscaled before, is quoted from the timings of past runs and
 Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds
 the worst case), and needs a yes or `--yes`. Everything else is local.
+
+Upscaling is billed per job, and most of a single lobby's cost is container
+startup. `--upscale a b c` upscales several lobbies in one job instead, so later
+imports of each are free; all 34 lobbies still unupscaled here quote at about
+$0.18 together against $1.61 one by one. It refuses work estimated past 600
+seconds, leaving the 15-minute cap room.
+
+In the app, **Wallpaper → Import Lobby…** does the same through this script. It
+lists every extracted lobby with its state (installed, free, or the upscale
+price), previews the selection, offers **Fit Camera** when the preview shows
+matte, and imports with the exact camera it previewed, then adds the result to
+the Library. An upscale is named with its estimate and its cap in a
+confirmation before the window passes `--yes`. Folder or ZIP… copies a lobby into
+`assets-pc` and previews it the same way. The app finds the script through the
+paths `ingest.py` records in its defaults, or, for a build inside a checkout,
+beside the build. `--list` and `--json` are the machine-readable forms it uses.
 
 ### Re-rendering a crop
 
