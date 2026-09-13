@@ -227,3 +227,12 @@ now share classification from the bookmark's embedded path or the catalog's
 relative path, with explicit catalog types taking precedence. This does not
 resolve, mount, or decode the referenced file. Unknown formats display “Media”.
 Regression checks include legacy video/image bookmarks and scope restoration.
+
+### Transport availability
+
+Home, global next/previous shortcuts, and the menu extra use the same candidate
+rule: the current Library view must contain at least two wallpapers. A one-item
+view cannot restart its only wallpaper through Next/Previous. The menu omits
+these commands when unavailable; Home disables them with explanatory tooltips.
+When available, transport still advances relative to the playing URL, independently
+of poster selection. Smoke checks cover zero, one, and multiple candidates.

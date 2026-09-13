@@ -257,13 +257,16 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         recentSceneURLs = Array(recentSceneURLs.prefix(5))
     }
     private func menuExtras() -> [NSMenuItem] {
+        guard library?.hasCycleCandidates == true else { return [] }
         var items: [NSMenuItem] = []
         let next = NSMenuItem(title: "Next Wallpaper  (⌃⌥⌘→)", action: #selector(nextWallpaper), keyEquivalent: "")
         next.target = self
-        next.isEnabled = wallpaper.isRunning
+        next.isEnabled = true
+        next.toolTip = "Next wallpaper in the current Library view"
         let previous = NSMenuItem(title: "Previous Wallpaper  (⌃⌥⌘←)", action: #selector(previousWallpaper), keyEquivalent: "")
         previous.target = self
-        previous.isEnabled = wallpaper.isRunning
+        previous.isEnabled = true
+        previous.toolTip = "Previous wallpaper in the current Library view"
         items += [next, previous]
         return items
     }

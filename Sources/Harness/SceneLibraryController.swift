@@ -1280,10 +1280,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { reportTask(error.localizedDescription) }
     }
     @objc private func useScene() { act(editing: false) }
-    var hasCycleCandidates: Bool { !items.isEmpty }
+    var hasCycleCandidates: Bool { items.count > 1 }
 
     private func cycleIndex(delta: Int, from playingURL: URL?) -> Int? {
-        guard !items.isEmpty else { return nil }
+        guard hasCycleCandidates else { return nil }
         // Browsing a poster must not silently move the transport's starting point.
         let playingIndex = playingURL.flatMap { url in
             items.firstIndex { item in
@@ -1551,6 +1551,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.droppedURLs(pasteboard) == [raw])
         precondition(controller.items.count == 8 && controller.items.contains { $0.title == "Desk Clock" })
         precondition(controller.sourceActions.itemArray.contains { $0.title == "Add Source…" })
+        let fullCatalog = controller.items
+        controller.items = []
+        precondition(!controller.hasCycleCandidates && controller.cycleIndex(delta: 1, from: nil) == nil)
+        controller.items = [fullCatalog[0]]
+        precondition(!controller.hasCycleCandidates && controller.cycleIndex(delta: -1, from: nil) == nil)
+        controller.cycle(delta: 1)
+        precondition(!applied, "Single-item transport must not restart or apply wallpaper")
+        controller.items = fullCatalog
+        precondition(controller.hasCycleCandidates)
         let playing = try controller.open(controller.items[0]).url
         controller.selected = controller.items[3]
         precondition(controller.cycleIndex(delta: 1, from: playing) == 1,

@@ -568,6 +568,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         pauseButton.isEnabled = url != nil
         previousButton.isEnabled = library.hasCycleCandidates
         nextButton.isEnabled = library.hasCycleCandidates
+        previousButton.toolTip = library.hasCycleCandidates ? "Previous wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
+        nextButton.toolTip = library.hasCycleCandidates ? "Next wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
         let count = NSScreen.screens.count
         var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
         if let rotation = rotationSummary() { parts.append(rotation) }
