@@ -408,8 +408,14 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         if let editor = activeFramingEditor { editor.saveDocument() }
         else if scenePreview.acceptsDocumentCommands { scenePreview.saveDocument() }
     }
-    @objc private func saveStudioAs() { scenePreview.saveAsDocument() }
-    @objc private func duplicateStudioLayer() { scenePreview.duplicateLayer() }
+    @objc private func saveStudioAs() {
+        guard scenePreview.acceptsDocumentCommands else { return }
+        scenePreview.saveAsDocument()
+    }
+    @objc private func duplicateStudioLayer() {
+        guard scenePreview.acceptsDocumentCommands else { return }
+        scenePreview.duplicateLayer()
+    }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(togglePause) || menuItem.action == #selector(nextImage) {
             return window.isKeyWindow && !window.isMiniaturized
