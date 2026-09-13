@@ -5,7 +5,7 @@ The page renders each frame, reads its pixels and POSTs them here; they go
 straight into FFmpeg's stdin as raw RGBA. x265 is the slow stage, so a POST is
 answered only once the encoder has taken the frame, and the page waits for it.
 """
-import argparse, json, os, secrets, subprocess, threading
+import argparse, json, os, secrets, subprocess, threading, time
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -38,6 +38,7 @@ def main():
         '-c:v', 'libx265', '-preset', 'fast', '-b:v', '40M', '-maxrate', '60M', '-bufsize', '80M', '-x265-params', X265_PARAMS,
         '-color_range', 'pc', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'iec61966-2-1',
         '-tag:v', 'hvc1', '-movflags', '+faststart+write_colr', str(partial_path)], stdin=subprocess.PIPE)
+    began = time.monotonic()
     state = {'next': 0}
     lock = threading.Lock()
 
@@ -75,6 +76,8 @@ def main():
                     ffmpeg.stdin.write(chunk)
                     remaining -= len(chunk)
                 state['next'] += 1
+                if state['next'] % 30 == 0 or state['next'] == 1:
+                    print(f'received {state["next"]} at {time.monotonic() - began:.1f}s', flush=True)
             self.send_response(200)
             self.send_header('Content-Length', '0')
             self.end_headers()
@@ -86,6 +89,7 @@ def main():
     code.write_text('return await window.rawExport(' + ','.join(json.dumps(v) for v in
                     [a.folder, a.stem, a.animation, a.count, a.width, a.height, f'/{token}']) + ');')
     try:
+        print('page loading', flush=True)
         subprocess.run([str(root / 'encode'), f'http://127.0.0.1:{server.server_port}/index.html', str(code), str(meta)],
                        check=True, timeout=1850)
         if state['next'] != a.count:
