@@ -331,8 +331,14 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         let clean = event["clean"] as? Bool ?? false
         let upscaled = event["upscaled"] as? Bool ?? false
         var lines = [String(format: "%.2f-second loop.", seconds)]
-        lines.append(clean ? "Covers the frame for the whole loop."
-                     : "Leaves part of the frame uncovered (\(event["matte"] ?? "?")px). Fit Camera zooms until it doesn’t.")
+        let trimmable = event["trimmable"] as? Bool ?? false
+        if clean {
+            lines.append("Covers the frame for the whole loop.")
+        } else if trimmable {
+            lines.append("Thin strips at the edges are trimmed at display time, so a narrower display loses none of the art. Fit Camera zooms the render instead.")
+        } else {
+            lines.append("Leaves part of the frame uncovered (\(event["matte"] ?? "?")px), too deep to trim. Fit Camera zooms until it doesn’t.")
+        }
         if upscaled {
             lines.append("Textures already upscaled: importing is local and free.")
         } else if let quote = event["quote"] as? [String: Any], let usd = quote["estimateUSD"] as? Double, let cap = quote["capUSD"] as? Double {
@@ -365,7 +371,9 @@ final class LobbyImportController: NSWindowController, NSWindowDelegate, NSTable
         if let camera = preview["camera"] as? [Double], camera.count == 3 {
             arguments += ["--camera"] + camera.map { String($0) }
         }
-        if !(preview["clean"] as? Bool ?? false) { arguments.append("--allow-matte") }
+        if !(preview["clean"] as? Bool ?? false) {
+            arguments.append(preview["trimmable"] as? Bool == true ? "--trim-edges" : "--allow-matte")
+        }
         var questions: [String] = []
         if !(preview["upscaled"] as? Bool ?? false),
            let quote = preview["quote"] as? [String: Any], let usd = quote["estimateUSD"] as? Double, let cap = quote["capUSD"] as? Double {

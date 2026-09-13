@@ -172,7 +172,12 @@ It renders a free preview from the original textures and measures matte across
 the loop before anything else; `--preview` stops there, and matte stops the run
 unless `--allow-matte`. `--fit` runs the camera solver on the preview first, so a
 lobby whose art leaves a wedge uncovered is zoomed just enough to cover the
-frame; `--camera Z CX CY` pins a recipe instead. `--crop X Y W H` is a unit box of the current frame to
+frame; `--camera Z CX CY` pins a recipe instead. `--trim-edges` keeps the camera and
+writes the matte depth on each edge into the sidecar as bleed, up to 15% of an
+edge. Prefer it for thin strips: a narrower display already crops more than a side
+strip, so it loses nothing, while a camera zoom removes that art everywhere. Most
+lobbies' matte is a strip of a few percent; a deep wedge or stray spare pose still
+wants `--fit`. `--crop X Y W H` is a unit box of the current frame to
 keep, and becomes the camera. Upscaling is the only paid step: it runs only for
 a lobby never upscaled before, is quoted from the timings of past runs and
 Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds

@@ -39,6 +39,11 @@ CONTAINER_SECONDS = L4_PER_SECOND + 8 * CPU_CORE_PER_SECOND + 16 * MEMORY_GIB_PE
 # loosely from past runs; the quote rounds up rather than down.
 STARTUP_SECONDS = 120
 TIMEOUT_SECONDS = 900
+# A display-time trim is for strips: past this much of an edge it crops composition
+# on every display, and a fitted camera keeps more sharpness for the same result.
+TRIM_LIMIT = 0.15
+# Matte is measured on a 1920-wide preview, so round the trim out a little.
+TRIM_MARGIN = 0.003
 # The most estimated work one job is allowed to take on, leaving the cap room
 # for a slow container rather than cutting a batch off half-way.
 BATCH_SECONDS = 600
@@ -517,6 +522,8 @@ def main():
                    help='Unit box of the current frame to keep, from its top-left')
     p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Use this camera recipe (before --crop)')
     p.add_argument('--fit', action='store_true', help='Zoom and recentre the camera until the preview shows no matte')
+    p.add_argument('--trim-edges', action='store_true',
+                   help='Keep the camera and crop thin matte strips at display time instead, through the framing sidecar')
     p.add_argument('--from-sidecar', action='store_true', help='With --reframe, use the crop box saved by the framing editor')
     p.add_argument('--preview', action='store_true', help='Render and measure the preview, then stop')
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
@@ -639,10 +646,16 @@ def main():
         log(f'Preview {preview}')
         log(f'  {animation}: {duration:.3f}s loop; worst matte over the loop {matte}px '
             + ('(clean)' if calibrate.clean(edges) else '(MATTE: the camera leaves part of the frame uncovered)'))
+        # Matte depth per edge as a fraction of the frame, the shape a sidecar bleed takes.
+        # A strip along a side costs a narrow display nothing, which already crops more
+        # than the strip; zooming the camera instead removes that art from every display.
+        margins = {k: round(edges[k] / (512 if k in ('left', 'right') else 288), 4) for k in ('top', 'left', 'bottom', 'right')}
+        trim = {k: min(round(v + TRIM_MARGIN, 4), 0.45) for k, v in margins.items() if v > 0} if not calibrate.clean(edges) else {}
         free = not lobby or restored_complete(workspace, asset)
         existing = output / target.names[0] if title else None
         emit(a.json, 'preview', asset=asset, title=title, animation=animation, image=str(preview), seconds=duration,
-             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free,
+             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free, edges=margins,
+             trimmable=bool(trim) and max(trim.values()) <= TRIM_LIMIT,
              quote=None if free else quote(workspace, asset),
              replaces=str(existing) if existing and existing.exists() else None)
         if a.preview:
@@ -651,7 +664,11 @@ def main():
         # Before anything slow or paid: an existing wallpaper is only replaced on request.
         if existing.exists() and not a.replace:
             raise SystemExit(f'{existing.name} already exists in {output}; pass --replace to archive it and install over it.')
-        if not calibrate.clean(edges) and not a.allow_matte:
+        if a.trim_edges and trim:
+            if max(trim.values()) > TRIM_LIMIT:
+                raise SystemExit(f'The matte reaches {max(margins.values()):.0%} into the frame, too deep to trim at display time; use --fit.')
+            log(f'Trimming matte at display time: {trim}')
+        elif not calibrate.clean(edges) and not a.allow_matte:
             raise SystemExit('Stopping before export because the preview shows matte; adjust the crop or pass --allow-matte.')
 
         job.mkdir()
@@ -670,6 +687,12 @@ def main():
         staged = target.export(job, duration, modal, log)
         keep_camera = True
         final = install(staged, target.names, output, a.replace, clear_framing=changed, log=log)
+        if a.trim_edges and trim:
+            sidecar = output / target.names[3]
+            data = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+            data['bleed'] = trim
+            sidecar.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+            log(f'Wrote the trim to {sidecar.name}.')
         if changed and target.tracked.exists():
             write_cameras(target.tracked, target.with_camera(json.loads(target.tracked.read_text()), camera))
             log(f'Recorded the camera in {target.tracked.relative_to(REPO)}; commit it to keep the recipe.')
