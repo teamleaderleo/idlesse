@@ -170,9 +170,14 @@ python3 scripts/media-batch/ingest.py hanako_home --crop 0.1 0 0.8 0.8 --preview
 
 It renders a free preview from the original textures and measures matte across
 the loop before anything else; `--preview` stops there, and matte stops the run
-unless `--allow-matte`. `--fit` runs the camera solver on the preview first, so a
+unless `--allow-matte`. `--fit` renders the whole scene zoomed out, marks the matte reachable from its edges in every sampled frame, and frames the largest box clear of it; the step solver only runs if that still leaves matte. The solver alone zoomed Hoshino (Swimsuit) to 1.81 and cut off her head chasing a notched corner, where the painted-area box frames the whole scene at 1.26. When the painted area is taller or wider than the frame there is room to choose, and `--fit-toward X Y` says which way to lean: `0.5 0` keeps the top of a tall scene, where a lobby's face usually is (Saki's sits above the centred box). It also runs the camera solver on the preview first, so a
 lobby whose art leaves a wedge uncovered is zoomed just enough to cover the
-frame; `--camera Z CX CY` pins a recipe instead. `--crop X Y W H` is a unit box of the current frame to
+frame; `--camera Z CX CY` pins a recipe instead. `--trim-edges` keeps the camera and
+writes the matte depth on each edge into the sidecar as bleed, up to 15% of an
+edge. Prefer it for thin strips: a narrower display already crops more than a side
+strip, so it loses nothing, while a camera zoom removes that art everywhere. Most
+lobbies' matte is a strip of a few percent; a deep wedge or stray spare pose still
+wants `--fit`. `--crop X Y W H` is a unit box of the current frame to
 keep, and becomes the camera. Upscaling is the only paid step: it runs only for
 a lobby never upscaled before, is quoted from the timings of past runs and
 Modal's list prices (a typical lobby is a few cents; the 15-minute cap bounds
@@ -183,6 +188,11 @@ startup. `--upscale a b c` upscales several lobbies in one job instead, so later
 imports of each are free; all 34 lobbies still unupscaled here quote at about
 $0.18 together against $1.61 one by one. It refuses work estimated past 600
 seconds, leaving the 15-minute cap room.
+
+`--update-names` caches lobby names from SchaleDB's public student list, whose
+`DevName` is the lobby code (`CH0064` is `ch0064_home`); it matched 41 of 43
+hand-chosen titles, the other two only adding a suffix. `--list` then names every
+lobby, and recognises older installs by file name and by text receipts.
 
 In the app, **Wallpaper → Import Lobby…** does the same through this script. It
 lists every extracted lobby with its state (installed, free, or the upscale
@@ -203,7 +213,11 @@ video. To keep full detail, render the crop as the camera instead:
 python3 scripts/media-batch/ingest.py --reframe ".../<Title>-Restored-4K60.mp4" --from-sidecar
 ```
 
-or press **Re-render Camera…** in the editor, which runs exactly that. It reads
+or press **Re-render Camera…** in the editor, which runs exactly that. Azur Lane
+exports re-render the same way: the receipt's `kind` picks `build/azur-spine` or
+`build/azur-render` beside this workspace and `scripts/azur-lane/export.py`
+renders them from their original textures, so it is always local. A Live2D crop
+is stored as a whole-stage `view`, so the background is cropped with the model. It reads
 the camera the export was made with from its `.source.json`, composes the crop on
 top, exports locally from the existing upscaled textures, archives the old file
 in `superseded-<date>/`, renames the new file over it atomically (a playing wallpaper keeps the old inode until it reloads), and removes the crop box and

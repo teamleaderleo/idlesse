@@ -48,7 +48,7 @@ Do not go back to `PIXI.Assets.load` for them, and do not try to fix this with `
 
 ### Camera recipes
 
-`spine/cameras.json` holds `[zoom, cx, cy]` per asset, and `live2d/cameras.json` a zoom scalar. Both take the same per-animation object form as the lobby renderer, since a recipe is framed against the posed skeleton and is only valid for the animation it was tuned on.
+`spine/cameras.json` holds `[zoom, cx, cy]` per asset. `live2d/cameras.json` holds a zoom scalar for the character, or `{"zoom": n, "view": [zoom, cx, cy]}` where `view` frames the whole stage, background included; a crop re-rendered through `media-batch/ingest.py --reframe` is written as a view. Both take the same per-animation object form as the lobby renderer, since a recipe is framed against the posed skeleton and is only valid for the animation it was tuned on.
 
 The spine adapter needs these more than the lobby one does. Skeleton bounds cover the whole rig including transparent effect padding, so fitting bounds alone leaves a character-only model small inside the renderer's `0x18202b` background — `hu`, `makesi` and `qianwei` were 68%, 56% and 64% background before they were calibrated. Anything without a recipe falls back to that bare fit, so a newly prepared asset needs one before it is worth exporting.
 

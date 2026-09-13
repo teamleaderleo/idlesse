@@ -39,6 +39,11 @@ CONTAINER_SECONDS = L4_PER_SECOND + 8 * CPU_CORE_PER_SECOND + 16 * MEMORY_GIB_PE
 # loosely from past runs; the quote rounds up rather than down.
 STARTUP_SECONDS = 120
 TIMEOUT_SECONDS = 900
+# A display-time trim is for strips: past this much of an edge it crops composition
+# on every display, and a fitted camera keeps more sharpness for the same result.
+TRIM_LIMIT = 0.15
+# Matte is measured on a 1920-wide preview, so round the trim out a little.
+TRIM_MARGIN = 0.003
 # The most estimated work one job is allowed to take on, leaving the cap room
 # for a slow container rather than cutting a batch off half-way.
 BATCH_SECONDS = 600
@@ -77,13 +82,41 @@ def emit(enabled, event, **fields):
         print('IDLESSE ' + json.dumps({'event': event, **fields}), flush=True)
 
 
+NAMES_URL = 'https://schaledb.com/data/en/students.min.json'
+
+
+def update_names(workspace, log):
+    """Cache lobby names from SchaleDB, whose student DevName is the lobby's code (CH0064 is ch0064_home)."""
+    import urllib.request
+    request = urllib.request.Request(NAMES_URL, headers={'User-Agent': 'Idlesse media pipeline'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = response.read(16 * 1024 * 1024 + 1)
+    if len(data) > 16 * 1024 * 1024:
+        raise SystemExit('The name list is unexpectedly large; not caching it.')
+    students = json.loads(data)
+    students = students.values() if isinstance(students, dict) else students
+    names = {}
+    for student in students:
+        code, name = str(student.get('DevName', '')), student.get('Name')
+        if re.fullmatch(r'CH\d{4}', code, re.I) and isinstance(name, str):
+            names[f'{code.lower()}_home'] = re.sub('-+', '-', re.sub(r'[^A-Za-z0-9]+', '-', name)).strip('-')
+    (workspace / 'lobby-names.json').write_text(json.dumps({'source': NAMES_URL, 'names': names}, indent=2, sort_keys=True))
+    log(f'Cached {len(names)} lobby names from SchaleDB.')
+
+
 def known_titles(workspace, output):
-    """Titles already chosen for an asset: installed receipts first, then local plans."""
+    """Titles for an asset: installed receipts, then local plans, then cached SchaleDB names."""
     titles, installed = {}, {}
+    cache = workspace / 'lobby-names.json'
+    if cache.exists():
+        try:
+            titles.update(json.loads(cache.read_text()).get('names', {}))
+        except ValueError:
+            pass
     for plan in sorted(HERE.glob('plans/*.json')) + [HERE / 'batch.json']:
         try:
             for item in json.loads(plan.read_text())['items']:
-                titles.setdefault(item['id'], item['title'])
+                titles[item['id']] = item['title']
         except (OSError, ValueError, KeyError):
             continue
     for receipt in output.glob('*-Restored-4K60.source.json'):
@@ -94,6 +127,14 @@ def known_titles(workspace, output):
         if data.get('asset'):
             titles[data['asset']] = data.get('title') or titles.get(data['asset'])
             installed.setdefault(data['asset'], []).append(str(receipt.with_name(receipt.name.replace('.source.json', '.mp4'))))
+    for receipt in output.glob('*-Restored-4K60.source.txt'):
+        # Early exports wrote free-text receipts that still name the lobby they came from.
+        try:
+            text = receipt.read_text(errors='replace')[:65536]
+        except OSError:
+            continue
+        for asset in set(re.findall(r'\b([a-z0-9]+(?:_[a-z0-9]+)*_home)\b', text)):
+            installed.setdefault(asset, []).append(str(receipt.with_name(receipt.name.replace('.source.txt', '.mp4'))))
     return titles, installed
 
 
@@ -105,8 +146,12 @@ def list_lobbies(workspace, output):
             continue
         asset = folder.name
         upscaled = restored_complete(workspace, asset)
-        entry = {'asset': asset, 'title': titles.get(asset) or default_title(asset), 'installed': installed.get(asset, []),
-                 'upscaled': upscaled}
+        title = titles.get(asset) or default_title(asset)
+        found = installed.get(asset, [])
+        # Early exports carried a text receipt, so match those by the name they were installed under.
+        if not found and title and (output / f'{title}-Restored-4K60.mp4').exists():
+            found = [str(output / f'{title}-Restored-4K60.mp4')]
+        entry = {'asset': asset, 'title': title, 'installed': found, 'upscaled': upscaled}
         if not upscaled:
             entry['quote'] = quote(workspace, asset)
         lobbies.append(entry)
@@ -354,9 +399,10 @@ def upscale_batch(workspace, assets, yes, json_events, log):
 
 # --- install -----------------------------------------------------------------
 
-def install(staged_dir, title, output, replace, clear_framing, log):
+def install(staged_dir, names, output, replace, clear_framing, log):
+    """Put a staged export in place. `names` is (video, poster, receipt, sidecar)."""
+    video, poster, receipt, sidecar_name = names
     output.mkdir(parents=True, exist_ok=True)
-    video = f'{title}-Restored-4K60.mp4'
     final = output / video
     stamp = datetime.date.today().isoformat()
     if final.exists():
@@ -364,11 +410,11 @@ def install(staged_dir, title, output, replace, clear_framing, log):
             raise SystemExit(f'{final} exists; pass --replace to archive it and install over it.')
         archive = output / f'superseded-{stamp}'
         archive.mkdir(exist_ok=True)
-        for name in (video, f'{title}.jpg', f'{title}-Restored-4K60.source.json', f'{title}-Restored-4K60.framing.json'):
+        for name in names:
             if (output / name).exists() and not (archive / name).exists():
                 shutil.copy2(output / name, archive / name)
         log(f'Archived the previous export in {archive}')
-    for name in (video, f'{title}.jpg', f'{title}-Restored-4K60.source.json'):
+    for name in (video, poster, receipt):
         # Copy beside the target, then rename over it. The rename is atomic, so a
         # wallpaper playing the old file keeps reading the old inode until it
         # reloads, instead of decoding a file being truncated and rewritten under
@@ -376,7 +422,7 @@ def install(staged_dir, title, output, replace, clear_framing, log):
         partial = output / f'.{name}.partial'
         shutil.copyfile(staged_dir / name, partial)
         os.replace(partial, output / name)
-    sidecar = output / f'{title}-Restored-4K60.framing.json'
+    sidecar = output / sidecar_name
     if clear_framing and sidecar.exists():
         data = json.loads(sidecar.read_text())
         dropped = [k for k in ('bleed', 'focus') if data.pop(k, None) is not None]
@@ -387,6 +433,79 @@ def install(staged_dir, title, output, replace, clear_framing, log):
                 sidecar.unlink()
             log(f'The new camera replaces the sidecar {" and ".join(dropped)}; kept {sorted(data) or "nothing else"}.')
     return final
+
+
+class Target:
+    """What is being rendered, and where its camera, files and exporter live.
+
+    `lobby` is a Blue Archive lobby from assets-pc, exported by run.py (and the
+    only kind that can need a paid upscale). `spine` and `live2d` are Azur Lane
+    models already exported by scripts/azur-lane/export.py from original textures;
+    they only come through --reframe, which is always local.
+    """
+    def __init__(self, kind, workspace, asset, animation, title, output):
+        self.kind, self.workspace, self.asset, self.animation, self.title, self.output = kind, workspace, asset, animation, title, output
+        if kind == 'lobby':
+            self.asset_path = f'assets-pc/{asset}'
+            self.stem = stem_of(workspace, asset)
+            self.tracked = HERE / 'cameras.json'
+        else:
+            self.asset_path = f'models/{asset}'
+            self.stem = asset
+            self.tracked = REPO / 'scripts/azur-lane' / kind / 'cameras.json'
+        self.cameras_path = workspace / 'cameras.json'
+
+    @property
+    def names(self):
+        if self.kind == 'lobby':
+            base = f'{self.title}-Restored-4K60'
+            return (f'{base}.mp4', f'{self.title}.jpg', f'{base}.source.json', f'{base}.framing.json')
+        base = f'{self.title}-4K60'
+        return (f'{base}.mp4', f'{self.title}.jpg', f'{base}.source.json', f'{base}.framing.json')
+
+    def recipe(self, cameras):
+        if self.kind == 'live2d':
+            entry = cameras.get(self.stem)
+            return list(entry['view']) if isinstance(entry, dict) and entry.get('view') else None
+        return recipe_for(cameras, self.stem, self.animation)
+
+    def with_camera(self, cameras, camera):
+        if self.kind == 'live2d':
+            # The Live2D recipe's number zooms the character alone; a crop frames the
+            # whole stage, so it is kept beside that zoom as `view`.
+            entry = cameras.get(self.stem, 1)
+            zoom = entry if isinstance(entry, (int, float)) else entry.get('zoom', 1)
+            return {**cameras, self.stem: {'zoom': zoom, 'view': camera}}
+        return with_recipe(cameras, self.stem, self.animation, camera)
+
+    def apply(self, calibrate, camera):
+        cameras = json.loads(self.cameras_path.read_text()) if self.cameras_path.exists() else {}
+        write_cameras(self.cameras_path, self.with_camera(cameras, camera))
+        # The lobby and Spine renderers bundle their recipes; Live2D fetches them.
+        if self.kind != 'live2d':
+            calibrate.rebundle(self.workspace)
+
+    def export(self, job, duration, modal, log):
+        staged = job / 'out'
+        if self.kind == 'lobby':
+            plan = job / 'plan.json'
+            plan.write_text(json.dumps({'schema': 1, 'model': PLAN_MODEL, 'source': PLAN_SOURCE, 'items': [
+                {'id': self.asset, 'title': self.title, 'stem': self.stem, 'animation': self.animation, 'seconds': duration}]}, indent=2))
+            subprocess.run([sys.executable, str(HERE / 'run.py'), '--root', str(self.workspace), '--output', str(staged),
+                            '--plan', str(plan), '--job-name', job.name, '--port', '0', '--modal', modal], check=True)
+        else:
+            plan = job / 'plan.json'
+            plan.write_text(json.dumps({'items': [{**self.item, 'animation': self.animation}]}, indent=2))
+            azur = self.workspace.parent
+            subprocess.run([sys.executable, str(REPO / 'scripts/azur-lane/export.py'), '--plan', str(plan),
+                            '--live2d-root', str(azur / 'azur-render'), '--spine-root', str(azur / 'azur-spine'),
+                            '--output', str(staged), '--job', str(job / 'state')], check=True)
+        return staged
+
+
+def azur_title(title):
+    """export.py's file name for a plan title."""
+    return re.sub('-+', '-', re.sub(r'[^\w.-]+', '-', title)).strip('-')
 
 
 # --- main --------------------------------------------------------------------
@@ -403,6 +522,10 @@ def main():
                    help='Unit box of the current frame to keep, from its top-left')
     p.add_argument('--camera', type=float, nargs=3, metavar=('ZOOM', 'CX', 'CY'), help='Use this camera recipe (before --crop)')
     p.add_argument('--fit', action='store_true', help='Zoom and recentre the camera until the preview shows no matte')
+    p.add_argument('--fit-toward', type=float, nargs=2, default=[0.5, 0.5], metavar=('X', 'Y'),
+                   help='Where --fit leans when the painted area has room to spare; 0.5 0 keeps the top of a tall scene')
+    p.add_argument('--trim-edges', action='store_true',
+                   help='Keep the camera and crop thin matte strips at display time instead, through the framing sidecar')
     p.add_argument('--from-sidecar', action='store_true', help='With --reframe, use the crop box saved by the framing editor')
     p.add_argument('--preview', action='store_true', help='Render and measure the preview, then stop')
     p.add_argument('--allow-matte', action='store_true', help='Export even if the preview shows matte')
@@ -412,6 +535,7 @@ def main():
     p.add_argument('--output', type=Path, help=f'Install folder (default: {DEFAULT_OUTPUT}, or the reframed file\'s folder)')
     p.add_argument('--upscale', nargs='+', metavar='ASSET',
                    help='Upscale these lobbies together in one quoted Modal job, so later imports are free')
+    p.add_argument('--update-names', action='store_true', help='Cache lobby names from SchaleDB for --list and default titles')
     p.add_argument('--list', action='store_true', help='Print every extracted lobby as JSON, with install and upscale state')
     p.add_argument('--json', action='store_true', help='Also print IDLESSE-prefixed JSON events, for the app')
     a = p.parse_args()
@@ -420,6 +544,10 @@ def main():
     calibrate = load('calibrate')
     register_with_app(workspace)
     log = lambda message: print(message, flush=True)
+    if a.update_names:
+        update_names(workspace, log)
+        if not a.list:
+            return
     if a.list:
         print(json.dumps(list_lobbies(workspace, (a.output or DEFAULT_OUTPUT).expanduser().resolve()), indent=2))
         return
@@ -434,11 +562,20 @@ def main():
         if not receipt_path.exists():
             raise SystemExit(f'No {receipt_path.name} beside it; only pipeline exports can be re-rendered.')
         receipt = json.loads(receipt_path.read_text())
-        asset, animation = receipt['asset'], receipt['animation']
-        title = a.title or receipt.get('title') or re.sub(r'-Restored-4K60$', '', media.stem)
-        if media.name != f'{title}-Restored-4K60.mp4':
-            raise SystemExit(f'Expected {title}-Restored-4K60.mp4, got {media.name}; pass --title.')
         output = (a.output or media.parent).expanduser().resolve()
+        if receipt.get('asset'):
+            title = safe_name(a.title or receipt.get('title') or re.sub(r'-Restored-4K60$', '', media.stem))
+            target = Target('lobby', workspace, receipt['asset'], receipt['animation'], title, output)
+        elif receipt.get('kind') in ('spine', 'live2d') and receipt.get('id'):
+            root = workspace.parent / ('azur-spine' if receipt['kind'] == 'spine' else 'azur-render')
+            if not (root / 'render').exists():
+                raise SystemExit(f'No Azur Lane {receipt["kind"]} workspace at {root}.')
+            target = Target(receipt['kind'], root, safe_name(receipt['id']), receipt['animation'], azur_title(receipt['title']), output)
+            target.item = {k: receipt[k] for k in ('id', 'kind', 'title') if k in receipt}
+        else:
+            raise SystemExit(f'{receipt_path.name} does not say which asset it was rendered from.')
+        if target.names[0] != media.name:
+            raise SystemExit(f'Expected {target.names[0]}, got {media.name}; pass --title.')
         a.replace = True
         if a.from_sidecar:
             sidecar = media.with_name(media.stem + '.framing.json')
@@ -447,112 +584,135 @@ def main():
                 raise SystemExit('The sidecar has no crop box to use; draw one in Adjust Framing… first.')
             left, top = bleed.get('left', 0), bleed.get('top', 0)
             a.crop = [left, top, 1 - left - bleed.get('right', 0), 1 - top - bleed.get('bottom', 0)]
-        if not a.crop:
-            raise SystemExit('--reframe needs --crop or --from-sidecar.')
+        if not a.crop and not a.fit and not a.camera:
+            raise SystemExit('--reframe needs --crop, --from-sidecar, --camera or --fit.')
     else:
         if a.fetch:
             asset = safe_name(a.fetch)
             if not (workspace / 'assets-pc' / asset).exists():
                 fetch(asset, workspace)
         elif not a.source:
-            p.error('give an asset id, a folder or ZIP, --fetch, or --reframe')
+            p.error('give an asset id, a folder or ZIP, --fetch, --upscale, --list or --reframe')
         elif (workspace / 'assets-pc' / a.source).is_dir() and '/' not in a.source:
             asset = a.source
         else:
             asset = adopt_source(a.source, workspace, a.asset)
-        animation = a.animation
-        title = a.title or default_title(asset)
+        title = a.title or known_titles(workspace, (a.output or DEFAULT_OUTPUT).expanduser().resolve())[0].get(asset) or default_title(asset)
         if not title and not a.preview:
             raise SystemExit(f'{asset} has no readable name; pass --title.')
-        output = (a.output or DEFAULT_OUTPUT).expanduser().resolve()
-    title = safe_name(title) if title else None
-    stem = stem_of(workspace, asset)
+        target = Target('lobby', workspace, asset, a.animation, safe_name(title) if title else None,
+                        (a.output or DEFAULT_OUTPUT).expanduser().resolve())
+    asset, stem, animation, title, output = target.asset, target.stem, target.animation, target.title, target.output
+    lobby = target.kind == 'lobby'
 
     # Camera: the recipe the installed export was rendered with when re-framing,
     # otherwise whatever the workspace would use, then the crop applied on top.
-    cameras_path = workspace / 'cameras.json'
+    cameras_path = target.cameras_path
     cameras = json.loads(cameras_path.read_text()) if cameras_path.exists() else {}
-    base = (receipt or {}).get('camera') or recipe_for(cameras, stem, animation)
+    base = (receipt or {}).get('camera') or target.recipe(cameras)
     if a.camera:
         base = [round(v, 4) for v in a.camera]
     camera = crop_to_camera(base, a.crop) if a.crop else base
     original_cameras = cameras_path.read_text() if cameras_path.exists() else None
-    changed = camera is not None and camera != recipe_for(cameras, stem, animation)
-    job = workspace / f'ingest-{asset}-{datetime.datetime.now():%Y%m%d-%H%M%S}'
+    changed = camera is not None and camera != target.recipe(cameras)
+    job = target.workspace / f'ingest-{asset}-{datetime.datetime.now():%Y%m%d-%H%M%S}'
     keep_camera = False
-    server = calibrate.serve(workspace)
+    server = calibrate.serve(target.workspace)
     try:
-        def use_camera(recipe):
-            write_cameras(cameras_path, with_recipe(cameras, stem, animation, recipe))
-            calibrate.rebundle(workspace)
         if changed:
-            use_camera(camera)
+            target.apply(calibrate, camera)
             log(f'Camera for {stem}/{animation}: {base or "fit"} -> {camera}')
 
-        # Preview from the original textures: same skeleton, same framing, and free.
-        preview_args = argparse.Namespace(asset=f'assets-pc/{asset}', stem=stem, animation=animation, seconds=0.0)
-        edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
+        # Preview through the same renderer (for a lobby, from the original
+        # textures: same skeleton and framing, and free).
+        preview_args = argparse.Namespace(asset=target.asset_path, stem=stem, animation=animation, seconds=0.0)
+        edges, image, duration = calibrate.worst_edges(target.workspace, server, preview_args, 1920, 1080, 4)
+        # An import fits only when it has to; a re-render asked to fit re-frames even a clean camera.
+        if a.fit and duration and (a.reframe or not calibrate.clean(edges)) and target.kind != 'live2d':
+            # Frame the largest painted area first; it keeps far more of an irregular
+            # scene than stepping the zoom towards the matte does.
+            with tempfile.TemporaryDirectory() as tmp:
+                _, meta = calibrate.render(target.workspace, server, target.asset_path, stem, animation, Path(tmp) / 'm', 64, 36, 0)
+            boxed = calibrate.fit_to_painted_area(target.workspace, server, target.asset_path, stem, animation, duration,
+                                                  meta.get('bounds'), lambda recipe: target.apply(calibrate, recipe),
+                                                  toward=tuple(a.fit_toward))
+            if boxed:
+                camera = boxed
+                target.apply(calibrate, camera)
+                changed = True
+                edges, image, duration = calibrate.worst_edges(target.workspace, server, preview_args, 1920, 1080, 4)
+                log(f'  fitted to the painted area: {camera} -> worst matte {edges["_native"]}px')
         if a.fit and duration:
             for round_ in range(8):
                 if calibrate.clean(edges):
                     break
                 camera = calibrate.next_camera(camera or [1.0, 0.5, 0.5], edges)
-                use_camera(camera)
+                target.apply(calibrate, camera)
                 changed = True
-                edges, image, duration = calibrate.worst_edges(workspace, server, preview_args, 1920, 1080, 4)
+                edges, image, duration = calibrate.worst_edges(target.workspace, server, preview_args, 1920, 1080, 4)
                 log(f'  fit round {round_ + 1}: {camera} -> worst matte {edges["_native"]}px')
         previews = workspace / 'ingest-previews'
         previews.mkdir(exist_ok=True)
         preview = previews / f'{asset}-{animation}.png'
         image.save(preview)
         if not duration:
-            meta_animations = []
             with tempfile.TemporaryDirectory() as tmp:
-                _, meta = calibrate.render(workspace, server, f'assets-pc/{asset}', stem, animation, Path(tmp) / 'm', 64, 36, 0)
-                meta_animations = [x['name'] for x in meta.get('animations', [])]
-            raise SystemExit(f'{stem} has no animation {animation!r}; it has {meta_animations}.')
+                _, meta = calibrate.render(target.workspace, server, target.asset_path, stem, animation, Path(tmp) / 'm', 64, 36, 0)
+            raise SystemExit(f'{stem} has no animation {animation!r}; it has {[x["name"] for x in meta.get("animations", [])]}.')
         matte = edges['_native']
         log(f'Preview {preview}')
         log(f'  {animation}: {duration:.3f}s loop; worst matte over the loop {matte}px '
             + ('(clean)' if calibrate.clean(edges) else '(MATTE: the camera leaves part of the frame uncovered)'))
-        free = restored_complete(workspace, asset)
+        # Matte depth per edge as a fraction of the frame, the shape a sidecar bleed takes.
+        # A strip along a side costs a narrow display nothing, which already crops more
+        # than the strip; zooming the camera instead removes that art from every display.
+        margins = {k: round(edges[k] / (512 if k in ('left', 'right') else 288), 4) for k in ('top', 'left', 'bottom', 'right')}
+        trim = {k: min(round(v + TRIM_MARGIN, 4), 0.45) for k, v in margins.items() if v > 0} if not calibrate.clean(edges) else {}
+        free = not lobby or restored_complete(workspace, asset)
+        existing = output / target.names[0] if title else None
         emit(a.json, 'preview', asset=asset, title=title, animation=animation, image=str(preview), seconds=duration,
-             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free,
-             quote=None if free else quote(workspace, asset), replaces=str(output / f'{title}-Restored-4K60.mp4')
-             if title and (output / f'{title}-Restored-4K60.mp4').exists() else None)
+             matte=matte, clean=calibrate.clean(edges), camera=camera, upscaled=free, edges=margins,
+             trimmable=bool(trim) and max(trim.values()) <= TRIM_LIMIT,
+             quote=None if free else quote(workspace, asset),
+             replaces=str(existing) if existing and existing.exists() else None)
         if a.preview:
             log('Preview only: nothing exported, camera left as it was.')
             return
         # Before anything slow or paid: an existing wallpaper is only replaced on request.
-        if (output / f'{title}-Restored-4K60.mp4').exists() and not a.replace:
-            raise SystemExit(f'{title}-Restored-4K60.mp4 already exists in {output}; pass --replace to archive it and install over it.')
-        if not calibrate.clean(edges) and not a.allow_matte:
+        if existing.exists() and not a.replace:
+            raise SystemExit(f'{existing.name} already exists in {output}; pass --replace to archive it and install over it.')
+        if a.trim_edges and trim:
+            if max(trim.values()) > TRIM_LIMIT:
+                raise SystemExit(f'The matte reaches {max(margins.values()):.0%} into the frame, too deep to trim at display time; use --fit.')
+            log(f'Trimming matte at display time: {trim}')
+        elif not calibrate.clean(edges) and not a.allow_matte:
             raise SystemExit('Stopping before export because the preview shows matte; adjust the crop or pass --allow-matte.')
 
         job.mkdir()
-        if free:
+        modal = '/usr/bin/false'
+        if lobby and free:
             prepare_free_restore(workspace, asset, job)
-            modal = '/usr/bin/false'
             log('Textures were upscaled before; this export is local and free.')
-        else:
+        elif lobby:
             modal = find_modal()
             if not modal:
                 raise SystemExit('This lobby needs upscaling, and the modal CLI is not installed.')
             confirm_paid(workspace, asset, a.yes)
+        else:
+            log('Azur Lane models render from their original textures; this export is local and free.')
 
-        plan = job / 'plan.json'
-        plan.write_text(json.dumps({'schema': 1, 'model': PLAN_MODEL, 'source': PLAN_SOURCE, 'items': [
-            {'id': asset, 'title': title, 'stem': stem, 'animation': animation, 'seconds': duration}]}, indent=2))
-        staged = job / 'out'
-        subprocess.run([sys.executable if Path(sys.executable).exists() else 'python3', str(HERE / 'run.py'),
-                        '--root', str(workspace), '--output', str(staged), '--plan', str(plan),
-                        '--job-name', job.name, '--port', '0', '--modal', modal], check=True)
+        staged = target.export(job, duration, modal, log)
         keep_camera = True
-        final = install(staged, title, output, a.replace, clear_framing=changed, log=log)
-        if changed:
-            tracked = HERE / 'cameras.json'
-            write_cameras(tracked, with_recipe(json.loads(tracked.read_text()), stem, animation, camera))
-            log(f'Recorded the camera in {tracked.relative_to(REPO)}; commit it to keep the recipe.')
+        final = install(staged, target.names, output, a.replace, clear_framing=changed, log=log)
+        if a.trim_edges and trim:
+            sidecar = output / target.names[3]
+            data = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+            data['bleed'] = trim
+            sidecar.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+            log(f'Wrote the trim to {sidecar.name}.')
+        if changed and target.tracked.exists():
+            write_cameras(target.tracked, target.with_camera(json.loads(target.tracked.read_text()), camera))
+            log(f'Recorded the camera in {target.tracked.relative_to(REPO)}; commit it to keep the recipe.')
         log(f'\nInstalled {final}')
         emit(a.json, 'installed', path=str(final), camera=camera)
         log('A Library source watching that folder picks it up; otherwise Import… it once. '
@@ -564,7 +724,8 @@ def main():
                 cameras_path.unlink(missing_ok=True)
             else:
                 cameras_path.write_text(original_cameras)
-            calibrate.rebundle(workspace)
+            if target.kind != 'live2d':
+                calibrate.rebundle(target.workspace)
 
 
 if __name__ == '__main__':
