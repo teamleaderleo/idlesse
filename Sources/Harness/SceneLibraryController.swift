@@ -93,6 +93,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let thumbnailQueue = DispatchQueue(label: "Idlesse.library.thumbnails", qos: .utility)
     private let thumbnails = NSCache<NSString, NSImage>()
     private var pendingThumbnails: [String: [(NSImage) -> Void]] = [:]
+    private var thumbnailRevisions: [String: UInt] = [:]
     private var thumbnailJobsStarted = 0
     private let scroll = NSScrollView()
     private let right = NSStackView()
@@ -719,17 +720,20 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
     func requestThumbnail(for item: Item, completion: @escaping (NSImage) -> Void) {
         thumbnails.countLimit = 64
-        if pendingThumbnails[item.id] != nil {
-            pendingThumbnails[item.id]?.append(completion)
+        let revision = thumbnailRevisions[item.id, default: 0]
+        let requestID = revision == 0 ? item.id : "\(item.id)|\(revision)"
+        if pendingThumbnails[requestID] != nil {
+            pendingThumbnails[requestID]?.append(completion)
             return
         }
         guard let opened = try? open(item) else { return }
-        pendingThumbnails[item.id] = [completion]
+        pendingThumbnails[requestID] = [completion]
         thumbnailJobsStarted += 1
         let finish: (NSImage?) -> Void = { [weak self] image in
             DispatchQueue.main.async {
                 guard let self else { return }
-                let callbacks = self.pendingThumbnails.removeValue(forKey: item.id) ?? []
+                let callbacks = self.pendingThumbnails.removeValue(forKey: requestID) ?? []
+                guard self.thumbnailRevisions[item.id, default: 0] == revision else { return }
                 if let image { callbacks.forEach { $0(image) } }
             }
         }
@@ -738,7 +742,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             guard let self else { return }
             let source = opened.url
             let stamp = try? source.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let key = "\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
+            let key = "\(item.id)|\(revision)|\(source.path)|\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(stamp?.fileSize ?? 0)" as NSString
             if let image = self.thumbnails.object(forKey: key) {
                 finish(image)
                 return
@@ -750,7 +754,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 image = Self.listThumbnail(source.appendingPathComponent("preview.jpg"))
                     ?? Self.listThumbnail(source.appendingPathComponent("preview.png"))
                     ?? Self.packageAssetThumbnail(source)
-            } else if let still = Self.listThumbnail(source) ?? Self.decodedStill(source) {
+            } else if let still = Self.listThumbnail(source) {
                 image = still
             } else if let sidecar = Self.listThumbnail(source.deletingPathExtension().appendingPathExtension("jpg"))
                 ?? Self.listThumbnail(source.deletingLastPathComponent().appendingPathComponent(source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "-Restored-4K60", with: "") + ".jpg")) {
@@ -779,7 +783,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         guard let scene = try? LocalSceneSource.read(package) else { return nil }
         let candidates: [URL] = ([scene.assetURL] + scene.allNodes.map(\.assetURL)).compactMap { $0 }
         for url in candidates {
-            if let thumb = listThumbnail(url) ?? decodedStill(url) { return thumb }
+            if let thumb = listThumbnail(url) { return thumb }
             if ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
@@ -811,22 +815,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return nil
         }
     }
-    private static func decodedStill(_ url: URL) -> CGImage? {
-        guard ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"].contains(url.pathExtension.lowercased()),
-              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let full = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let maxSide = max(full.width, full.height)
-        guard maxSide > 320 else { return full }
-        let scale = 320.0 / Double(maxSide)
-        let w = max(1, Int((Double(full.width) * scale).rounded()))
-        let h = max(1, Int((Double(full.height) * scale).rounded()))
-        guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
-            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return full }
-        context.interpolationQuality = .high
-        context.draw(full, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return context.makeImage() ?? full
-    }
     func tableViewSelectionDidChange(_ notification: Notification) {
         let next = items.indices.contains(table.selectedRow) ? items[table.selectedRow] : nil
         guard next?.id != selected?.id else { return }
@@ -841,7 +829,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return OpenedItem(url: access.url, access: access)
     }
     @objc private func refreshPreview() {
-        if let selected { cache.removeValue(forKey: selected.id); cacheOrder.removeAll { $0 == selected.id } }
+        if let selected {
+            cache.removeValue(forKey: selected.id)
+            cacheOrder.removeAll { $0 == selected.id }
+            thumbnailRevisions[selected.id, default: 0] &+= 1
+            gridView.refreshThumbnail(id: selected.id)
+            if let index = items.firstIndex(where: { $0.id == selected.id }) {
+                table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
+            }
+        }
         preview()
     }
     @objc private func clearTaskStatus() { reportTask("") }
@@ -1633,6 +1629,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         while thumbnailCompletions < 2 && Date() < thumbDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         precondition(thumbnailCompletions == 2 && controller.pendingThumbnails[duplicateRequest.id] == nil)
         print("Shared thumbnail: 2 consumers, 1 job, \(Int((ProcessInfo.processInfo.systemUptime - thumbnailStart) * 1000)) ms")
+
+        var staleDelivered = false
+        var refreshedThumbnail: NSImage?
+        controller.requestThumbnail(for: duplicateRequest) { _ in staleDelivered = true }
+        controller.thumbnailRevisions[duplicateRequest.id, default: 0] &+= 1
+        controller.requestThumbnail(for: duplicateRequest) { refreshedThumbnail = $0 }
+        let refreshDeadline = Date().addingTimeInterval(10)
+        while (refreshedThumbnail == nil || !controller.pendingThumbnails.isEmpty) && Date() < refreshDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        precondition(!staleDelivered, "A refreshed thumbnail must reject the older in-flight result")
+        precondition(refreshedThumbnail != nil)
+        precondition(max(refreshedThumbnail!.size.width, refreshedThumbnail!.size.height) <= 320)
 
         let originalDetail = controller.detail.stringValue
         controller.reportTask("Importing 1 of 2…")

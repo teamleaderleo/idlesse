@@ -110,6 +110,13 @@ final class LibraryGridView: NSView {
         relayout()
     }
 
+    func refreshThumbnail(id: String) {
+        guard let request = onRequestThumbnail else { return }
+        for card in activeCards.values where card.item?.id == id {
+            card.requestThumbnail(using: request)
+        }
+    }
+
     func select(id: String?) {
         selectedID = id
         for card in activeCards.values {

@@ -269,3 +269,8 @@ Each nonempty query scores each title once and reuses scores for sorting. Ordina
 browsing skips media-type inference unless a type filter is active, and collection
 membership/order uses one lookup map per refresh. Smoke checks cover rapid query
 replacement and immediate commit. Live UI checks cover typing, Return, and clear.
+
+Refresh Preview also invalidates the selected gallery/list thumbnail. Revision-tagged
+requests prevent older queued results from overwriting the refresh. Still thumbnails
+use ImageIO's 320-pixel thumbnail path only; failed decoding leaves the placeholder
+rather than falling back to allocating a full-resolution bitmap.
