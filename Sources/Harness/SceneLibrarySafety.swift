@@ -1,13 +1,12 @@
 import Foundation
 
-/// Keeps the Library index safe when more than one Idlesse process writes it,
+/// Keeps the selected Library catalog safe when more than one Idlesse process writes it,
 /// and makes every destructive entry removal recoverable.
 ///
-/// Each store rewrites the whole index from its in-memory catalog. A development
-/// build, a smoke probe, or a second copy of the app can therefore hold an older
-/// catalog than the file. Writers take an exclusive lock and replay only their
-/// own changes onto the current disk catalog. Before a write can drop entries,
-/// the previous index and a bounded recovery ledger are durably written first.
+/// Stores hold in-memory catalog snapshots. A development build, smoke probe, or second
+/// app process can therefore be stale. Writers share one exclusive lock; JSON writers
+/// rebase under that lock and the selected SQLite backend uses the same lock plus one
+/// database transaction. Destructive writes persist bounded recovery evidence first.
 extension SceneLibraryStore {
     struct RemovedEntry: Codable, Equatable {
         var entry: Entry
@@ -22,6 +21,7 @@ extension SceneLibraryStore {
     static let keptRemovedEntries = 100
     static let maxRemovalLogBytes = 1_048_576
     static let maxRemovedLedgerBytes = 16_777_216
+    static let maxRecoveryBackupBytes = maxIndexBytes
 
     /// Resolves the Library index for a process. Explicit overrides win; smoke
     /// processes are isolated automatically so a UI probe cannot touch the real Library.
@@ -73,8 +73,18 @@ extension SceneLibraryStore {
         return try body()
     }
 
-    /// The index as it is on disk now, and its exact bytes for recovery backup.
+    /// The currently selected durable catalog. The Data payload is bounded recovery
+    /// evidence: exact JSON bytes before migration, or a current semantic JSON snapshot
+    /// when SQLite is authoritative.
     func readIndex() throws -> (Catalog, Data?) {
+        if !Self.forceJSONBackend, try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file) {
+            let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
+            guard (1...Self.catalogVersion).contains(decoded.version) else {
+                throw Self.libraryFailure("This Library catalog was written by a newer Idlesse version.")
+            }
+            let evidence = try JSONEncoder().encode(decoded)
+            return (decoded, evidence)
+        }
         guard FileManager.default.fileExists(atPath: file.path) else { return (Catalog(), nil) }
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         guard ((attributes[.size] as? NSNumber)?.intValue ?? 0) <= Self.maxIndexBytes else {
@@ -91,7 +101,7 @@ extension SceneLibraryStore {
         return (decoded, data)
     }
 
-    /// Replays the change from `base` to `proposed` onto `disk`, the index another writer left.
+    /// Replays the change from `base` to `proposed` onto `disk`, the catalog another writer left.
     /// Removals elsewhere win over stale edits; additions on both sides are kept.
     static func rebase(_ proposed: Catalog, from base: Catalog, onto disk: Catalog) -> Catalog {
         var result = disk
@@ -194,7 +204,7 @@ extension SceneLibraryStore {
     // MARK: Durable writes and removals
 
     /// Atomic replacement plus a file sync. A process crash can leave the old or
-    /// the new complete file, never a partially encoded catalog.
+    /// the new complete JSON file, never a partially encoded catalog.
     func writeIndexData(_ data: Data) throws { try durableWrite(data, to: file) }
 
     private func durableWrite(_ data: Data, to url: URL) throws {
@@ -207,11 +217,14 @@ extension SceneLibraryStore {
     }
 
     /// Called under the index lock before a write that drops `removed` from `previous`.
-    /// Every required recovery artifact succeeds before the destructive index commit.
+    /// Every required recovery artifact succeeds before the destructive catalog commit.
     func journalRemoval(_ removed: [Entry], previous: Catalog, previousData: Data?) throws {
         guard !removed.isEmpty else { return }
         guard let previousData else {
             throw Self.libraryFailure("The Library could not preserve the previous index before removing items.")
+        }
+        guard previousData.count <= Self.maxRecoveryBackupBytes else {
+            throw Self.libraryFailure("The Library recovery backup is too large, so the removal was cancelled.")
         }
         let manager = FileManager.default
         let now = Date()
