@@ -77,6 +77,10 @@ enum SceneLibrarySQLiteCatalog {
             try synchronizeFile(at: paths.selector)
             try synchronizeDirectory(at: jsonFile.deletingLastPathComponent())
         } catch {
+            // Selector publication is the authority switch. If a later selector or
+            // directory sync fails, remove that selector before rolling the database
+            // back so no process can observe a selected database we are discarding.
+            try? manager.removeItem(at: paths.selector)
             try? manager.removeItem(at: paths.candidate)
             if manager.fileExists(atPath: paths.database.path) {
                 try? manager.removeItem(at: paths.database)
@@ -84,6 +88,7 @@ enum SceneLibrarySQLiteCatalog {
             if hadExistingDatabase, manager.fileExists(atPath: paths.corruptBackup.path) {
                 try? manager.moveItem(at: paths.corruptBackup, to: paths.database)
             }
+            try? synchronizeDirectory(at: jsonFile.deletingLastPathComponent())
             throw error
         }
     }
