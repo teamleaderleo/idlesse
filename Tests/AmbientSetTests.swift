@@ -40,6 +40,19 @@ private struct AmbientSetTests {
             expect(resolution.state.wallpaper == .scene("one"), "winner override not applied")
         }
 
+        // Scene targets persist an explicit variant reference; legacy targets decode as Default.
+        do {
+            let midnight = UUID()
+            let target = AmbientWallpaperTarget.scene("undertow", variantID: midnight)
+            let decoded = try JSONDecoder().decode(AmbientWallpaperTarget.self, from: JSONEncoder().encode(target))
+            expect(decoded == target, "scene variant reference did not round-trip")
+            let legacy = Data(#"{"kind":"scene","id":"undertow"}"#.utf8)
+            let legacyTarget = try JSONDecoder().decode(AmbientWallpaperTarget.self, from: legacy)
+            expect(legacyTarget == .scene("undertow"), "legacy Ambient scene target did not decode as Default")
+            expect(!AmbientWallpaperTarget(kind: .collection, id: "c1", variantID: midnight).isValid,
+                   "collection target accepted a direct variant instead of its per-item selections")
+        }
+
         // Sparse overrides inherit the arrangement default.
         do {
             let set = AmbientSet(id: "reading", name: "Reading", activation: AmbientActivation(),
@@ -121,18 +134,21 @@ private struct AmbientSetTests {
             expect(night?.activation?.solar == .night, "day/night migration lost solar activation")
         }
 
-        // Catalog persistence keeps ordering, rejects stale holds and bounds growth.
+        // Catalog persistence keeps ordering, requested variants, rejects stale holds and bounds growth.
         do {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-ambient-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: folder) }
             let file = folder.appendingPathComponent("ambient-sets.json")
             let store = try AmbientSetStore(fileURL: file)
-            let a = AmbientSet(id: "a", name: "A")
+            let variantID = UUID()
+            let a = AmbientSet(id: "a", name: "A", overrides: .init(wallpaper: .scene("undertow", variantID: variantID)))
             let b = AmbientSet(id: "b", name: "B")
             try store.replaceAll([a, b])
             try store.move(id: "b", to: 0)
             let reloaded = try AmbientSetStore(fileURL: file)
             expect(reloaded.catalog.sets.map(\.id) == ["b", "a"], "priority order did not persist")
+            expect(reloaded.catalog.sets.first(where: { $0.id == "a" })?.overrides.wallpaper == .scene("undertow", variantID: variantID),
+                   "scene variant reference did not survive AmbientSetStore persistence")
             let hold = AmbientManualHold(intent: .set(id: "a"), startedAt: date(2026, 9, 11, 10),
                                          expiry: .at(date(2026, 9, 11, 17)))
             try reloaded.setManualHold(hold)
