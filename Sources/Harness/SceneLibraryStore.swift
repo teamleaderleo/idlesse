@@ -9,9 +9,15 @@ final class SceneLibraryStore {
     static let maxIndividualEntries = 4096
     static let maxSourceEntries = 4096
     static let maxSources = 32
-    /// JSON remains a bounded compatibility/migration source until the SQLite catalog lands.
+    /// JSON remains the bounded compatibility/migration source and recovery snapshot.
     static let maxIndexBytes = 16_777_216
     static let maxBookmarkBytes = 16_384
+
+    /// Foundation-only safety tests can pin the legacy JSON writer while production
+    /// and smoke processes exercise the automatic selector-aware backend.
+    static var forceJSONBackend: Bool {
+        ProcessInfo.processInfo.environment["IDLESSE_LIBRARY_BACKEND"]?.lowercased() == "json"
+    }
 
     struct Entry: Codable, Equatable, Sendable {
         var id: String
@@ -251,20 +257,22 @@ final class SceneLibraryStore {
     }
 
     private(set) var catalog = Catalog()
-    /// The index as this store last read or wrote it; a save replays only the change from here.
+    /// The catalog as this store last read or wrote it; a save replays only the change from here.
     private var base = Catalog()
     let file: URL
 
+    var usesSQLiteCatalog: Bool {
+        guard !Self.forceJSONBackend else { return false }
+        return (try? SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)) == true
+    }
+    var sqliteDatabaseURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).database }
+    var backendSelectorURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).selector }
+
     init(file requestedFile: URL) throws {
         self.file = Self.effectiveIndexURL(requestedFile)
-        guard FileManager.default.fileExists(atPath: self.file.path) else { return }
-        let attributes = try FileManager.default.attributesOfItem(atPath: self.file.path)
-        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
-        guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
-        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: self.file))
-        guard (1...Self.catalogVersion).contains(decoded.version) else {
-            throw failure("This Library index was written by a newer Idlesse version.")
-        }
+        let hasSelector = !Self.forceJSONBackend && (try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: self.file))
+        guard hasSelector || FileManager.default.fileExists(atPath: self.file.path) else { return }
+        let (decoded, _) = try readIndex()
         try validateCatalog(decoded)
         catalog = decoded
         base = decoded
@@ -276,6 +284,10 @@ final class SceneLibraryStore {
         try validateCatalog(disk)
         catalog = disk
         base = disk
+    }
+
+    func debugExportData() throws -> Data {
+        try SceneLibrarySQLiteCatalog.deterministicDebugExport(catalog)
     }
 
     /// Compatibility resolver. Call `access(_:)` while reading source-backed media.
@@ -653,7 +665,7 @@ final class SceneLibraryStore {
     /// Internal transactional hook used by reconciliation and the durable backend.
     func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
 
-    /// A reviewed operation can compare its basis against the current disk catalog
+    /// A reviewed operation can compare its basis against the current selected catalog
     /// while holding the same exclusive lock that protects the eventual write.
     func commitCatalog(_ proposed: Catalog, requiringCurrent condition: @escaping (Catalog) -> Bool,
                        failureMessage: String) throws {
@@ -663,20 +675,48 @@ final class SceneLibraryStore {
     private func save(_ proposed: Catalog, requiringCurrent condition: ((Catalog) -> Bool)? = nil,
                       failureMessage: String = "The Library changed before this operation could be applied.") throws {
         try withIndexLock {
+            let selectorActive = !Self.forceJSONBackend && (try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file))
             let (disk, diskData) = try readIndex()
-            // A decodable but semantically invalid disk catalog is protected just
-            // like unreadable or future-version data: never repair it by overwriting it.
+            // Any selected backend must decode, version-check and semantically validate
+            // before this process is allowed to overwrite durable state.
             try validateCatalog(disk)
             if let condition, !condition(disk) { throw failure(failureMessage) }
             var next = disk == base ? proposed : Self.rebase(proposed, from: base, onto: disk)
             next.version = Self.catalogVersion
             try validateCatalog(next)
-            let data = try JSONEncoder().encode(next)
-            guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+
+            let encodedNext = try JSONEncoder().encode(next)
             let kept = Set(next.entries.map(\.id))
             let removed = disk.entries.filter { !kept.contains($0.id) }
-            if !removed.isEmpty { try journalRemoval(removed, previous: disk, previousData: diskData) }
-            try writeIndexData(data)
+            if !removed.isEmpty {
+                let evidence = diskData ?? (try JSONEncoder().encode(disk))
+                try journalRemoval(removed, previous: disk, previousData: evidence)
+            }
+
+            if selectorActive {
+                try SceneLibrarySQLiteCatalog.applyCatalogDelta(current: disk, next: next, for: file)
+            } else if Self.forceJSONBackend {
+                guard encodedNext.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+                try writeIndexData(encodedNext)
+            } else {
+                // The first mutation activates SQLite. A brand-new Library gets an
+                // exact empty JSON recovery snapshot before candidate construction.
+                if diskData == nil {
+                    let snapshot = try JSONEncoder().encode(disk)
+                    guard snapshot.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+                    try writeIndexData(snapshot)
+                }
+                do {
+                    try SceneLibrarySQLiteCatalog.migrate(disk, fromJSON: file)
+                    try SceneLibrarySQLiteCatalog.applyCatalogDelta(current: disk, next: next, for: file)
+                } catch {
+                    // Until a selector exists JSON is still the sole authority, so a
+                    // failed candidate migration may safely defer without dual-writing.
+                    if (try? SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)) == true { throw error }
+                    guard encodedNext.count <= Self.maxIndexBytes else { throw error }
+                    try writeIndexData(encodedNext)
+                }
+            }
             catalog = next
             base = next
         }
