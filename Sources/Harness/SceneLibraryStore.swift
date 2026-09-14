@@ -270,7 +270,12 @@ final class SceneLibraryStore {
 
     init(file requestedFile: URL) throws {
         self.file = Self.effectiveIndexURL(requestedFile)
-        let hasSelector = !Self.forceJSONBackend && (try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: self.file))
+        let hasSelector: Bool
+        if Self.forceJSONBackend {
+            hasSelector = false
+        } else {
+            hasSelector = try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: self.file)
+        }
         guard hasSelector || FileManager.default.fileExists(atPath: self.file.path) else { return }
         let (decoded, _) = try readIndex()
         try validateCatalog(decoded)
@@ -675,7 +680,12 @@ final class SceneLibraryStore {
     private func save(_ proposed: Catalog, requiringCurrent condition: ((Catalog) -> Bool)? = nil,
                       failureMessage: String = "The Library changed before this operation could be applied.") throws {
         try withIndexLock {
-            let selectorActive = !Self.forceJSONBackend && (try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file))
+            let selectorActive: Bool
+            if Self.forceJSONBackend {
+                selectorActive = false
+            } else {
+                selectorActive = try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)
+            }
             let (disk, diskData) = try readIndex()
             // Any selected backend must decode, version-check and semantically validate
             // before this process is allowed to overwrite durable state.
@@ -689,7 +699,12 @@ final class SceneLibraryStore {
             let kept = Set(next.entries.map(\.id))
             let removed = disk.entries.filter { !kept.contains($0.id) }
             if !removed.isEmpty {
-                let evidence = diskData ?? (try JSONEncoder().encode(disk))
+                let evidence: Data
+                if let diskData {
+                    evidence = diskData
+                } else {
+                    evidence = try JSONEncoder().encode(disk)
+                }
                 try journalRemoval(removed, previous: disk, previousData: evidence)
             }
 
