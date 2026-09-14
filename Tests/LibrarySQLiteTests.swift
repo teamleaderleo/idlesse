@@ -91,7 +91,7 @@ struct LibrarySQLiteChecks {
         let requiredIndexes: Set<String> = [
             "entries_source_catalog_identity", "entries_source_path", "entries_source_availability",
             "entries_media_type", "entry_tags_value", "item_state_recent", "collection_items_scene",
-            "collection_items_selection"
+            "collection_items_selection", "entries_source_group", "user_stack_items_entry", "user_stacks_name_nocase"
         ]
         let indexes = try SceneLibrarySQLiteCatalog.indexNames(at: store.sqliteDatabaseURL)
         precondition(requiredIndexes.isSubset(of: indexes))
@@ -99,7 +99,7 @@ struct LibrarySQLiteChecks {
         let entryColumns = try SceneLibrarySQLiteCatalog.columnNames(table: "entries", at: store.sqliteDatabaseURL)
         let itemColumns = try SceneLibrarySQLiteCatalog.columnNames(table: "collection_items", at: store.sqliteDatabaseURL)
         precondition(sourceColumns.contains("metadata_present"))
-        precondition(entryColumns.isSuperset(of: ["provenance_present", "observation_present"]))
+        precondition(entryColumns.isSuperset(of: ["provenance_present", "observation_present", "group_id"]))
         precondition(itemColumns.contains("variant_id"))
 
         let reopened = try SceneLibraryStore(file: file)
@@ -135,7 +135,7 @@ struct LibrarySQLiteChecks {
         let b = try SceneLibrarySQLiteCatalog.deterministicDebugExport(second)
         precondition(a == b, "Equivalent catalogs produced different debug exports")
         let text = String(decoding: a, as: UTF8.self)
-        precondition(text.contains("idlesse-library-debug-v2"))
+        precondition(text.contains("idlesse-library-debug-v3"))
         precondition(text.contains("sqliteSchemaVersion"))
     }
 
