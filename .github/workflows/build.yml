@@ -27,6 +27,9 @@ jobs:
       - name: Verify unit and preview bounds tests
         run: bash test.sh
 
+      - name: Run canonical wallpaper smoke
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-wallpaper "$PWD/Tests/Fixtures/tiny-loop.mp4"'
+
       - name: Verify bundles
         run: |
           file "build/Idlesse.saver/Contents/MacOS/Idlesse"
