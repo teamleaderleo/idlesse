@@ -255,13 +255,13 @@ final class SceneLibraryStore {
     private var base = Catalog()
     let file: URL
 
-    init(file: URL) throws {
-        self.file = file
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+    init(file requestedFile: URL) throws {
+        self.file = Self.effectiveIndexURL(requestedFile)
+        guard FileManager.default.fileExists(atPath: self.file.path) else { return }
+        let attributes = try FileManager.default.attributesOfItem(atPath: self.file.path)
         let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
         guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
-        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: file))
+        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: self.file))
         guard (1...Self.catalogVersion).contains(decoded.version) else {
             throw failure("This Library index was written by a newer Idlesse version.")
         }
