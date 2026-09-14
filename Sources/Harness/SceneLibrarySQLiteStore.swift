@@ -5,7 +5,7 @@ import SQLite3
 /// Media remains external. The retained JSON file is historical recovery evidence
 /// after activation and is never silently dual-written with the database.
 enum SceneLibrarySQLiteCatalog {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
     static let selectorValue = "sqlite-v2\n"
     static let maxDatabaseBytes: Int64 = 64 * 1024 * 1024
     private static let pageSize = 4096
@@ -97,7 +97,9 @@ enum SceneLibrarySQLiteCatalog {
         guard try hasSQLiteSelector(for: jsonFile) else {
             throw failure("The SQLite Library backend is not active.")
         }
-        return try readCatalog(at: paths(for: jsonFile).database)
+        let url = paths(for: jsonFile).database
+        try upgradeSchemaIfNeeded(at: url)
+        return try readCatalog(at: url)
     }
 
     /// Applies only changed rows/relationships inside one IMMEDIATE transaction.
@@ -110,6 +112,7 @@ enum SceneLibrarySQLiteCatalog {
             throw failure("The SQLite Library backend is not active.")
         }
         let url = paths(for: jsonFile).database
+        try upgradeSchemaIfNeeded(at: url)
         try ensureDatabaseBound(url)
         let db = try Database(url: url, mode: .readWrite)
         try configureWritePragmas(db, isNew: false)
@@ -126,6 +129,7 @@ enum SceneLibrarySQLiteCatalog {
             try applyEntryDeletions(current: current.entries, next: next.entries, in: db)
             try applySources(current: current.sources, next: next.sources, in: db)
             try applyEntries(current: current.entries, next: next.entries, in: db)
+            try applyStacks(current: current.stacks, next: next.stacks, in: db)
             try applyFavorites(current: current.favorites, next: next.favorites, in: db)
             try applyRecent(current: current.recent, next: next.recent, in: db)
             try applyCollections(current: current.collections, next: next.collections, in: db)
@@ -136,6 +140,45 @@ enum SceneLibrarySQLiteCatalog {
         }
         try ensureDatabaseBound(url)
         try synchronizeFile(at: url)
+    }
+
+    private static func upgradeSchemaIfNeeded(at url: URL) throws {
+        try ensureDatabaseBound(url)
+        let db = try Database(url: url, mode: .readWrite)
+        try configureWritePragmas(db, isNew: false)
+        var changed = false
+        try db.transaction {
+            let version = try db.scalarInt("PRAGMA user_version")
+            if version == schemaVersion { return }
+            guard version == 2 else {
+                throw failure("This Library database uses unsupported schema version \(version).")
+            }
+            try db.execute("""
+                ALTER TABLE entries ADD COLUMN group_id TEXT;
+                CREATE TABLE user_stacks (
+                    id TEXT PRIMARY KEY,
+                    ordinal INTEGER NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    representative_entry_id TEXT REFERENCES entries(id) ON DELETE SET NULL
+                );
+                CREATE TABLE user_stack_items (
+                    stack_id TEXT NOT NULL REFERENCES user_stacks(id) ON DELETE CASCADE,
+                    ordinal INTEGER NOT NULL,
+                    entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+                    PRIMARY KEY(stack_id, ordinal),
+                    UNIQUE(stack_id, entry_id)
+                ) WITHOUT ROWID;
+                CREATE INDEX entries_source_group ON entries(source_id, group_id);
+                CREATE UNIQUE INDEX user_stack_items_entry ON user_stack_items(entry_id);
+                CREATE UNIQUE INDEX user_stacks_name_nocase ON user_stacks(name COLLATE NOCASE);
+                UPDATE catalog_meta SET value='3' WHERE key='schema_version';
+                PRAGMA user_version = 3;
+                """)
+            try verifyTransaction(in: db)
+            changed = true
+        }
+        try ensureDatabaseBound(url)
+        if changed { try synchronizeFile(at: url) }
     }
 
     static func verifyDatabase(at url: URL) throws {
@@ -157,7 +200,7 @@ enum SceneLibrarySQLiteCatalog {
     }
 
     static func columnNames(table: String, at url: URL) throws -> Set<String> {
-        guard ["sources", "entries", "collections", "collection_items"].contains(table) else { return [] }
+        guard ["sources", "entries", "collections", "collection_items", "user_stacks", "user_stack_items"].contains(table) else { return [] }
         let db = try Database(url: url, mode: .readOnly)
         let statement = try db.prepare("PRAGMA table_info(\(table))")
         var names = Set<String>()
@@ -173,7 +216,7 @@ enum SceneLibrarySQLiteCatalog {
 
     static func deterministicDebugExport(_ catalog: SceneLibraryStore.Catalog) throws -> Data {
         var root: [String: Any] = [
-            "format": "idlesse-library-debug-v2",
+            "format": "idlesse-library-debug-v3",
             "catalogVersion": catalog.version,
             "sqliteSchemaVersion": schemaVersion,
             "favorites": catalog.favorites.sorted()
@@ -198,6 +241,7 @@ enum SceneLibrarySQLiteCatalog {
             ]
             if let bookmark = entry.bookmark { value["bookmarkBase64"] = bookmark.base64EncodedString() }
             put(entry.catalogID, "catalogID", into: &value)
+            put(entry.groupID, "groupID", into: &value)
             put(entry.sourceID, "sourceID", into: &value)
             put(entry.relativeMediaPath, "relativeMediaPath", into: &value)
             put(entry.relativePosterPath, "relativePosterPath", into: &value)
@@ -225,6 +269,13 @@ enum SceneLibrarySQLiteCatalog {
         }
         root["recents"] = catalog.recent.keys.sorted().map { id in
             ["id": id, "usedAt": catalog.recent[id]!.timeIntervalSinceReferenceDate] as [String: Any]
+        }
+        root["stacks"] = catalog.stacks.enumerated().map { ordinal, stack -> [String: Any] in
+            var value: [String: Any] = [
+                "ordinal": ordinal, "id": stack.id, "name": stack.name, "sceneIDs": stack.sceneIDs
+            ]
+            put(stack.representativeID, "representativeID", into: &value)
+            return value
         }
         root["collections"] = catalog.collections.enumerated().map { ordinal, collection -> [String: Any] in
             var value: [String: Any] = [
@@ -311,7 +362,8 @@ enum SceneLibrarySQLiteCatalog {
             obs_modified_at REAL,
             obs_digest_algorithm TEXT,
             obs_digest TEXT,
-            obs_package_revision TEXT
+            obs_package_revision TEXT,
+            group_id TEXT
         );
         CREATE TABLE entry_tags (
             entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -350,11 +402,25 @@ enum SceneLibrarySQLiteCatalog {
             variant_id TEXT,
             PRIMARY KEY(collection_id, ordinal)
         ) WITHOUT ROWID;
+        CREATE TABLE user_stacks (
+            id TEXT PRIMARY KEY,
+            ordinal INTEGER NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            representative_entry_id TEXT REFERENCES entries(id) ON DELETE SET NULL
+        );
+        CREATE TABLE user_stack_items (
+            stack_id TEXT NOT NULL REFERENCES user_stacks(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+            PRIMARY KEY(stack_id, ordinal),
+            UNIQUE(stack_id, entry_id)
+        ) WITHOUT ROWID;
         CREATE UNIQUE INDEX entries_source_catalog_identity
             ON entries(source_id, catalog_id)
             WHERE source_id IS NOT NULL AND catalog_id IS NOT NULL AND catalog_id <> '';
         CREATE INDEX entries_source_path ON entries(source_id, relative_media_path);
         CREATE INDEX entries_source_availability ON entries(source_id, availability);
+        CREATE INDEX entries_source_group ON entries(source_id, group_id);
         CREATE INDEX entries_media_type ON entries(media_type);
         CREATE INDEX entries_series ON entries(series);
         CREATE INDEX entries_character ON entries(character);
@@ -365,6 +431,8 @@ enum SceneLibrarySQLiteCatalog {
         CREATE INDEX collection_items_scene ON collection_items(scene_id, collection_id);
         CREATE UNIQUE INDEX collection_items_selection
             ON collection_items(collection_id, scene_id, ifnull(variant_id, ''));
+        CREATE UNIQUE INDEX user_stack_items_entry ON user_stack_items(entry_id);
+        CREATE UNIQUE INDEX user_stacks_name_nocase ON user_stacks(name COLLATE NOCASE);
         CREATE UNIQUE INDEX collections_name_nocase ON collections(name COLLATE NOCASE);
         """)
     }
@@ -373,6 +441,7 @@ enum SceneLibrarySQLiteCatalog {
         try insertMeta(catalog, in: db)
         try insertSources(catalog.sources, in: db)
         try insertEntries(catalog.entries, in: db)
+        try insertStacks(catalog.stacks, in: db)
         try insertFavorites(catalog.favorites, in: db)
         try insertState(catalog.recent, in: db)
         try insertCollections(catalog.collections, in: db)
@@ -391,6 +460,13 @@ enum SceneLibrarySQLiteCatalog {
 
     private static func insertEntries(_ entries: [SceneLibraryStore.Entry], in db: Database) throws {
         for (ordinal, value) in entries.enumerated() { try upsertEntry(value, ordinal: ordinal, in: db) }
+    }
+
+    private static func insertStacks(_ stacks: [SceneLibraryStore.UserStack], in db: Database) throws {
+        for (ordinal, value) in stacks.enumerated() {
+            try upsertStackRow(value, ordinal: ordinal, in: db)
+            try replaceStackItems(value, in: db)
+        }
     }
 
     private static func insertFavorites(_ favorites: Set<String>, in db: Database) throws {
@@ -450,6 +526,32 @@ enum SceneLibrarySQLiteCatalog {
             try upsertEntry(value, ordinal: orderChanged ? stagedOrdinalOffset + ordinal : ordinal, in: db)
         }
         if orderChanged { try setOrdinals(table: "entries", ids: next.map(\.id), in: db) }
+    }
+
+    private static func applyStacks(current: [SceneLibraryStore.UserStack], next: [SceneLibraryStore.UserStack], in db: Database) throws {
+        guard current != next else { return }
+        let currentByID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
+        let nextIDs = Set(next.map(\.id))
+        let delete = try db.prepare("DELETE FROM user_stacks WHERE id=?")
+        for value in current where !nextIDs.contains(value.id) {
+            try delete.bind(value.id, at: 1); try delete.stepDone(); delete.reset()
+        }
+        let orderChanged = current.map(\.id) != next.map(\.id)
+        if orderChanged { try shiftOrdinals(table: "user_stacks", in: db) }
+
+        let temporaryNames = try db.prepare("UPDATE user_stacks SET name=? WHERE id=?")
+        for value in next where currentByID[value.id] != nil && currentByID[value.id]?.name != value.name {
+            try temporaryNames.bind("__idlesse_tmp__\(UUID().uuidString)", at: 1)
+            try temporaryNames.bind(value.id, at: 2); try temporaryNames.stepDone(); temporaryNames.reset()
+        }
+        for (ordinal, value) in next.enumerated() {
+            let old = currentByID[value.id]
+            if old == nil || old?.name != value.name || old?.representativeID != value.representativeID {
+                try upsertStackRow(value, ordinal: orderChanged ? stagedOrdinalOffset + ordinal : ordinal, in: db)
+            }
+            if old == nil || old?.sceneIDs != value.sceneIDs { try replaceStackItems(value, in: db) }
+        }
+        if orderChanged { try setOrdinals(table: "user_stacks", ids: next.map(\.id), in: db) }
     }
 
     private static func applyFavorites(current: Set<String>, next: Set<String>, in db: Database) throws {
@@ -526,8 +628,8 @@ enum SceneLibrarySQLiteCatalog {
             INSERT INTO entries(id, ordinal, title, bookmark, catalog_id, source_id, relative_media_path,
                 relative_poster_path, series, character, variant, media_type, width, height, fps, duration,
                 availability, provenance_present, observation_present, obs_byte_length, obs_modified_at,
-                obs_digest_algorithm, obs_digest, obs_package_revision)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                obs_digest_algorithm, obs_digest, obs_package_revision, group_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal, title=excluded.title, bookmark=excluded.bookmark,
                 catalog_id=excluded.catalog_id, source_id=excluded.source_id, relative_media_path=excluded.relative_media_path,
                 relative_poster_path=excluded.relative_poster_path, series=excluded.series, character=excluded.character,
@@ -536,7 +638,7 @@ enum SceneLibrarySQLiteCatalog {
                 provenance_present=excluded.provenance_present, observation_present=excluded.observation_present,
                 obs_byte_length=excluded.obs_byte_length, obs_modified_at=excluded.obs_modified_at,
                 obs_digest_algorithm=excluded.obs_digest_algorithm, obs_digest=excluded.obs_digest,
-                obs_package_revision=excluded.obs_package_revision
+                obs_package_revision=excluded.obs_package_revision, group_id=excluded.group_id
             """)
         try statement.bind(value.id, at: 1); try statement.bind(ordinal, at: 2); try statement.bind(value.title, at: 3)
         try statement.bind(value.bookmark, at: 4); try statement.bind(value.catalogID, at: 5); try statement.bind(value.sourceID, at: 6)
@@ -548,7 +650,7 @@ enum SceneLibrarySQLiteCatalog {
         try statement.bind(value.observation?.byteLength, at: 20)
         try statement.bind(value.observation?.modifiedAt?.timeIntervalSinceReferenceDate, at: 21)
         try statement.bind(value.observation?.digestAlgorithm, at: 22); try statement.bind(value.observation?.digest, at: 23)
-        try statement.bind(value.observation?.packageRevision, at: 24); try statement.stepDone()
+        try statement.bind(value.observation?.packageRevision, at: 24); try statement.bind(value.groupID, at: 25); try statement.stepDone()
 
         let clearTags = try db.prepare("DELETE FROM entry_tags WHERE entry_id=?")
         try clearTags.bind(value.id, at: 1); try clearTags.stepDone()
@@ -563,6 +665,26 @@ enum SceneLibrarySQLiteCatalog {
         for key in value.provenance?.keys.sorted() ?? [] {
             try metadata.bind(value.id, at: 1); try metadata.bind(key, at: 2); try metadata.bind(value.provenance![key]!, at: 3)
             try metadata.stepDone(); metadata.reset()
+        }
+    }
+
+    private static func upsertStackRow(_ value: SceneLibraryStore.UserStack, ordinal: Int, in db: Database) throws {
+        let statement = try db.prepare("""
+            INSERT INTO user_stacks(id, ordinal, name, representative_entry_id) VALUES(?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal, name=excluded.name,
+                representative_entry_id=excluded.representative_entry_id
+            """)
+        try statement.bind(value.id, at: 1); try statement.bind(ordinal, at: 2); try statement.bind(value.name, at: 3)
+        try statement.bind(value.representativeID, at: 4); try statement.stepDone()
+    }
+
+    private static func replaceStackItems(_ value: SceneLibraryStore.UserStack, in db: Database) throws {
+        let clear = try db.prepare("DELETE FROM user_stack_items WHERE stack_id=?")
+        try clear.bind(value.id, at: 1); try clear.stepDone()
+        let item = try db.prepare("INSERT INTO user_stack_items(stack_id, ordinal, entry_id) VALUES(?,?,?)")
+        for (ordinal, entryID) in value.sceneIDs.enumerated() {
+            try item.bind(value.id, at: 1); try item.bind(ordinal, at: 2); try item.bind(entryID, at: 3)
+            try item.stepDone(); item.reset()
         }
     }
 
@@ -618,6 +740,7 @@ enum SceneLibrarySQLiteCatalog {
         catalog.version = catalogVersion
         catalog.sources = try readSources(in: db)
         catalog.entries = try readEntries(in: db)
+        catalog.stacks = try readStacks(in: db)
         catalog.favorites = try readFavorites(in: db)
         catalog.recent = try readState(in: db)
         catalog.collections = try readCollections(in: db)
@@ -637,7 +760,8 @@ enum SceneLibrarySQLiteCatalog {
         let limits: [(String, Int)] = [
             ("sources", SceneLibraryStore.maxSources), ("entries", total), ("favorites", 256),
             ("item_state", 256), ("collections", 32), ("collection_weekdays", 32 * 7),
-            ("collection_items", 32 * 256), ("entry_tags", total * 64),
+            ("collection_items", 32 * 256), ("user_stacks", 128), ("user_stack_items", 128 * 256),
+            ("entry_tags", total * 64),
             ("entry_metadata", total * 32), ("source_metadata", SceneLibraryStore.maxSources * 32)
         ]
         for (table, limit) in limits {
@@ -681,7 +805,7 @@ enum SceneLibrarySQLiteCatalog {
             SELECT id, title, bookmark, catalog_id, source_id, relative_media_path, relative_poster_path,
                    series, character, variant, media_type, width, height, fps, duration, availability,
                    provenance_present, observation_present, obs_byte_length, obs_modified_at,
-                   obs_digest_algorithm, obs_digest, obs_package_revision
+                   obs_digest_algorithm, obs_digest, obs_package_revision, group_id
             FROM entries ORDER BY ordinal
             """)
         var result: [SceneLibraryStore.Entry] = []
@@ -695,12 +819,29 @@ enum SceneLibrarySQLiteCatalog {
                 modifiedAt: statement.optionalDouble(19).map { Date(timeIntervalSinceReferenceDate: $0) },
                 digestAlgorithm: statement.text(20), digest: statement.text(21), packageRevision: statement.text(22)) : nil
             result.append(.init(id: id, title: title, bookmark: statement.data(2), catalogID: statement.text(3),
-                sourceID: statement.text(4), relativeMediaPath: statement.text(5), relativePosterPath: statement.text(6),
+                groupID: statement.text(23), sourceID: statement.text(4), relativeMediaPath: statement.text(5), relativePosterPath: statement.text(6),
                 series: statement.text(7), character: statement.text(8), variant: statement.text(9),
                 tags: (tags[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), mediaType: statement.text(10),
                 width: statement.optionalInt(11), height: statement.optionalInt(12), fps: statement.optionalDouble(13),
                 duration: statement.optionalDouble(14), provenance: provenance, availability: availability,
                 observation: observation))
+        }
+        return result
+    }
+
+    private static func readStacks(in db: Database) throws -> [SceneLibraryStore.UserStack] {
+        var items: [String: [(Int, String)]] = [:]
+        let itemRows = try db.prepare("SELECT stack_id, ordinal, entry_id FROM user_stack_items ORDER BY stack_id, ordinal")
+        while try itemRows.stepRow() {
+            guard let stackID = itemRows.text(0), let entryID = itemRows.text(2) else { throw failure("A stack item row is invalid.") }
+            items[stackID, default: []].append((itemRows.int(1), entryID))
+        }
+        let statement = try db.prepare("SELECT id, name, representative_entry_id FROM user_stacks ORDER BY ordinal")
+        var result: [SceneLibraryStore.UserStack] = []
+        while try statement.stepRow() {
+            guard let id = statement.text(0), let name = statement.text(1) else { throw failure("A stack row is invalid.") }
+            result.append(.init(id: id, name: name,
+                sceneIDs: (items[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), representativeID: statement.text(2)))
         }
         return result
     }

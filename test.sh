@@ -17,7 +17,7 @@ AUDIO_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Runt
 needs_build build/tests/audio "${AUDIO_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AUDIO_SRCS[@]}" -framework CoreGraphics -o build/tests/audio & pids+=($!); }
 COMFORT_SRCS=(Sources/Wallpaper/DesktopComfortController.swift Tests/ComfortTests.swift)
 needs_build build/tests/comfort "${COMFORT_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${COMFORT_SRCS[@]}" -framework AppKit -o build/tests/comfort & pids+=($!); }
-LIBRARY_CORE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibrarySQLiteStore.swift)
+LIBRARY_CORE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryStacks.swift)
 LIBRARY_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryTests.swift)
 needs_build build/tests/library "${LIBRARY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -lsqlite3 -o build/tests/library & pids+=($!); }
 LIBRARY_RECONCILE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryReconciliationTests.swift)
@@ -26,6 +26,8 @@ LIBRARY_SAFETY_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySafetyTests.swift)
 needs_build build/tests/library-safety "${LIBRARY_SAFETY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SAFETY_SRCS[@]}" -lsqlite3 -o build/tests/library-safety & pids+=($!); }
 LIBRARY_SQLITE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySQLiteTests.swift)
 needs_build build/tests/library-sqlite "${LIBRARY_SQLITE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite & pids+=($!); }
+LIBRARY_STACK_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryStackTests.swift)
+needs_build build/tests/library-stacks "${LIBRARY_STACK_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_STACK_SRCS[@]}" -lsqlite3 -o build/tests/library-stacks & pids+=($!); }
 LIBRARY_BENCH_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryPersistenceBenchmark.swift)
 needs_build build/tests/library-benchmark "${LIBRARY_BENCH_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_BENCH_SRCS[@]}" -lsqlite3 -o build/tests/library-benchmark & pids+=($!); }
 LIBRARY_GRID_SRCS=(Sources/Harness/LibraryGridView.swift Tests/LibraryGridVirtualizationTests.swift)
@@ -54,6 +56,7 @@ IDLESSE_LIBRARY_BACKEND=json build/tests/library
 build/tests/library-reconcile
 IDLESSE_LIBRARY_BACKEND=json build/tests/library-safety
 build/tests/library-sqlite
+build/tests/library-stacks
 build/tests/library-benchmark
 build/tests/library-grid
 build/tests/ambient-sets
