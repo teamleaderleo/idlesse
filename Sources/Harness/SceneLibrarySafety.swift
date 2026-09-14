@@ -77,7 +77,11 @@ extension SceneLibraryStore {
     /// evidence: exact JSON bytes before migration, or a current semantic JSON snapshot
     /// when SQLite is authoritative.
     func readIndex() throws -> (Catalog, Data?) {
-        if !Self.forceJSONBackend, try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file) {
+        let selectorActive = try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)
+        if selectorActive {
+            guard !Self.forceJSONBackend else {
+                throw Self.libraryFailure("The JSON test backend cannot open a Library that has already selected SQLite.")
+            }
             let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
             guard (1...Self.catalogVersion).contains(decoded.version) else {
                 throw Self.libraryFailure("This Library catalog was written by a newer Idlesse version.")
