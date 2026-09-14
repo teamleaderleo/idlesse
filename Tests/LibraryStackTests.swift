@@ -84,7 +84,8 @@ struct LibraryStackChecks {
         try SceneLibrarySQLiteCatalog.verifyDatabase(at: reopened.sqliteDatabaseURL)
         let indexes = try SceneLibrarySQLiteCatalog.indexNames(at: reopened.sqliteDatabaseURL)
         precondition(indexes.isSuperset(of: ["entries_source_group", "user_stack_items_entry", "user_stacks_name_nocase"]))
-        precondition(try SceneLibrarySQLiteCatalog.columnNames(table: "entries", at: reopened.sqliteDatabaseURL).contains("group_id"))
+        let entryColumns = try SceneLibrarySQLiteCatalog.columnNames(table: "entries", at: reopened.sqliteDatabaseURL)
+        precondition(entryColumns.contains("group_id"))
 
         let export = try reopened.debugExportData()
         let text = String(decoding: export, as: UTF8.self)
@@ -117,7 +118,8 @@ struct LibraryStackChecks {
         let stale = try SceneLibraryStore(file: file)
         try remover.removeStack("stack")
         do { try stale.renameStack("stack", name: "Must Not Return") } catch {}
-        precondition(try SceneLibraryStore(file: file).catalog.stacks.isEmpty,
+        let afterDeletion = try SceneLibraryStore(file: file)
+        precondition(afterDeletion.catalog.stacks.isEmpty,
                      "A stale writer must not resurrect a stack deleted by another process")
     }
 
@@ -167,7 +169,8 @@ struct LibraryStackChecks {
         let reopened = try SceneLibraryStore(file: file)
         precondition(reopened.catalog == store.catalog, "SQLite v2→v3 migration changed catalog semantics")
         try SceneLibrarySQLiteCatalog.verifyDatabase(at: reopened.sqliteDatabaseURL)
-        precondition(try SceneLibrarySQLiteCatalog.columnNames(table: "entries", at: reopened.sqliteDatabaseURL).contains("group_id"))
+        let upgradedColumns = try SceneLibrarySQLiteCatalog.columnNames(table: "entries", at: reopened.sqliteDatabaseURL)
+        precondition(upgradedColumns.contains("group_id"))
     }
 
     private static func validationRejectsAmbiguousMembership() throws {
