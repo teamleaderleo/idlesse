@@ -17,10 +17,12 @@ AUDIO_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Runt
 needs_build build/tests/audio "${AUDIO_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AUDIO_SRCS[@]}" -framework CoreGraphics -o build/tests/audio & pids+=($!); }
 COMFORT_SRCS=(Sources/Wallpaper/DesktopComfortController.swift Tests/ComfortTests.swift)
 needs_build build/tests/comfort "${COMFORT_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${COMFORT_SRCS[@]}" -framework AppKit -o build/tests/comfort & pids+=($!); }
-LIBRARY_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Tests/LibraryTests.swift)
+LIBRARY_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Tests/LibraryTests.swift)
 needs_build build/tests/library "${LIBRARY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -o build/tests/library & pids+=($!); }
-LIBRARY_RECONCILE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Tests/LibraryReconciliationTests.swift)
+LIBRARY_RECONCILE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Tests/LibraryReconciliationTests.swift)
 needs_build build/tests/library-reconcile "${LIBRARY_RECONCILE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_RECONCILE_SRCS[@]}" -o build/tests/library-reconcile & pids+=($!); }
+LIBRARY_SAFETY_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Tests/LibrarySafetyTests.swift)
+needs_build build/tests/library-safety "${LIBRARY_SAFETY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SAFETY_SRCS[@]}" -o build/tests/library-safety & pids+=($!); }
 LIBRARY_GRID_SRCS=(Sources/Harness/LibraryGridView.swift Tests/LibraryGridVirtualizationTests.swift)
 needs_build build/tests/library-grid "${LIBRARY_GRID_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" -D LIBRARY_GRID_VIRTUALIZATION_TESTS "${LIBRARY_GRID_SRCS[@]}" -framework AppKit -o build/tests/library-grid & pids+=($!); }
 AMBIENT_SET_SRCS=(Sources/Wallpaper/AmbientSet.swift Sources/Wallpaper/AmbientSetStore.swift Sources/Wallpaper/AmbientLegacyAdapter.swift Tests/AmbientSetTests.swift)
@@ -45,6 +47,7 @@ build/tests/audio
 build/tests/comfort
 build/tests/library
 build/tests/library-reconcile
+build/tests/library-safety
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants

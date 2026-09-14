@@ -251,20 +251,31 @@ final class SceneLibraryStore {
     }
 
     private(set) var catalog = Catalog()
+    /// The index as this store last read or wrote it; a save replays only the change from here.
+    private var base = Catalog()
     let file: URL
 
-    init(file: URL) throws {
-        self.file = file
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+    init(file requestedFile: URL) throws {
+        self.file = Self.effectiveIndexURL(requestedFile)
+        guard FileManager.default.fileExists(atPath: self.file.path) else { return }
+        let attributes = try FileManager.default.attributesOfItem(atPath: self.file.path)
         let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
         guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
-        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: file))
+        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: self.file))
         guard (1...Self.catalogVersion).contains(decoded.version) else {
             throw failure("This Library index was written by a newer Idlesse version.")
         }
         try validateCatalog(decoded)
         catalog = decoded
+        base = decoded
+    }
+
+    /// Picks up changes another process wrote, dropping nothing this store has not saved.
+    func reloadFromDisk() throws {
+        let (disk, _) = try withIndexLock { try readIndex() }
+        try validateCatalog(disk)
+        catalog = disk
+        base = disk
     }
 
     /// Compatibility resolver. Call `access(_:)` while reading source-backed media.
@@ -643,14 +654,23 @@ final class SceneLibraryStore {
     func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
 
     private func save(_ proposed: Catalog) throws {
-        var next = proposed
-        next.version = Self.catalogVersion
-        try validateCatalog(next)
-        let data = try JSONEncoder().encode(next)
-        guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
-        catalog = next
+        try withIndexLock {
+            let (disk, diskData) = try readIndex()
+            // A decodable but semantically invalid disk catalog is protected just
+            // like unreadable or future-version data: never repair it by overwriting it.
+            try validateCatalog(disk)
+            var next = disk == base ? proposed : Self.rebase(proposed, from: base, onto: disk)
+            next.version = Self.catalogVersion
+            try validateCatalog(next)
+            let data = try JSONEncoder().encode(next)
+            guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+            let kept = Set(next.entries.map(\.id))
+            let removed = disk.entries.filter { !kept.contains($0.id) }
+            if !removed.isEmpty { try journalRemoval(removed, previous: disk, previousData: diskData) }
+            try writeIndexData(data)
+            catalog = next
+            base = next
+        }
     }
 
     private static func validMetadata(_ value: [String: String]?, maxPairs: Int) -> Bool {
