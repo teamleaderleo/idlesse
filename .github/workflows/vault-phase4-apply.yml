@@ -1,0 +1,38 @@
+name: Vault Phase 4 Apply
+
+on:
+  push:
+    branches:
+      - vault/library-stacks-current
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply guarded Phase 4 transforms
+        run: |
+          python3 .vault/phase4_store.py
+          python3 .vault/phase4_safety_recon.py
+          python3 .vault/phase4_sqlite.py
+          python3 .vault/phase4_tests.py
+          git diff --check
+      - name: Run canonical tests
+        run: ./test.sh --clean
+      - name: Commit tested implementation
+        run: |
+          git config user.name "Vault"
+          git config user.email "vault@users.noreply.github.com"
+          git add Sources/Harness/SceneLibraryStore.swift \
+                  Sources/Harness/SceneLibrarySafety.swift \
+                  Sources/Harness/SceneLibraryReconciliation.swift \
+                  Sources/Harness/SceneLibrarySQLiteStore.swift \
+                  Tests/LibrarySQLiteTests.swift test.sh
+          git commit -m "Add durable Library stack model and SQLite v3"
+          git push origin HEAD:vault/library-stacks-current
