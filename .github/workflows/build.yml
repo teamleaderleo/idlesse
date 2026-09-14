@@ -23,6 +23,11 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/media-tests"
           "$RUNNER_TEMP/media-tests/bin/pip" install --quiet --disable-pip-version-check "Pillow==11.3.0"
           "$RUNNER_TEMP/media-tests/bin/python" scripts/media-batch/test_batch.py
+          PYTHONPATH="$PWD/scripts/media-batch" "$RUNNER_TEMP/media-tests/bin/python" scripts/media-batch/test_fidelity.py
+          pushd scripts/media-batch
+          npm ci --ignore-scripts --no-audit --no-fund
+          node_modules/.bin/esbuild fast-export.js --bundle --outfile="$RUNNER_TEMP/fast-export.bundle.js"
+          popd
 
       - name: Build development preview and arm64 saver
         run: ./build.sh
@@ -32,6 +37,9 @@ jobs:
 
       - name: Verify unit and preview bounds tests
         run: bash test.sh
+
+      - name: Verify Main10 native media compatibility
+        run: bash test-media-compat.sh
 
       - name: Verify selection transaction isolation
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'

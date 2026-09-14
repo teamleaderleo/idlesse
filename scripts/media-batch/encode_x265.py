@@ -9,6 +9,7 @@ import argparse, json, os, secrets, subprocess, threading
 from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from fidelity import require_stream_bit_depth
 
 # x265's lookahead runs on one thread by default and starves the frame threads;
 # spreading it over threads and slices roughly doubled throughput on a 10-core
@@ -97,8 +98,13 @@ def main():
         result = json.loads(meta.read_text())
         if result['frames'] != a.count:
             raise RuntimeError('Incomplete encoder receipt')
+        stream = require_stream_bit_depth(partial_path, 10)
+        result['requestedBitDepth'] = 10
+        result['stream'] = stream
+        meta.write_text(json.dumps(result, sort_keys=True))
         partial_path.replace(dest)
-        print('Encoded', a.count, 'frames with x265 in', round(result['encodeSeconds'], 1), 'seconds', flush=True)
+        print('Encoded', a.count, 'frames with x265 in', round(result['encodeSeconds'], 1), 'seconds as',
+              stream.get('profile'), stream.get('pix_fmt'), flush=True)
     finally:
         if ffmpeg.poll() is None:
             ffmpeg.kill()
