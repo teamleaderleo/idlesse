@@ -6,8 +6,9 @@ struct LibrarySQLiteValueFidelityChecks {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         unsetenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR")
         try embeddedNULAndEmptyBlobsRoundTripExactly()
+        try sourceCatalogIdentityUsesExactPair()
         try storeFallbackPersistsMutationAndRetriesMigration()
-        print("Library SQLite value fidelity checks passed: embedded-NUL text, empty blobs, JSON fallback and healthy retry")
+        print("Library SQLite value fidelity checks passed: embedded-NUL text, empty blobs, exact Source/catalog identity, JSON fallback and healthy retry")
     }
 
     private static func folder(_ name: String) throws -> URL {
@@ -58,6 +59,48 @@ struct LibrarySQLiteValueFidelityChecks {
         precondition(reopened.catalog.sources[0].catalogMetadata?["note"] == "alpha\u{0}omega")
         let retainedJSON = try Data(contentsOf: file)
         precondition(retainedJSON == originalJSON, "Migration rewrote the JSON recovery snapshot")
+    }
+
+    private static func sourceCatalogIdentityUsesExactPair() throws {
+        let dir = try folder("catalog-pair")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+
+        var catalog = SceneLibraryStore.Catalog()
+        catalog.sources = [
+            .init(id: "a\u{0}b", name: "NUL Source", bookmark: Data([1])),
+            .init(id: "a", name: "Plain Source", bookmark: Data([2]))
+        ]
+        catalog.entries = [
+            .init(id: "left", title: "Left", catalogID: "c", sourceID: "a\u{0}b", relativeMediaPath: "left.jpg"),
+            .init(id: "right", title: "Right", catalogID: "b\u{0}c", sourceID: "a", relativeMediaPath: "right.jpg")
+        ]
+        _ = try writeJSON(catalog, to: file)
+
+        let store = try SceneLibraryStore(file: file)
+        precondition(store.catalog.entries == catalog.entries,
+                     "Distinct Source/catalog identity pairs collided during validation")
+        try store.favorite("left")
+        precondition(store.usesSQLiteCatalog)
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(reopened.usesSQLiteCatalog)
+        precondition(reopened.catalog.sources == catalog.sources)
+        precondition(reopened.catalog.entries == catalog.entries)
+        precondition(reopened.catalog.favorites == ["left"])
+
+        let duplicateDir = try folder("catalog-duplicate")
+        defer { try? FileManager.default.removeItem(at: duplicateDir) }
+        let duplicateFile = duplicateDir.appendingPathComponent("index.json")
+        var duplicate = SceneLibraryStore.Catalog()
+        duplicate.sources = [.init(id: "same", name: "Same", bookmark: Data([3]))]
+        duplicate.entries = [
+            .init(id: "one", title: "One", catalogID: "dup", sourceID: "same", relativeMediaPath: "one.jpg"),
+            .init(id: "two", title: "Two", catalogID: "dup", sourceID: "same", relativeMediaPath: "two.jpg")
+        ]
+        _ = try writeJSON(duplicate, to: duplicateFile)
+        var rejected = false
+        do { _ = try SceneLibraryStore(file: duplicateFile) } catch { rejected = true }
+        precondition(rejected, "Duplicate catalog IDs within one Source must still fail validation")
     }
 
     private static func storeFallbackPersistsMutationAndRetriesMigration() throws {
