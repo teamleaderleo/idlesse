@@ -21,7 +21,18 @@ jobs:
           set -euo pipefail
           git fetch origin main --no-tags
           test "$(git merge-base HEAD origin/main)" = "72dbef82d42d0600314470d91c89d049445651a6"
-          python3 .vault/phase4_ui.py
+          cp .vault/phase4_ui.py "$RUNNER_TEMP/phase4_ui.py"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path(__import__('os').environ['RUNNER_TEMP']) / 'phase4_ui.py'
+          s = p.read_text()
+          old = '''    if s.count(start) != 1:\n        raise SystemExit(f"{path}: start marker count {s.count(start)} for {start[:80]!r}")\n    i = s.index(start)\n'''
+          new = '''    if start not in s:\n        raise SystemExit(f"{path}: start marker not found: {start[:80]!r}")\n    i = s.index(start)\n'''
+          if s.count(old) != 1:
+              raise SystemExit('between() guard patch did not match exactly once')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          python3 "$RUNNER_TEMP/phase4_ui.py"
           git diff --check
           changed="$(git diff --name-only | sort)"
           expected=$'Sources/Harness/LibraryGridView.swift\nSources/Harness/SceneLibraryController.swift'
