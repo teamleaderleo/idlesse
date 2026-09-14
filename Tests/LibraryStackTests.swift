@@ -5,12 +5,13 @@ struct LibraryStackChecks {
     static func main() throws {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         try sourceGroupsAndSearchProjection()
+        try sourceGroupIdentityPreservesExactPersistedStrings()
         try userStackCRUDAndSQLiteRoundTrip()
         try staleWritersMergeStackDeltas()
         try reconciliationPreservesStableStackMembership()
         try schemaV2UpgradesInPlace()
         try validationRejectsAmbiguousMembership()
-        print("Library stack checks passed: source groups, reversible user stacks, representatives/search, stale writers, reconciliation identity, SQLite v2→v3 migration and exclusive membership")
+        print("Library stack checks passed: source groups, exact persisted group identity, reversible user stacks, representatives/search, stale writers, reconciliation identity, SQLite v2→v3 migration and exclusive membership")
     }
 
     private static func folder(_ name: String) throws -> URL {
@@ -57,6 +58,27 @@ struct LibraryStackChecks {
         precondition(LibraryStackBrowser.matchingChildren(of: a, in: catalog, query: "night").map(\.id) == ["b"])
         precondition(LibraryStackBrowser.typeHint(for: a, in: catalog) == "MIXED")
         precondition(LibraryStackBrowser.score(query: "Mira", stack: a, in: catalog) != nil)
+    }
+
+    private static func sourceGroupIdentityPreservesExactPersistedStrings() throws {
+        var catalog = SceneLibraryStore.Catalog()
+        catalog.entries = [
+            .init(id: "nul-a1", title: "A1", groupID: "c", sourceID: "a\u{0}b", relativeMediaPath: "a1.jpg"),
+            .init(id: "nul-a2", title: "A2", groupID: "c", sourceID: "a\u{0}b", relativeMediaPath: "a2.jpg"),
+            .init(id: "nul-b1", title: "B1", groupID: "b\u{0}c", sourceID: "a", relativeMediaPath: "b1.jpg"),
+            .init(id: "nul-b2", title: "B2", groupID: "b\u{0}c", sourceID: "a", relativeMediaPath: "b2.jpg"),
+            .init(id: "ws-a1", title: "W1", groupID: "group", sourceID: "ws", relativeMediaPath: "w1.jpg"),
+            .init(id: "ws-a2", title: "W2", groupID: "group", sourceID: "ws", relativeMediaPath: "w2.jpg"),
+            .init(id: "ws-b1", title: "W3", groupID: " group ", sourceID: "ws", relativeMediaPath: "w3.jpg"),
+            .init(id: "ws-b2", title: "W4", groupID: " group ", sourceID: "ws", relativeMediaPath: "w4.jpg")
+        ]
+        let groups = LibraryStackBrowser.projections(in: catalog).filter { $0.kind == .source }
+        precondition(groups.count == 4, "Exact persisted Source/group pairs must remain distinct")
+        precondition(Set(groups.map(\.id)).count == 4, "Distinct Source/group pairs must have distinct projection IDs")
+        precondition(groups.contains { Set($0.entryIDs) == ["nul-a1", "nul-a2"] })
+        precondition(groups.contains { Set($0.entryIDs) == ["nul-b1", "nul-b2"] })
+        let whitespaceNames = Set(groups.filter { $0.entryIDs.first?.hasPrefix("ws-") == true }.map(\.name))
+        precondition(whitespaceNames == ["group", " group "], "Whitespace is part of persisted group identity")
     }
 
     private static func userStackCRUDAndSQLiteRoundTrip() throws {
