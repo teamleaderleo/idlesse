@@ -653,12 +653,21 @@ final class SceneLibraryStore {
     /// Internal transactional hook used by reconciliation and the durable backend.
     func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
 
-    private func save(_ proposed: Catalog) throws {
+    /// A reviewed operation can compare its basis against the current disk catalog
+    /// while holding the same exclusive lock that protects the eventual write.
+    func commitCatalog(_ proposed: Catalog, requiringCurrent condition: @escaping (Catalog) -> Bool,
+                       failureMessage: String) throws {
+        try save(proposed, requiringCurrent: condition, failureMessage: failureMessage)
+    }
+
+    private func save(_ proposed: Catalog, requiringCurrent condition: ((Catalog) -> Bool)? = nil,
+                      failureMessage: String = "The Library changed before this operation could be applied.") throws {
         try withIndexLock {
             let (disk, diskData) = try readIndex()
             // A decodable but semantically invalid disk catalog is protected just
             // like unreadable or future-version data: never repair it by overwriting it.
             try validateCatalog(disk)
+            if let condition, !condition(disk) { throw failure(failureMessage) }
             var next = disk == base ? proposed : Self.rebase(proposed, from: base, onto: disk)
             next.version = Self.catalogVersion
             try validateCatalog(next)
