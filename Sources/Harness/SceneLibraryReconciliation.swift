@@ -62,8 +62,25 @@ extension SceneLibraryStore {
         var evidence: String
     }
 
+    /// The Source authorization/metadata reviewed alongside its entry slice. A relink
+    /// changes the bookmark bytes and therefore invalidates a review prepared from the old root.
+    struct ReconciliationSourceBasis: Equatable, Sendable {
+        let id: String
+        let name: String
+        let bookmark: Data
+        let catalogMetadata: [String: String]?
+
+        init(_ source: SourceRoot) {
+            id = source.id
+            name = source.name
+            bookmark = source.bookmark
+            catalogMetadata = source.catalogMetadata
+        }
+    }
+
     struct ReconciliationDiff: Sendable {
         let sourceID: String
+        let basisSource: ReconciliationSourceBasis?
         let basisEntries: [Entry]
         let scanned: [SourceEntry]
         let matches: [ReconciliationMatch]
@@ -130,7 +147,8 @@ extension SceneLibraryStore {
         return result
     }
 
-    static func reconciliationDiff(sourceID: String, existing: [Entry], scanned: [SourceEntry]) throws -> ReconciliationDiff {
+    static func reconciliationDiff(sourceID: String, existing: [Entry], scanned: [SourceEntry],
+                                   basisSource: ReconciliationSourceBasis? = nil) throws -> ReconciliationDiff {
         let old = existing.filter { $0.sourceID == sourceID }
         for draft in scanned { _ = try validatedRelativePath(draft.relativeMediaPath) }
 
@@ -205,7 +223,7 @@ extension SceneLibraryStore {
         summary.missing = missingIDs.count
         summary.probableMoves = probable.count
 
-        return ReconciliationDiff(sourceID: sourceID, basisEntries: old, scanned: scanned,
+        return ReconciliationDiff(sourceID: sourceID, basisSource: basisSource, basisEntries: old, scanned: scanned,
                                   matches: matches.sorted { $0.entryID < $1.entryID },
                                   missingEntryIDs: missingIDs, addedScannedIndices: addedIndices,
                                   probableMoves: probable.sorted { ($0.fromPath, $0.toPath) < ($1.fromPath, $1.toPath) },
@@ -213,21 +231,23 @@ extension SceneLibraryStore {
     }
 
     func prepareReconciliation(sourceID: String, scanned: [SourceEntry]) throws -> ReconciliationDiff {
-        guard catalog.sources.contains(where: { $0.id == sourceID }) else {
+        guard let source = catalog.sources.first(where: { $0.id == sourceID }) else {
             throw Self.libraryFailure("Source no longer exists.")
         }
-        return try Self.reconciliationDiff(sourceID: sourceID, existing: catalog.entries, scanned: scanned)
+        return try Self.reconciliationDiff(sourceID: sourceID, existing: catalog.entries, scanned: scanned,
+                                           basisSource: ReconciliationSourceBasis(source))
     }
 
     /// Applies one reviewed diff to a copy of the current catalog and commits once.
-    /// A stale review is rejected when the source slice changed after it was prepared.
+    /// Source identity and entries are checked again on disk while the write lock is held.
     func applyReconciliation(_ diff: ReconciliationDiff, accepting accepted: Set<String> = []) throws {
-        let current = catalog.entries.filter { $0.sourceID == diff.sourceID }
-        guard current == diff.basisEntries else {
-            throw Self.libraryFailure("The Source changed while the reconciliation review was open. Rescan it again.")
+        let staleMessage = "The Source changed while the reconciliation review was open. Rescan it again."
+        guard let basisSource = diff.basisSource,
+              let currentSource = catalog.sources.first(where: { $0.id == diff.sourceID }),
+              ReconciliationSourceBasis(currentSource) == basisSource,
+              catalog.entries.filter({ $0.sourceID == diff.sourceID }) == diff.basisEntries else {
+            throw Self.libraryFailure(staleMessage)
         }
-        let sourceIDs = Set(catalog.sources.map(\.id))
-        guard sourceIDs.contains(diff.sourceID) else { throw Self.libraryFailure("Source no longer exists.") }
 
         let matchByID = Dictionary(uniqueKeysWithValues: diff.matches.map { ($0.entryID, $0.scannedIndex) })
         var acceptedByOld: [String: Int] = [:]
@@ -261,7 +281,11 @@ extension SceneLibraryStore {
         let firstSourceIndex = next.entries.firstIndex { $0.sourceID == diff.sourceID } ?? next.entries.endIndex
         next.entries.removeAll { $0.sourceID == diff.sourceID }
         next.entries.insert(contentsOf: rebuilt, at: min(firstSourceIndex, next.entries.endIndex))
-        try commitCatalog(next)
+        try commitCatalog(next, requiringCurrent: { disk in
+            guard let diskSource = disk.sources.first(where: { $0.id == diff.sourceID }),
+                  ReconciliationSourceBasis(diskSource) == basisSource else { return false }
+            return disk.entries.filter { $0.sourceID == diff.sourceID } == diff.basisEntries
+        }, failureMessage: staleMessage)
     }
 
     private static func newEntry(from draft: SourceEntry, sourceID: String) throws -> Entry {
