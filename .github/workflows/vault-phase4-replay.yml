@@ -19,8 +19,9 @@ jobs:
       - name: Verify replay base
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "6528cdd866245e218a9b77b2ce80dcb0587b2a19"
-          git fetch origin vault/library-stacks-current --no-tags
+          git fetch origin main vault/library-stacks-current --no-tags
+          test "$(git rev-parse origin/main)" = "6528cdd866245e218a9b77b2ce80dcb0587b2a19"
+          test "$(git merge-base HEAD origin/main)" = "6528cdd866245e218a9b77b2ce80dcb0587b2a19"
 
       - name: Replay tested stack delta
         run: |
@@ -34,12 +35,11 @@ jobs:
             Tests/LibrarySQLiteTests.swift
             Tests/LibraryStackTests.swift
             docs/library-stacks.md
-            test.sh
           )
           git diff --binary 0a805be5b1d31b1f0c84eac8b316726babdc51ea 9118358bc749f23aad1d5d95da5a33c6b34e3e4e -- "${paths[@]}" > "$RUNNER_TEMP/phase4.patch"
           git apply --3way --index "$RUNNER_TEMP/phase4.patch"
 
-      - name: Serialize SQLite schema upgrade through Library lock
+      - name: Serialize schema upgrade and merge test harness
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -96,8 +96,33 @@ jobs:
                       try SceneLibrarySQLiteCatalog.upgradeSelectedCatalogIfNeeded(for: file)
                       let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
           ''')
+
+          once("test.sh",
+          '''LIBRARY_CORE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibrarySQLiteStore.swift)
+          ''',
+          '''LIBRARY_CORE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryStacks.swift)
+          ''')
+          once("test.sh",
+          '''needs_build build/tests/library-sqlite-values "${LIBRARY_SQLITE_VALUE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_VALUE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite-values & pids+=($!); }
+          LIBRARY_BENCH_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryPersistenceBenchmark.swift)
+          ''',
+          '''needs_build build/tests/library-sqlite-values "${LIBRARY_SQLITE_VALUE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_VALUE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite-values & pids+=($!); }
+          LIBRARY_STACK_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryStackTests.swift)
+          needs_build build/tests/library-stacks "${LIBRARY_STACK_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_STACK_SRCS[@]}" -lsqlite3 -o build/tests/library-stacks & pids+=($!); }
+          LIBRARY_BENCH_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryPersistenceBenchmark.swift)
+          ''')
+          once("test.sh",
+          '''build/tests/library-sqlite
+          build/tests/library-sqlite-values
+          build/tests/library-benchmark
+          ''',
+          '''build/tests/library-sqlite
+          build/tests/library-sqlite-values
+          build/tests/library-stacks
+          build/tests/library-benchmark
+          ''')
           PY
-          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibrarySafety.swift
+          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibrarySafety.swift test.sh
           git diff --check
 
       - name: Verify replay scope
