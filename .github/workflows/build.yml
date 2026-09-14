@@ -45,6 +45,10 @@ jobs:
           command -v ffprobe >/dev/null || brew install ffmpeg
           bash test-media-compat.sh
 
+      - name: Probe Main10 Library UI timing
+        continue-on-error: true
+        run: IDLESSE_LIBRARY_UI_PROBE_ONLY=1 bash test-media-compat.sh
+
       - name: Verify selection transaction isolation
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
 
