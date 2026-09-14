@@ -26,6 +26,8 @@ LIBRARY_SAFETY_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySafetyTests.swift)
 needs_build build/tests/library-safety "${LIBRARY_SAFETY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SAFETY_SRCS[@]}" -lsqlite3 -o build/tests/library-safety & pids+=($!); }
 LIBRARY_SQLITE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySQLiteTests.swift)
 needs_build build/tests/library-sqlite "${LIBRARY_SQLITE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite & pids+=($!); }
+LIBRARY_SQLITE_VALUE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySQLiteValueFidelityTests.swift)
+needs_build build/tests/library-sqlite-values "${LIBRARY_SQLITE_VALUE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_VALUE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite-values & pids+=($!); }
 LIBRARY_BENCH_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryPersistenceBenchmark.swift)
 needs_build build/tests/library-benchmark "${LIBRARY_BENCH_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_BENCH_SRCS[@]}" -lsqlite3 -o build/tests/library-benchmark & pids+=($!); }
 LIBRARY_GRID_SRCS=(Sources/Harness/LibraryGridView.swift Tests/LibraryGridVirtualizationTests.swift)
@@ -54,6 +56,7 @@ IDLESSE_LIBRARY_BACKEND=json build/tests/library
 build/tests/library-reconcile
 IDLESSE_LIBRARY_BACKEND=json build/tests/library-safety
 build/tests/library-sqlite
+build/tests/library-sqlite-values
 build/tests/library-benchmark
 build/tests/library-grid
 build/tests/ambient-sets
