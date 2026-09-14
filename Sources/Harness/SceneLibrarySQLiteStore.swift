@@ -57,6 +57,9 @@ enum SceneLibrarySQLiteCatalog {
                 throw failure("SQLite migration verification found a semantic mismatch.")
             }
             try synchronizeFile(at: paths.candidate)
+            if getenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR").map({ String(cString: $0) }) == "1" {
+                throw failure("Injected SQLite migration failure before selector publication.")
+            }
         } catch {
             try? manager.removeItem(at: paths.candidate)
             throw error
@@ -858,7 +861,10 @@ enum SceneLibrarySQLiteCatalog {
             guard let statement else { throw failure("SQLite statement is closed.") }
             let result: Int32
             if let value {
-                result = value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) }
+                let utf8 = value.utf8CString
+                result = utf8.withUnsafeBufferPointer {
+                    sqlite3_bind_text(statement, index, $0.baseAddress, Int32($0.count - 1), transient)
+                }
             } else {
                 result = sqlite3_bind_null(statement, index)
             }
@@ -869,7 +875,13 @@ enum SceneLibrarySQLiteCatalog {
             guard let statement else { throw failure("SQLite statement is closed.") }
             let result: Int32
             if let value {
-                result = value.withUnsafeBytes { bytes in sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), transient) }
+                if value.isEmpty {
+                    result = sqlite3_bind_zeroblob(statement, index, 0)
+                } else {
+                    result = value.withUnsafeBytes { bytes in
+                        sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), transient)
+                    }
+                }
             } else { result = sqlite3_bind_null(statement, index) }
             try checkBind(result)
         }
@@ -907,8 +919,11 @@ enum SceneLibrarySQLiteCatalog {
         func optionalInt64(_ column: Int32) -> Int64? { isNull(column) ? nil : sqlite3_column_int64(statement, column) }
         func optionalDouble(_ column: Int32) -> Double? { isNull(column) ? nil : sqlite3_column_double(statement, column) }
         func text(_ column: Int32) -> String? {
-            guard !isNull(column), let pointer = sqlite3_column_text(statement, column) else { return nil }
-            return String(cString: pointer)
+            guard !isNull(column) else { return nil }
+            let count = Int(sqlite3_column_bytes(statement, column))
+            guard count > 0 else { return "" }
+            guard let pointer = sqlite3_column_text(statement, column) else { return nil }
+            return String(bytes: UnsafeBufferPointer(start: pointer, count: count), encoding: .utf8)
         }
         func data(_ column: Int32) -> Data? {
             guard !isNull(column) else { return nil }
