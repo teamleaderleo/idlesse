@@ -17,6 +17,11 @@ import Foundation
         return url
     }
 
+    static func assertContents(_ url: URL, _ expected: Data, _ message: String = "") throws {
+        let actual = try Data(contentsOf: url)
+        precondition(actual == expected, message)
+    }
+
     static func waitForFiles(_ urls: [URL], timeout: TimeInterval = 10) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !urls.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) {
@@ -74,8 +79,8 @@ import Foundation
             precondition(a.terminationStatus == 0 && b.terminationStatus == 0, "Library concurrency worker failed")
             let final = try SceneLibraryStore(file: index).catalog
             precondition(final.entries.count == 2, "Two stale process additions clobbered one another")
-            precondition(try Data(contentsOf: first) == Data([1, 2, 3]))
-            precondition(try Data(contentsOf: second) == Data([4, 5, 6]))
+            try assertContents(first, Data([1, 2, 3]))
+            try assertContents(second, Data([4, 5, 6]))
         }
 
         // A stale writer can update unrelated state after a removal without bringing
@@ -103,7 +108,7 @@ import Foundation
             precondition(restored.id == victim.id)
             precondition(after.catalog.favorites.contains(victim.id) && after.catalog.recent[victim.id] != nil)
             precondition(after.catalog.collections.first(where: { $0.id == collection.id })?.sceneIDs.contains(victim.id) == true)
-            precondition(try Data(contentsOf: url) == Data([7, 8, 9]), "Library recovery modified original media")
+            try assertContents(url, Data([7, 8, 9]), "Library recovery modified original media")
         }
 
         // Favorites, recents, and collection fields merge independently.
@@ -187,7 +192,7 @@ import Foundation
             precondition(after.catalog.entries.contains { $0.id == restoredID && $0.sourceID == source.id })
             precondition(after.catalog.favorites.contains(restoredID))
             precondition(after.catalog.collections.first(where: { $0.id == collection.id })?.sceneIDs.contains(restoredID) == true)
-            precondition(try Data(contentsOf: firstURL) == Data([20, 21]), "Source removal or restore modified original media")
+            try assertContents(firstURL, Data([20, 21]), "Source removal or restore modified original media")
         }
 
         // Corrupt and future-version disk state is protected byte-for-byte from a stale save.
@@ -201,14 +206,14 @@ import Foundation
             let garbage = Data("not json".utf8)
             try garbage.write(to: index, options: .atomic)
             expectFailure("A stale writer overwrote an unreadable Library index") { try writer.used(entry.id) }
-            precondition(try Data(contentsOf: index) == garbage)
+            try assertContents(index, garbage)
 
             var future = writer.catalog
             future.version = SceneLibraryStore.catalogVersion + 100
             let futureData = try JSONEncoder().encode(future)
             try futureData.write(to: index, options: .atomic)
             expectFailure("A stale writer overwrote a future-version Library index") { try writer.favorite(entry.id) }
-            precondition(try Data(contentsOf: index) == futureData)
+            try assertContents(index, futureData)
         }
 
         // Simulate a process dying after recovery evidence is durable but before the
@@ -226,7 +231,8 @@ import Foundation
             precondition(reopened.catalog.entries.contains { $0.id == entry.id }, "Prepared recovery changed the canonical index")
             precondition(reopened.recentlyRemoved().isEmpty, "Uncommitted removal appeared in Recently Removed")
             precondition(FileManager.default.fileExists(atPath: reopened.removalLog.path))
-            precondition(!(try FileManager.default.contentsOfDirectory(atPath: reopened.backupsFolder.path)).isEmpty)
+            let preparedBackups = try FileManager.default.contentsOfDirectory(atPath: reopened.backupsFolder.path)
+            precondition(!preparedBackups.isEmpty)
             try reopened.remove(entry.id)
             precondition(reopened.recentlyRemoved().contains { $0.entry.id == entry.id })
         }
@@ -241,7 +247,8 @@ import Foundation
             let entry = try store.add(url)
             try Data("corrupt recovery ledger".utf8).write(to: store.removedFile)
             expectFailure("Removal committed without a readable recovery ledger") { try store.remove(entry.id) }
-            precondition(try SceneLibraryStore(file: index).catalog.entries.contains { $0.id == entry.id })
+            let afterFailure = try SceneLibraryStore(file: index)
+            precondition(afterFailure.catalog.entries.contains { $0.id == entry.id })
             try FileManager.default.removeItem(at: store.removedFile)
             try store.remove(entry.id)
             precondition(!store.catalog.entries.contains { $0.id == entry.id })
