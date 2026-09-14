@@ -10,7 +10,8 @@ enum SceneLibrarySQLiteCatalog {
     static let maxDatabaseBytes: Int64 = 64 * 1024 * 1024
     private static let pageSize = 4096
     private static let maxPageCount = Int(maxDatabaseBytes) / pageSize
-    private static let temporaryOrdinalOffset = 1_000_000
+    private static let shiftedOrdinalOffset = 1_000_000
+    private static let stagedOrdinalOffset = 2_000_000
 
     struct Paths: Equatable {
         let database: URL
@@ -43,39 +44,45 @@ enum SceneLibrarySQLiteCatalog {
     /// Builds and verifies a sibling candidate, publishes the database, then switches
     /// the tiny selector last. The caller owns the Library write lock.
     static func migrate(_ catalog: SceneLibraryStore.Catalog, fromJSON jsonFile: URL) throws {
+        guard try !hasSQLiteSelector(for: jsonFile) else { return }
         let paths = paths(for: jsonFile)
-        try FileManager.default.createDirectory(at: jsonFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: paths.candidate)
-        try buildCandidate(catalog, at: paths.candidate)
-        try verifyDatabase(at: paths.candidate)
-        let roundTrip = try readCatalog(at: paths.candidate)
-        guard roundTrip == catalog else {
-            try? FileManager.default.removeItem(at: paths.candidate)
-            throw failure("SQLite migration verification found a semantic mismatch.")
+        let manager = FileManager.default
+        try manager.createDirectory(at: jsonFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? manager.removeItem(at: paths.candidate)
+        do {
+            try buildCandidate(catalog, at: paths.candidate)
+            try verifyDatabase(at: paths.candidate)
+            let roundTrip = try readCatalog(at: paths.candidate)
+            guard roundTrip == catalog else {
+                throw failure("SQLite migration verification found a semantic mismatch.")
+            }
+            try synchronizeFile(at: paths.candidate)
+        } catch {
+            try? manager.removeItem(at: paths.candidate)
+            throw error
         }
-        try synchronizeFile(at: paths.candidate)
 
-        let hadExistingDatabase = FileManager.default.fileExists(atPath: paths.database.path)
-        if FileManager.default.fileExists(atPath: paths.corruptBackup.path) {
-            try FileManager.default.removeItem(at: paths.corruptBackup)
+        let hadExistingDatabase = manager.fileExists(atPath: paths.database.path)
+        if manager.fileExists(atPath: paths.corruptBackup.path) {
+            try manager.removeItem(at: paths.corruptBackup)
         }
         if hadExistingDatabase {
-            try FileManager.default.moveItem(at: paths.database, to: paths.corruptBackup)
+            try manager.moveItem(at: paths.database, to: paths.corruptBackup)
         }
         do {
-            try FileManager.default.moveItem(at: paths.candidate, to: paths.database)
+            try manager.moveItem(at: paths.candidate, to: paths.database)
             try synchronizeFile(at: paths.database)
             try synchronizeDirectory(at: jsonFile.deletingLastPathComponent())
             try Data(selectorValue.utf8).write(to: paths.selector, options: .atomic)
             try synchronizeFile(at: paths.selector)
             try synchronizeDirectory(at: jsonFile.deletingLastPathComponent())
         } catch {
-            try? FileManager.default.removeItem(at: paths.candidate)
-            if FileManager.default.fileExists(atPath: paths.database.path) {
-                try? FileManager.default.removeItem(at: paths.database)
+            try? manager.removeItem(at: paths.candidate)
+            if manager.fileExists(atPath: paths.database.path) {
+                try? manager.removeItem(at: paths.database)
             }
-            if hadExistingDatabase, FileManager.default.fileExists(atPath: paths.corruptBackup.path) {
-                try? FileManager.default.moveItem(at: paths.corruptBackup, to: paths.database)
+            if hadExistingDatabase, manager.fileExists(atPath: paths.corruptBackup.path) {
+                try? manager.moveItem(at: paths.corruptBackup, to: paths.database)
             }
             throw error
         }
@@ -414,12 +421,10 @@ enum SceneLibrarySQLiteCatalog {
         for value in current where !nextIDs.contains(value.id) {
             try delete.bind(value.id, at: 1); try delete.stepDone(); delete.reset()
         }
-        let currentOrder = current.filter { nextIDs.contains($0.id) }.map(\.id)
-        let nextExisting = next.filter { currentByID[$0.id] != nil }.map(\.id)
-        let orderChanged = currentOrder != nextExisting
+        let orderChanged = current.map(\.id) != next.map(\.id)
         if orderChanged { try shiftOrdinals(table: "sources", in: db) }
         for (ordinal, value) in next.enumerated() where currentByID[value.id] != value || currentByID[value.id] == nil {
-            try upsertSource(value, ordinal: orderChanged ? temporaryOrdinalOffset + ordinal : ordinal, in: db)
+            try upsertSource(value, ordinal: orderChanged ? stagedOrdinalOffset + ordinal : ordinal, in: db)
         }
         if orderChanged { try setOrdinals(table: "sources", ids: next.map(\.id), in: db) }
     }
@@ -427,18 +432,17 @@ enum SceneLibrarySQLiteCatalog {
     private static func applyEntries(current: [SceneLibraryStore.Entry], next: [SceneLibraryStore.Entry], in db: Database) throws {
         guard current != next else { return }
         let currentByID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
-        let nextIDs = Set(next.map(\.id))
-        let currentOrder = current.filter { nextIDs.contains($0.id) }.map(\.id)
-        let nextExisting = next.filter { currentByID[$0.id] != nil }.map(\.id)
-        let orderChanged = currentOrder != nextExisting
+        let orderChanged = current.map(\.id) != next.map(\.id)
         if orderChanged { try shiftOrdinals(table: "entries", in: db) }
 
+        // Release old Source-scoped identity keys before changed rows are reassigned,
+        // allowing two existing entries to swap catalog identities in one transaction.
         let clearCatalogID = try db.prepare("UPDATE entries SET catalog_id=NULL WHERE id=?")
         for value in next where currentByID[value.id] != nil && currentByID[value.id] != value {
             try clearCatalogID.bind(value.id, at: 1); try clearCatalogID.stepDone(); clearCatalogID.reset()
         }
         for (ordinal, value) in next.enumerated() where currentByID[value.id] != value || currentByID[value.id] == nil {
-            try upsertEntry(value, ordinal: orderChanged ? temporaryOrdinalOffset + ordinal : ordinal, in: db)
+            try upsertEntry(value, ordinal: orderChanged ? stagedOrdinalOffset + ordinal : ordinal, in: db)
         }
         if orderChanged { try setOrdinals(table: "entries", ids: next.map(\.id), in: db) }
     }
@@ -468,24 +472,23 @@ enum SceneLibrarySQLiteCatalog {
         for value in current where !nextIDs.contains(value.id) {
             try delete.bind(value.id, at: 1); try delete.stepDone(); delete.reset()
         }
-        let currentOrder = current.filter { nextIDs.contains($0.id) }.map(\.id)
-        let nextExisting = next.filter { currentByID[$0.id] != nil }.map(\.id)
-        let orderChanged = currentOrder != nextExisting
+        let orderChanged = current.map(\.id) != next.map(\.id)
         if orderChanged { try shiftOrdinals(table: "collections", in: db) }
 
+        // Release changed unique names before writing their final values so swaps are atomic.
         let temporaryNames = try db.prepare("UPDATE collections SET name=? WHERE id=?")
         for value in next where currentByID[value.id] != nil && currentByID[value.id]?.name != value.name {
-            try temporaryNames.bind("__idlesse_tmp_\(value.id)", at: 1); try temporaryNames.bind(value.id, at: 2)
-            try temporaryNames.stepDone(); temporaryNames.reset()
+            try temporaryNames.bind("__idlesse_tmp__\(UUID().uuidString)", at: 1)
+            try temporaryNames.bind(value.id, at: 2); try temporaryNames.stepDone(); temporaryNames.reset()
         }
         for (ordinal, value) in next.enumerated() where currentByID[value.id] != value || currentByID[value.id] == nil {
-            try upsertCollection(value, ordinal: orderChanged ? temporaryOrdinalOffset + ordinal : ordinal, in: db)
+            try upsertCollection(value, ordinal: orderChanged ? stagedOrdinalOffset + ordinal : ordinal, in: db)
         }
         if orderChanged { try setOrdinals(table: "collections", ids: next.map(\.id), in: db) }
     }
 
     private static func shiftOrdinals(table: String, in db: Database) throws {
-        try db.execute("UPDATE \(table) SET ordinal = ordinal + \(temporaryOrdinalOffset)")
+        try db.execute("UPDATE \(table) SET ordinal = ordinal + \(shiftedOrdinalOffset)")
     }
 
     private static func setOrdinals(table: String, ids: [String], in db: Database) throws {
@@ -848,7 +851,12 @@ enum SceneLibrarySQLiteCatalog {
 
         func bind(_ value: String?, at index: Int32) throws {
             guard let statement else { throw failure("SQLite statement is closed.") }
-            let result: Int32 = value.map { text in text.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) } } ?? sqlite3_bind_null(statement, index)
+            let result: Int32
+            if let value {
+                result = value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) }
+            } else {
+                result = sqlite3_bind_null(statement, index)
+            }
             try checkBind(result)
         }
 
