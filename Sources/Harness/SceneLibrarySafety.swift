@@ -34,6 +34,15 @@ extension SceneLibraryStore {
                          processIdentifier: ProcessInfo.processInfo.processIdentifier)
     }
 
+    /// Current production callers historically construct the canonical Application
+    /// Support path themselves. Redirect exactly that path through the override/smoke
+    /// resolver so probes stay isolated without touching volatile Home/Library UI code.
+    static func effectiveIndexURL(_ requested: URL) -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let canonical = support.appendingPathComponent("Idlesse/Library/index.json").standardizedFileURL
+        return requested.standardizedFileURL == canonical ? defaultIndexURL : requested
+    }
+
     static func resolvedIndexURL(environment: [String: String], arguments: [String],
                                  applicationSupport: URL, temporaryDirectory: URL,
                                  processIdentifier: Int32) -> URL {
