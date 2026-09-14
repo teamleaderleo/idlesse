@@ -48,7 +48,7 @@ build/tests/scenes
 build/tests/recovery
 build/tests/audio
 build/tests/comfort
-build/tests/library
+IDLESSE_LIBRARY_BACKEND=json build/tests/library
 build/tests/library-reconcile
 IDLESSE_LIBRARY_BACKEND=json build/tests/library-safety
 build/tests/library-sqlite
