@@ -41,7 +41,9 @@ jobs:
         run: bash test.sh
 
       - name: Verify Main10 native media compatibility
-        run: bash test-media-compat.sh
+        run: |
+          command -v ffprobe >/dev/null || brew install ffmpeg
+          bash test-media-compat.sh
 
       - name: Verify selection transaction isolation
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
