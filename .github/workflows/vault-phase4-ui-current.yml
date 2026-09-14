@@ -1,0 +1,136 @@
+name: Vault Phase 4 Stack UI Current
+
+on:
+  push:
+    branches: [vault/library-stacks-ui-current]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: macos-15
+    steps:
+      - name: Check out current UI branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify base and apply guarded UI transform
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git merge-base HEAD origin/main)" = "ef0bc6e63e5db9e29f190433e2be73a8178d46d5"
+          cp .vault/phase4_ui.py "$RUNNER_TEMP/phase4_ui.py"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          p = Path(os.environ['RUNNER_TEMP']) / 'phase4_ui.py'
+          s = p.read_text()
+          old = '''    if s.count(start) != 1:\n        raise SystemExit(f"{path}: start marker count {s.count(start)} for {start[:80]!r}")\n    i = s.index(start)\n'''
+          new = '''    if start not in s:\n        raise SystemExit(f"{path}: start marker not found: {start[:80]!r}")\n    i = s.index(start)\n'''
+          if s.count(old) != 1:
+              raise SystemExit('between() guard patch did not match exactly once')
+          s = s.replace(old, new, 1)
+          fixtures = [
+              ('SceneDescriptor(title: "Aurora Dawn")', 'SceneDescriptor(title: "Aurora Dawn", nodes: [SceneNode(content: .shader(.init()))])'),
+              ('SceneDescriptor(title: "Nebula Night")', 'SceneDescriptor(title: "Nebula Night", nodes: [SceneNode(content: .shader(.init()))])'),
+          ]
+          for old, new in fixtures:
+              if s.count(old) != 1:
+                  raise SystemExit(f'fixture patch expected once: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          python3 "$RUNNER_TEMP/phase4_ui.py"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected one cache-identity match, found {n}: {old[:100]!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          controller = 'Sources/Harness/SceneLibraryController.swift'
+          grid = 'Sources/Harness/LibraryGridView.swift'
+
+          once(controller,
+          '''            self.stack = stack\n            self.stackHint = stackHint\n        }\n    }\n''',
+          '''            self.stack = stack\n            self.stackHint = stackHint\n        }\n\n        var contentIdentity: String {\n            stack == nil ? id : id + "\\u{0}" + (entry?.id ?? "")\n        }\n    }\n''')
+
+          once(controller,
+          '''        let revision = thumbnailRevisions[item.id, default: 0]\n        let requestID = revision == 0 ? item.id : "\\(item.id)|\\(revision)"\n''',
+          '''        let revision = thumbnailRevisions[item.id, default: 0]\n        let contentID = item.contentIdentity\n        let requestID = revision == 0 ? contentID : "\\(contentID)|\\(revision)"\n''')
+          once(controller,
+          '''            let key = "\\(item.id)|\\(revision)|\\(source.path)|\\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\\(stamp?.fileSize ?? 0)|\\(framingData?.base64EncodedString() ?? "")" as NSString\n''',
+          '''            let key = "\\(item.contentIdentity)|\\(revision)|\\(source.path)|\\(stamp?.contentModificationDate?.timeIntervalSince1970 ?? 0)|\\(stamp?.fileSize ?? 0)|\\(framingData?.base64EncodedString() ?? "")" as NSString\n''')
+
+          once(controller,
+          '''        if posterItemID != selected?.id { poster.image = nil }\n        posterItemID = selected?.id\n''',
+          '''        if posterItemID != selected?.contentIdentity { poster.image = nil }\n        posterItemID = selected?.contentIdentity\n''')
+          once(controller,
+          '''        titleLabel.stringValue = selected.title\n        favorite.title = selected.stack == nil ? (store.catalog.favorites.contains(selected.id) ? "★" : "☆") : ""\n''',
+          '''        let cacheID = selected.contentIdentity\n        titleLabel.stringValue = selected.title\n        favorite.title = selected.stack == nil ? (store.catalog.favorites.contains(selected.id) ? "★" : "☆") : ""\n''')
+          once(controller, '                if let cached = self.cache[selected.id], cached.revision == revision {\n',
+               '                if let cached = self.cache[cacheID], cached.revision == revision {\n')
+          once(controller, '                self.cache.removeValue(forKey: selected.id)\n',
+               '                self.cache.removeValue(forKey: cacheID)\n')
+          once(controller, '                self.cacheOrder.removeAll { $0 == selected.id }\n',
+               '                self.cacheOrder.removeAll { $0 == cacheID }\n')
+          once(controller, '                self.cacheOrder.append(selected.id)\n                self.cache[selected.id] = (image, note, revision)\n',
+               '                self.cacheOrder.append(cacheID)\n                self.cache[cacheID] = (image, note, revision)\n')
+
+          once(controller,
+          '''    private func searchScore(_ item: Item, query: String) -> Double? {\n        if query.isEmpty { return 0 }\n        if let stack = item.stack { return LibraryStackBrowser.score(query: query, stack: stack, in: store.catalog) }\n        if let entry = item.entry { return LibraryStackBrowser.entryScore(query: query, entry: entry) }\n        return Self.fuzzyScore(query: query, in: item.title)\n    }\n''',
+          '''    private func searchScore(_ item: Item, query: String) -> Double? {\n        if query.isEmpty { return 0 }\n        if let stack = item.stack { return LibraryStackBrowser.score(query: query, stack: stack, in: store.catalog) }\n        if let focusedStackID, let focused = LibraryStackBrowser.projection(id: focusedStackID, in: store.catalog),\n           LibraryStackBrowser.matchingChildren(of: focused, in: store.catalog, query: query).isEmpty,\n           let stackScore = LibraryStackBrowser.score(query: query, stack: focused, in: store.catalog) {\n            return stackScore\n        }\n        if let entry = item.entry { return LibraryStackBrowser.entryScore(query: query, entry: entry) }\n        return Self.fuzzyScore(query: query, in: item.title)\n    }\n''')
+
+          once(grid,
+          '''        let changed = self.item?.id != item.id\n''',
+          '''        let changed = self.item?.contentIdentity != item.contentIdentity\n''')
+          once(grid,
+          '''        let itemID = item.id\n        let generation = thumbnailGeneration\n''',
+          '''        let itemID = item.contentIdentity\n        let generation = thumbnailGeneration\n''')
+          once(grid,
+          '''                  self.item?.id == itemID else { return }\n''',
+          '''                  self.item?.contentIdentity == itemID else { return }\n''')
+          once(grid,
+          '''                          self.item?.id == itemID else { return }\n''',
+          '''                          self.item?.contentIdentity == itemID else { return }\n''')
+          PY
+
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected=$'Sources/Harness/LibraryGridView.swift\nSources/Harness/SceneLibraryController.swift'
+          test "$changed" = "$expected"
+
+      - name: Build development preview and saver
+        run: ./build.sh
+
+      - name: Smoke-test settings UI
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
+
+      - name: Run canonical tests
+        run: ./test.sh --clean
+
+      - name: Verify Library UI including stacks
+        run: IDLESSE_LIBRARY_UI_PROBE_ONLY=1 bash test-media-compat.sh
+
+      - name: Verify selection transaction isolation
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
+
+      - name: Run canonical wallpaper smoke
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-wallpaper "$PWD/Tests/Fixtures/tiny-loop.mp4"'
+
+      - name: Commit tested UI implementation
+        run: |
+          set -euo pipefail
+          git add Sources/Harness/SceneLibraryController.swift Sources/Harness/LibraryGridView.swift
+          git diff --cached --check
+          git config user.name "Vault"
+          git config user.email "vault@users.noreply.github.com"
+          git commit -m "Add stack browsing to the Library"
+          git push origin HEAD:vault/library-stacks-ui-current
