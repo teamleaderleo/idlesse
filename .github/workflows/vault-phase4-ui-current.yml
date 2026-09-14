@@ -94,12 +94,12 @@ jobs:
           once(grid,
           '''        let itemID = item.id\n        let generation = thumbnailGeneration\n''',
           '''        let itemID = item.contentIdentity\n        let generation = thumbnailGeneration\n''')
-          once(grid,
-          '''                  self.item?.id == itemID else { return }\n''',
-          '''                  self.item?.contentIdentity == itemID else { return }\n''')
-          once(grid,
-          '''                          self.item?.id == itemID else { return }\n''',
-          '''                          self.item?.contentIdentity == itemID else { return }\n''')
+          p = Path(grid)
+          s = p.read_text()
+          old = 'self.item?.id == itemID else { return }'
+          if s.count(old) != 2:
+              raise SystemExit(f'{grid}: expected two card callback guards, found {s.count(old)}')
+          p.write_text(s.replace(old, 'self.item?.contentIdentity == itemID else { return }'))
           PY
 
           git diff --check
