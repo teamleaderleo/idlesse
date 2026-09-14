@@ -6,12 +6,13 @@ struct LibraryStackChecks {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         try sourceGroupsAndSearchProjection()
         try sourceGroupIdentityPreservesExactPersistedStrings()
+        try stackJSONFallbackUsesNewCatalogVersion()
         try userStackCRUDAndSQLiteRoundTrip()
         try staleWritersMergeStackDeltas()
         try reconciliationPreservesStableStackMembership()
         try schemaV2UpgradesInPlace()
         try validationRejectsAmbiguousMembership()
-        print("Library stack checks passed: source groups, exact persisted group identity, reversible user stacks, representatives/search, stale writers, reconciliation identity, SQLite v2→v3 migration and exclusive membership")
+        print("Library stack checks passed: source groups, exact persisted group identity, v3 JSON fallback, reversible user stacks, representatives/search, stale writers, reconciliation identity, SQLite v2→v3 migration and exclusive membership")
     }
 
     private static func folder(_ name: String) throws -> URL {
@@ -79,6 +80,44 @@ struct LibraryStackChecks {
         precondition(groups.contains { Set($0.entryIDs) == ["nul-b1", "nul-b2"] })
         let whitespaceNames = Set(groups.filter { $0.entryIDs.first?.hasPrefix("ws-") == true }.map(\.name))
         precondition(whitespaceNames == ["group", " group "], "Whitespace is part of persisted group identity")
+    }
+
+    private static func stackJSONFallbackUsesNewCatalogVersion() throws {
+        let dir = try folder("fallback-version")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        var catalog = baseCatalog()
+        catalog.version = 2
+        try writeJSON(catalog, to: file)
+        let store = try SceneLibraryStore(file: file)
+        precondition(store.catalog.version == 2, "Existing v2 JSON must remain readable")
+
+        setenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR", "1", 1)
+        do {
+            defer { unsetenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR") }
+            _ = try store.createStack(name: "Fallback Stack", sceneIDs: ["a", "b"], representativeID: "b")
+        }
+        precondition(!store.usesSQLiteCatalog, "Injected pre-selector failure must leave JSON authoritative")
+        let paths = SceneLibrarySQLiteCatalog.paths(for: file)
+        precondition(!FileManager.default.fileExists(atPath: paths.selector.path))
+        precondition(!FileManager.default.fileExists(atPath: paths.database.path))
+        let fallback = try Data(contentsOf: file)
+        let root = try JSONSerialization.jsonObject(with: fallback) as! [String: Any]
+        precondition((root["version"] as? NSNumber)?.intValue == 3 && SceneLibraryStore.catalogVersion == 3,
+                     "Stack-bearing JSON fallback must be labeled with catalog version 3")
+
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(!reopened.usesSQLiteCatalog && reopened.catalog.version == 3)
+        precondition(reopened.catalog.stacks == [.init(id: store.catalog.stacks[0].id, name: "Fallback Stack",
+                                                       sceneIDs: ["a", "b"], representativeID: "b")])
+        precondition(reopened.catalog.entries.first(where: { $0.id == "a" })?.groupID == "aurora")
+
+        try reopened.renameStack(reopened.catalog.stacks[0].id, name: "Healthy Retry")
+        precondition(reopened.usesSQLiteCatalog, "Next healthy stack mutation must retry SQLite activation")
+        let selected = try SceneLibraryStore(file: file)
+        precondition(selected.usesSQLiteCatalog && selected.catalog.version == 3)
+        precondition(selected.catalog.stacks[0].name == "Healthy Retry" &&
+                     selected.catalog.entries.first(where: { $0.id == "a" })?.groupID == "aurora")
     }
 
     private static func userStackCRUDAndSQLiteRoundTrip() throws {
