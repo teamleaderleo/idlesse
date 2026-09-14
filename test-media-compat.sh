@@ -15,7 +15,10 @@ stream=require_stream_bit_depth(sys.argv[1],10)
 print('Main10 fixture:',stream)
 PY
 app="${BUILD_DIR:-$PWD/build}/Idlesse.app/Contents/MacOS/Idlesse"
+if [[ "${IDLESSE_LIBRARY_UI_PROBE_ONLY:-0}" == "1" ]]; then
+  "$app" -comfort.liveMenuStrip NO --smoke-library "$fixture_dir/library-main10.png" "$main10"
+  exit 0
+fi
 "$app" -comfort.liveMenuStrip NO --smoke-video-preparation "$main10"
-"$app" -comfort.liveMenuStrip NO --smoke-library "$fixture_dir/library-main10.png" "$main10"
 "$app" -comfort.liveMenuStrip NO --smoke-export "$main10"
 python3 scripts/media-batch/gradient_precision.py --encoder hevc_videotoolbox --output-json "$fixture_dir/main10-gradient.json"
