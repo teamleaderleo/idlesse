@@ -8,11 +8,12 @@ struct LibrarySQLiteChecks {
         try nilAndEmptyStateRoundTripsExactly()
         try highChurnStateDoesNotRewriteEntries()
         try staleWritersRebaseAfterActivation()
+        try deletionRenumbersOrdinals()
         try failedTransactionRollsBack()
         try corruptSelectedDatabaseFailsClosed()
         try failedCandidateLeavesJSONUntouched()
         try unknownSelectorFailsClosed()
-        print("Library SQLite checks passed: verified migration, schema/indexes, exact optional state, row-local mutations, stale-writer rebasing, rollback, fail-closed recovery, candidate safety and selector versioning")
+        print("Library SQLite checks passed: verified migration, schema/indexes, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, fail-closed recovery, candidate safety and selector versioning")
     }
 
     static func expectFailure(_ message: String, _ action: () throws -> Void) {
@@ -78,7 +79,8 @@ struct LibrarySQLiteChecks {
         try store.favorite("present") // first mutation: migrate, then apply one row delta
         precondition(store.usesSQLiteCatalog)
         precondition(!store.catalog.favorites.contains("present"))
-        precondition(try Data(contentsOf: file) == originalJSON, "SQLite activation rewrote the JSON recovery snapshot")
+        let retainedJSON = try Data(contentsOf: file)
+        precondition(retainedJSON == originalJSON, "SQLite activation rewrote the JSON recovery snapshot")
         precondition(FileManager.default.fileExists(atPath: store.sqliteDatabaseURL.path))
         precondition(FileManager.default.fileExists(atPath: store.backendSelectorURL.path))
         try SceneLibrarySQLiteCatalog.verifyDatabase(at: store.sqliteDatabaseURL)
@@ -103,7 +105,8 @@ struct LibrarySQLiteChecks {
         precondition(reopened.catalog.entries == initial.entries)
         precondition(reopened.catalog.sources == initial.sources)
         precondition(reopened.catalog.collections == initial.collections)
-        precondition(try Data(contentsOf: file) == originalJSON)
+        let historicalJSON = try Data(contentsOf: file)
+        precondition(historicalJSON == originalJSON)
     }
 
     private static func nilAndEmptyStateRoundTripsExactly() throws {
@@ -124,7 +127,8 @@ struct LibrarySQLiteChecks {
         try store.withIndexLock { try SceneLibrarySQLiteCatalog.migrate(store.catalog, fromJSON: file) }
         let reopened = try SceneLibraryStore(file: file)
         precondition(reopened.catalog == catalog, "SQLite collapsed nil and empty metadata/observation state")
-        precondition(try Data(contentsOf: file) == original)
+        let historical = try Data(contentsOf: file)
+        precondition(historical == original)
     }
 
     private static func highChurnStateDoesNotRewriteEntries() throws {
@@ -179,6 +183,19 @@ struct LibrarySQLiteChecks {
         precondition(Set(merged.collections.map(\.name)).isSuperset(of: ["A", "B"]))
     }
 
+    private static func deletionRenumbersOrdinals() throws {
+        let dir = try folder("ordinals")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        _ = try writeJSON(sampleCatalog(), to: file)
+        let store = try SceneLibraryStore(file: file)
+        try store.favorite("present") // activate
+        try store.removeCollection("collection-a")
+        let added = try store.createCollection(name: "After Removal")
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(reopened.catalog.collections.map(\.id) == ["collection-b", added.id], "SQLite collection ordinals were not compacted after deletion")
+    }
+
     private static func failedTransactionRollsBack() throws {
         let dir = try folder("rollback")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -210,22 +227,27 @@ struct LibrarySQLiteChecks {
         expectFailure("A corrupt selected SQLite catalog silently fell back to historical JSON") {
             _ = try SceneLibraryStore(file: file)
         }
-        precondition(try Data(contentsOf: file) == original, "Corrupt DB recovery rewrote historical JSON")
+        let historical = try Data(contentsOf: file)
+        precondition(historical == original, "Corrupt DB handling rewrote historical JSON")
     }
 
     private static func failedCandidateLeavesJSONUntouched() throws {
         let dir = try folder("candidate")
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("index.json")
-        let original = try writeJSON(sampleCatalog(), to: file)
+        let originalCatalog = sampleCatalog()
+        let original = try writeJSON(originalCatalog, to: file)
         let store = try SceneLibraryStore(file: file)
-        let candidate = SceneLibrarySQLiteCatalog.paths(for: file).candidate
-        try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: true)
-        expectFailure("Invalid candidate path was activated") {
-            try store.withIndexLock { try SceneLibrarySQLiteCatalog.migrate(store.catalog, fromJSON: file) }
+        var invalid = originalCatalog
+        invalid.entries.append(.init(id: "duplicate-catalog", title: "Duplicate", catalogID: "catalog.present",
+                                     sourceID: "source-a", relativeMediaPath: "video/Duplicate.mov"))
+        expectFailure("Invalid candidate catalog was activated") {
+            try store.withIndexLock { try SceneLibrarySQLiteCatalog.migrate(invalid, fromJSON: file) }
         }
-        precondition(try Data(contentsOf: file) == original)
+        let after = try Data(contentsOf: file)
+        precondition(after == original)
         precondition(!FileManager.default.fileExists(atPath: store.backendSelectorURL.path))
+        precondition(try SceneLibraryStore(file: file).catalog == originalCatalog)
     }
 
     private static func unknownSelectorFailsClosed() throws {
@@ -236,6 +258,7 @@ struct LibrarySQLiteChecks {
         let paths = SceneLibrarySQLiteCatalog.paths(for: file)
         try Data("sqlite-v999\n".utf8).write(to: paths.selector)
         expectFailure("Unknown Library backend selector was accepted") { _ = try SceneLibraryStore(file: file) }
-        precondition(try Data(contentsOf: file) == original)
+        let after = try Data(contentsOf: file)
+        precondition(after == original)
     }
 }
