@@ -117,7 +117,9 @@ jobs:
         run: ./test.sh --clean
 
       - name: Verify Library UI including stacks
-        run: IDLESSE_LIBRARY_UI_PROBE_ONLY=1 bash test-media-compat.sh
+        run: |
+          command -v ffprobe >/dev/null || brew install ffmpeg
+          IDLESSE_LIBRARY_UI_PROBE_ONLY=1 bash test-media-compat.sh
 
       - name: Verify selection transaction isolation
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
