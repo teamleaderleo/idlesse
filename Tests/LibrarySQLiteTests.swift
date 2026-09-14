@@ -5,6 +5,7 @@ struct LibrarySQLiteChecks {
     static func main() throws {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         try migrationRoundTripAndIndexes()
+        try deterministicExportIgnoresMapInsertionOrder()
         try nilAndEmptyStateRoundTripsExactly()
         try highChurnStateDoesNotRewriteEntries()
         try staleWritersRebaseAfterActivation()
@@ -12,8 +13,10 @@ struct LibrarySQLiteChecks {
         try failedTransactionRollsBack()
         try corruptSelectedDatabaseFailsClosed()
         try failedCandidateLeavesJSONUntouched()
+        try reservedVariantIntentFailsClosed()
+        try jsonOverrideCannotBypassSelectedSQLite()
         try unknownSelectorFailsClosed()
-        print("Library SQLite checks passed: verified migration, schema/indexes, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, fail-closed recovery, candidate safety and selector versioning")
+        print("Library SQLite checks passed: verified migration, schema/indexes, deterministic export, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, fail-closed recovery/variant intent, candidate safety, backend authority and selector versioning")
     }
 
     static func expectFailure(_ message: String, _ action: () throws -> Void) {
@@ -107,6 +110,33 @@ struct LibrarySQLiteChecks {
         precondition(reopened.catalog.collections == initial.collections)
         let historicalJSON = try Data(contentsOf: file)
         precondition(historicalJSON == originalJSON)
+        let exportA = try reopened.debugExportData()
+        let exportB = try SceneLibrarySQLiteCatalog.deterministicDebugExport(reopened.catalog)
+        precondition(exportA == exportB)
+    }
+
+    private static func deterministicExportIgnoresMapInsertionOrder() throws {
+        var first = sampleCatalog()
+        var second = sampleCatalog()
+        first.sources[0].catalogMetadata = Dictionary(uniqueKeysWithValues: [
+            ("publisher", "Idlesse Test"), ("catalog", "v4")
+        ])
+        second.sources[0].catalogMetadata = Dictionary(uniqueKeysWithValues: [
+            ("catalog", "v4"), ("publisher", "Idlesse Test")
+        ])
+        first.entries[1].provenance = Dictionary(uniqueKeysWithValues: [
+            ("license", "local"), ("origin", "catalog")
+        ])
+        second.entries[1].provenance = Dictionary(uniqueKeysWithValues: [
+            ("origin", "catalog"), ("license", "local")
+        ])
+        precondition(first == second)
+        let a = try SceneLibrarySQLiteCatalog.deterministicDebugExport(first)
+        let b = try SceneLibrarySQLiteCatalog.deterministicDebugExport(second)
+        precondition(a == b, "Equivalent catalogs produced different debug exports")
+        let text = String(decoding: a, as: UTF8.self)
+        precondition(text.contains("idlesse-library-debug-v2"))
+        precondition(text.contains("sqliteSchemaVersion"))
     }
 
     private static func nilAndEmptyStateRoundTripsExactly() throws {
@@ -249,6 +279,36 @@ struct LibrarySQLiteChecks {
         precondition(!FileManager.default.fileExists(atPath: store.backendSelectorURL.path))
         let reopened = try SceneLibraryStore(file: file)
         precondition(reopened.catalog == originalCatalog)
+    }
+
+    private static func reservedVariantIntentFailsClosed() throws {
+        let dir = try folder("variant-reserve")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        _ = try writeJSON(sampleCatalog(), to: file)
+        let store = try SceneLibraryStore(file: file)
+        try store.favorite("present")
+        try SceneLibrarySQLiteCatalog.testingExecute(
+            "UPDATE collection_items SET variant_id='11111111-1111-1111-1111-111111111111' WHERE collection_id='collection-a' AND ordinal=0",
+            for: file)
+        expectFailure("Current model silently discarded reserved collection variant intent") {
+            _ = try SceneLibraryStore(file: file)
+        }
+    }
+
+    private static func jsonOverrideCannotBypassSelectedSQLite() throws {
+        let dir = try folder("json-override")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        _ = try writeJSON(sampleCatalog(), to: file)
+        let store = try SceneLibraryStore(file: file)
+        try store.favorite("present")
+        precondition(store.usesSQLiteCatalog)
+        setenv("IDLESSE_LIBRARY_BACKEND", "json", 1)
+        defer { unsetenv("IDLESSE_LIBRARY_BACKEND") }
+        expectFailure("JSON test override bypassed an already-selected SQLite catalog") {
+            _ = try SceneLibraryStore(file: file)
+        }
     }
 
     private static func unknownSelectorFailsClosed() throws {
