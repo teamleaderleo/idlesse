@@ -1,0 +1,56 @@
+name: Vault Phase 4 Stack UI
+
+on:
+  push:
+    branches: [vault/library-stacks-ui]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: macos-15
+    steps:
+      - name: Check out UI branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify base and apply guarded transform
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git merge-base HEAD origin/main)" = "72dbef82d42d0600314470d91c89d049445651a6"
+          python3 .vault/phase4_ui.py
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected=$'Sources/Harness/LibraryGridView.swift\nSources/Harness/SceneLibraryController.swift'
+          test "$changed" = "$expected"
+
+      - name: Build development preview and saver
+        run: ./build.sh
+
+      - name: Smoke-test settings UI
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
+
+      - name: Run canonical tests
+        run: ./test.sh --clean
+
+      - name: Verify Library UI including stacks
+        run: IDLESSE_LIBRARY_UI_PROBE_ONLY=1 bash test-media-compat.sh
+
+      - name: Verify selection transaction isolation
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
+
+      - name: Run canonical wallpaper smoke
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-wallpaper "$PWD/Tests/Fixtures/tiny-loop.mp4"'
+
+      - name: Commit tested UI implementation
+        run: |
+          set -euo pipefail
+          git add Sources/Harness/SceneLibraryController.swift Sources/Harness/LibraryGridView.swift
+          git diff --cached --check
+          git config user.name "Vault"
+          git config user.email "vault@users.noreply.github.com"
+          git commit -m "Add stack browsing to the Library"
+          git push origin HEAD:vault/library-stacks-ui
