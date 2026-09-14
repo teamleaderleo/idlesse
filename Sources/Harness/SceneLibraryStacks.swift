@@ -11,6 +11,11 @@ struct LibraryStackProjection: Equatable, Sendable {
 }
 
 enum LibraryStackBrowser {
+    private struct SourceGroupKey: Hashable {
+        let sourceID: String
+        let groupID: String
+    }
+
     static func projections(in catalog: SceneLibraryStore.Catalog) -> [LibraryStackProjection] {
         let entriesByID = Dictionary(uniqueKeysWithValues: catalog.entries.map { ($0.id, $0) })
         var claimed = Set<String>()
@@ -24,18 +29,21 @@ enum LibraryStackBrowser {
             claimed.formUnion(ids)
         }
 
-        var groups: [String: [SceneLibraryStore.Entry]] = [:]
+        var groups: [SourceGroupKey: [SceneLibraryStore.Entry]] = [:]
         for entry in catalog.entries where !claimed.contains(entry.id) {
-            guard let sourceID = entry.sourceID, let groupID = normalized(entry.groupID) else { continue }
-            groups[sourceID + "\u{0}" + groupID, default: []].append(entry)
+            guard let sourceID = entry.sourceID, let groupID = entry.groupID, !groupID.isEmpty else { continue }
+            groups[.init(sourceID: sourceID, groupID: groupID), default: []].append(entry)
         }
-        for key in groups.keys.sorted() {
-            guard let entries = groups[key], entries.count >= 2,
-                  let sourceID = entries.first?.sourceID, let groupID = normalized(entries.first?.groupID) else { continue }
+        let keys = groups.keys.sorted {
+            $0.sourceID == $1.sourceID ? $0.groupID < $1.groupID : $0.sourceID < $1.sourceID
+        }
+        for key in keys {
+            guard let entries = groups[key], entries.count >= 2 else { continue }
             let ids = entries.sorted { $0.id < $1.id }.map(\.id)
-            let encoded = Data(groupID.utf8).base64EncodedString()
-            result.append(.init(id: "source:" + sourceID + ":" + encoded,
-                                name: sourceName(groupID: groupID, entries: entries), entryIDs: ids,
+            let encodedSource = Data(key.sourceID.utf8).base64EncodedString()
+            let encodedGroup = Data(key.groupID.utf8).base64EncodedString()
+            result.append(.init(id: "source:" + encodedSource + ":" + encodedGroup,
+                                name: sourceName(groupID: key.groupID, entries: entries), entryIDs: ids,
                                 representativeEntryID: nil, kind: .source, userStackID: nil))
         }
         return result
