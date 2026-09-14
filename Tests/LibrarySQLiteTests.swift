@@ -76,7 +76,7 @@ struct LibrarySQLiteChecks {
         precondition(!store.usesSQLiteCatalog)
         precondition(store.catalog == initial)
 
-        try store.favorite("present") // first mutation: migrate, then apply one row delta
+        try store.favorite("present")
         precondition(store.usesSQLiteCatalog)
         precondition(!store.catalog.favorites.contains("present"))
         let retainedJSON = try Data(contentsOf: file)
@@ -138,7 +138,7 @@ struct LibrarySQLiteChecks {
         let initial = sampleCatalog()
         _ = try writeJSON(initial, to: file)
         let store = try SceneLibraryStore(file: file)
-        try store.favorite("present") // activate SQLite
+        try store.favorite("present")
         try SceneLibrarySQLiteCatalog.testingExecute("""
             CREATE TRIGGER reject_entry_update BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT, 'entry rewrite'); END;
             CREATE TRIGGER reject_entry_insert BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'entry rewrite'); END;
@@ -189,7 +189,7 @@ struct LibrarySQLiteChecks {
         let file = dir.appendingPathComponent("index.json")
         _ = try writeJSON(sampleCatalog(), to: file)
         let store = try SceneLibraryStore(file: file)
-        try store.favorite("present") // activate
+        try store.favorite("present")
         try store.removeCollection("collection-a")
         let added = try store.createCollection(name: "After Removal")
         let reopened = try SceneLibraryStore(file: file)
@@ -247,7 +247,8 @@ struct LibrarySQLiteChecks {
         let after = try Data(contentsOf: file)
         precondition(after == original)
         precondition(!FileManager.default.fileExists(atPath: store.backendSelectorURL.path))
-        precondition(try SceneLibraryStore(file: file).catalog == originalCatalog)
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(reopened.catalog == originalCatalog)
     }
 
     private static func unknownSelectorFailsClosed() throws {
