@@ -1,0 +1,146 @@
+name: Vault Phase 4 Replay
+
+on:
+  push:
+    branches: [vault/library-stacks-replay]
+
+permissions:
+  contents: write
+
+jobs:
+  replay-test-commit:
+    runs-on: macos-15
+    steps:
+      - name: Check out replay branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify replay base
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "6528cdd866245e218a9b77b2ce80dcb0587b2a19"
+          git fetch origin vault/library-stacks-current --no-tags
+
+      - name: Replay tested stack delta
+        run: |
+          set -euo pipefail
+          paths=(
+            Sources/Harness/SceneLibraryStore.swift
+            Sources/Harness/SceneLibrarySafety.swift
+            Sources/Harness/SceneLibraryReconciliation.swift
+            Sources/Harness/SceneLibrarySQLiteStore.swift
+            Sources/Harness/SceneLibraryStacks.swift
+            Tests/LibrarySQLiteTests.swift
+            Tests/LibraryStackTests.swift
+            docs/library-stacks.md
+            test.sh
+          )
+          git diff --binary 0a805be5b1d31b1f0c84eac8b316726babdc51ea 9118358bc749f23aad1d5d95da5a33c6b34e3e4e -- "${paths[@]}" > "$RUNNER_TEMP/phase4.patch"
+          git apply --3way --index "$RUNNER_TEMP/phase4.patch"
+
+      - name: Serialize SQLite schema upgrade through Library lock
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {n}")
+              p.write_text(s.replace(old, new, 1))
+
+          once("Sources/Harness/SceneLibraryStore.swift",
+          '''        guard hasSelector || FileManager.default.fileExists(atPath: self.file.path) else { return }
+                  let (decoded, _) = try readIndex()
+          ''',
+          '''        guard hasSelector || FileManager.default.fileExists(atPath: self.file.path) else { return }
+                  // A selected SQLite catalog may need an in-place schema upgrade. Initial
+                  // open therefore takes the same cross-process lock as every other writer.
+                  let (decoded, _) = try withIndexLock { try readIndex() }
+          ''')
+
+          once("Sources/Harness/SceneLibrarySQLiteStore.swift",
+          '''        let url = paths(for: jsonFile).database
+                  try upgradeSchemaIfNeeded(at: url)
+                  return try readCatalog(at: url)
+              }
+
+              /// Applies only changed rows/relationships inside one IMMEDIATE transaction.
+          ''',
+          '''        return try readCatalog(at: paths(for: jsonFile).database)
+              }
+
+              /// Called only while the caller owns the Library's external writer lock.
+              /// Keeps readSelectedCatalog itself read-only so schema mutation cannot escape
+              /// the flock-coordinated path.
+              static func upgradeSelectedCatalogIfNeeded(for jsonFile: URL) throws {
+                  guard try hasSQLiteSelector(for: jsonFile) else {
+                      throw failure("The SQLite Library backend is not active.")
+                  }
+                  try upgradeSchemaIfNeeded(at: paths(for: jsonFile).database)
+              }
+
+              /// Applies only changed rows/relationships inside one IMMEDIATE transaction.
+          ''')
+
+          once("Sources/Harness/SceneLibrarySafety.swift",
+          '''            let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
+          ''',
+          '''            // readIndex is reached under withIndexLock in every production path.
+                      // Upgrade before the read so SQLite schema changes share the same flock
+                      // serialization as catalog mutations.
+                      try SceneLibrarySQLiteCatalog.upgradeSelectedCatalogIfNeeded(for: file)
+                      let decoded = try SceneLibrarySQLiteCatalog.readSelectedCatalog(for: file)
+          ''')
+          PY
+          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibrarySafety.swift
+          git diff --check
+
+      - name: Verify replay scope
+        run: |
+          set -euo pipefail
+          git diff --cached --name-only | tee "$RUNNER_TEMP/changed.txt"
+          while IFS= read -r path; do
+            case "$path" in
+              Sources/Harness/SceneLibraryStore.swift|Sources/Harness/SceneLibrarySafety.swift|Sources/Harness/SceneLibraryReconciliation.swift|Sources/Harness/SceneLibrarySQLiteStore.swift|Sources/Harness/SceneLibraryStacks.swift|Tests/LibrarySQLiteTests.swift|Tests/LibraryStackTests.swift|docs/library-stacks.md|test.sh) ;;
+              *) echo "Unexpected replay path: $path" >&2; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/changed.txt"
+
+      - name: Build development preview and saver
+        run: ./build.sh
+
+      - name: Smoke-test settings UI
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-options'
+
+      - name: Run canonical tests
+        run: ./test.sh --clean
+
+      - name: Verify selection transaction isolation
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" --smoke-selection-transactions'
+
+      - name: Run canonical wallpaper smoke
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-wallpaper "$PWD/Tests/Fixtures/tiny-loop.mp4"'
+
+      - name: Verify bundles
+        run: |
+          set -euo pipefail
+          file "build/Idlesse.saver/Contents/MacOS/Idlesse"
+          plutil -lint "build/Idlesse.saver/Contents/Info.plist"
+          plutil -lint "build/Idlesse.app/Contents/Info.plist"
+          codesign --verify --strict "build/Idlesse.saver"
+          codesign --verify --strict "build/Idlesse.app"
+
+      - name: Commit tested replay
+        run: |
+          set -euo pipefail
+          git add Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryStacks.swift Tests/LibrarySQLiteTests.swift Tests/LibraryStackTests.swift docs/library-stacks.md test.sh
+          git diff --cached --check
+          git config user.name "Vault"
+          git config user.email "vault@users.noreply.github.com"
+          git commit -m "Replay durable Library stacks on current SQLite"
+          git push origin HEAD:vault/library-stacks-replay
