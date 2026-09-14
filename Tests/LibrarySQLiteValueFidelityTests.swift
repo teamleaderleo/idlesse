@@ -56,7 +56,8 @@ struct LibrarySQLiteValueFidelityChecks {
         precondition(reopened.catalog.entries[0].bookmark == Data())
         precondition(reopened.catalog.sources[0].bookmark == Data())
         precondition(reopened.catalog.sources[0].catalogMetadata?["note"] == "alpha\u{0}omega")
-        precondition(try Data(contentsOf: file) == originalJSON, "Migration rewrote the JSON recovery snapshot")
+        let retainedJSON = try Data(contentsOf: file)
+        precondition(retainedJSON == originalJSON, "Migration rewrote the JSON recovery snapshot")
     }
 
     private static func storeFallbackPersistsMutationAndRetriesMigration() throws {
@@ -91,7 +92,8 @@ struct LibrarySQLiteValueFidelityChecks {
         try reopenedJSON.favorite("entry")
         precondition(reopenedJSON.usesSQLiteCatalog, "Healthy mutation did not retry SQLite activation")
         precondition(reopenedJSON.catalog.favorites.contains("entry"))
-        precondition(try Data(contentsOf: file) == fallbackJSON,
+        let postRetryJSON = try Data(contentsOf: file)
+        precondition(postRetryJSON == fallbackJSON,
                      "Successful retry rewrote the authoritative JSON fallback snapshot")
 
         let reopenedSQLite = try SceneLibraryStore(file: file)
