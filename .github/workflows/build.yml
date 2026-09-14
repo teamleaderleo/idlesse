@@ -18,6 +18,12 @@ jobs:
           xcodebuild -version
           swiftc --version
 
+      - name: Verify media pipeline helpers
+        run: |
+          python3 -m venv "$RUNNER_TEMP/media-tests"
+          "$RUNNER_TEMP/media-tests/bin/pip" install --quiet --disable-pip-version-check "Pillow==11.3.0"
+          "$RUNNER_TEMP/media-tests/bin/python" scripts/media-batch/test_batch.py
+
       - name: Build development preview and arm64 saver
         run: ./build.sh
 

@@ -41,9 +41,16 @@ window.prepare=async(folder,stem,width,height,animation='idle')=>{
  const configs=await(await fetch('viewer-configs.json')).json();const cfg=configs[stem]??{},factor=height/1080,scale=cfg.newMainScale??1,offset=cfg.offset??[0,0],extra=cfg.newMainOffset??[0,-10];
  model.scale.set((cfg.scale??52)*scale/model.internalModel.pixelsPerUnit*factor);
  model.position.set(width/2+(extra[0]+offset[0]*scale)*factor,height/2-(extra[1]+offset[1]*scale)*factor);
- const cameras=await(await fetch('cameras.json')).json(),zoom=cameras[stem]??1;
+ // A recipe is a number, zooming the character over its background, or
+ // {zoom, view}. `view` is [zoom, cx, cy] for the whole stage, background
+ // included, in the lobby renderer's convention: the stage point at frame
+ // fraction (cx, cy) lands in the centre, scaled by zoom. A crop box drawn over an
+ // export becomes a view, so the background is cropped with the character.
+ const cameras=await(await fetch('cameras.json')).json(),recipe=cameras[stem]??1;
+ const zoom=typeof recipe==='number'?recipe:(recipe.zoom??1),view=Array.isArray(recipe?.view)?recipe.view:null;
  model.scale.set(model.scale.x*zoom);model.position.set(width/2+(model.x-width/2)*zoom,height/2+(model.y-height/2)*zoom);
  if(stem==='yingxianzuo_3')model.y+=height*.10;
+ if(view){const [z,cx,cy]=view;app.stage.scale.set(z);app.stage.position.set(width/2-width*cx*z,height/2-height*cy*z);}
  model.elapsedTime=0;model.internalModel.breath=undefined;model.internalModel.eyeBlink=undefined;
  const motion=await model.internalModel.motionManager.loadMotion(animation,0);if(!motion)throw Error('Missing idle motion');
  motion.setIsLoop(true);motion.setFadeInTime(0);motion.setFadeOutTime(0);motion.setIsLoopFadeIn(false);
@@ -106,6 +113,6 @@ window.prepare=async(folder,stem,width,height,animation='idle')=>{
   if(fast==='draw'){app.renderer.gl.finish();return null;}
   return app.view.toDataURL(fast?'image/jpeg':'image/png',.99).split(',')[1];
  };
- return {animations:[{name:animation,duration:motionMeta.Meta.Duration}],width:model.internalModel.width,height:model.internalModel.height,pixelsPerUnit:model.internalModel.pixelsPerUnit,physics:!!model.internalModel.physics,idleLoops,
+ return {camera:view,animations:[{name:animation,duration:motionMeta.Meta.Duration}],width:model.internalModel.width,height:model.internalModel.height,pixelsPerUnit:model.internalModel.pixelsPerUnit,physics:!!model.internalModel.physics,idleLoops,
   ambient:ambient&&{group:ambient.group,parameters:ambient.curves.length,driftCorrected:ambient.curves.filter(c=>c.drift).length,authoredDuration:ambient.duration,retimedBy:Number(ambient.rate.toFixed(4)),skippedSharedParameters:ambient.skipped}};
 };
