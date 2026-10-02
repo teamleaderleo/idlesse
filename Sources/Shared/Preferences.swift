@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
 import ScreenSaver
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 enum IdlesseMultiDisplayMode: String, CaseIterable, Codable {
     case same

@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Frontmost layer first, with native selection and local drag ordering.
 final class SceneLayerList: NSScrollView, NSTableViewDataSource, NSTableViewDelegate {

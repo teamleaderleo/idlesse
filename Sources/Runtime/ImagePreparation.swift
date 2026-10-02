@@ -1,10 +1,10 @@
 import AppKit
 
 /// Serialize expensive decoding across saver displays without blocking AppKit.
-actor ImagePreparation {
-    static let shared = ImagePreparation()
+package actor ImagePreparation {
+    package static let shared = ImagePreparation()
 
-    func load(_ playable: SceneDescriptor, target: CGSize, mode: IdlesseScalingMode, scope: URL?) throws -> NSImage {
+    package func load(_ playable: SceneDescriptor, target: CGSize, mode: IdlesseScalingMode, scope: URL?) throws -> NSImage {
         try Task.checkCancellation()
         guard playable.kind == .image, let assetURL = playable.assetURL else { throw SceneError.invalid("The screensaver needs an image.") }
         let accessed = scope?.startAccessingSecurityScopedResource() ?? false

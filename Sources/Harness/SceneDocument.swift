@@ -1,5 +1,8 @@
 import AppKit
 import AVFoundation
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Document state and asset access. Snapshots contain references, never decoded media.
 final class SceneDocument {

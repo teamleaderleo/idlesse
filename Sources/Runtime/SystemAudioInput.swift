@@ -2,8 +2,8 @@ import Foundation
 import CoreAudio
 
 /// One private tap shared by active hosts. Control methods run on the main thread.
-final class SystemAudioInput {
-    static let shared = SystemAudioInput()
+package final class SystemAudioInput {
+    package static let shared = SystemAudioInput()
     private var clients = Set<UUID>()
     private var tap: AudioObjectID = 0
     private var device: AudioObjectID = 0
@@ -13,12 +13,12 @@ final class SystemAudioInput {
     private var levels = SceneAudioLevels()
     private var updated: TimeInterval = 0
     private var captureGeneration = 0
-    var isCapturing: Bool { device != 0 && ioProc != nil }
-    func snapshot() -> SceneAudioLevels {
+    package var isCapturing: Bool { device != 0 && ioProc != nil }
+    package func snapshot() -> SceneAudioLevels {
         lock.lock(); defer { lock.unlock() }
         return ProcessInfo.processInfo.systemUptime - updated < 0.5 ? levels : .init()
     }
-    func setActive(_ active: Bool, client: UUID) throws {
+    package func setActive(_ active: Bool, client: UUID) throws {
         precondition(Thread.isMainThread)
         if active {
             guard !clients.contains(client) else { return }
@@ -101,10 +101,10 @@ final class SystemAudioInput {
 }
 
 /// A session grant belongs to a host clock, not to a scene file.
-final class SceneAudioSession {
+package final class SceneAudioSession {
     private let id = UUID()
     private weak var clock: SceneClock?
-    init(clock: SceneClock, onError: @escaping (String) -> Void) {
+    package init(clock: SceneClock, onError: @escaping (String) -> Void) {
         self.clock = clock
         clock.audioLevels = { SystemAudioInput.shared.snapshot() }
         clock.audioActivityChanged = { [weak self, weak clock] active in

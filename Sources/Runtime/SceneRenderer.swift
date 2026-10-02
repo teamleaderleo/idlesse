@@ -5,10 +5,10 @@ import Metal
 import CoreVideo
 import IOKit.ps
 
-enum PowerManagement {
+package enum PowerManagement {
     private static var powerRunLoopSource: CFRunLoopSource?
 
-    static func startMonitoring() {
+    package static func startMonitoring() {
         guard powerRunLoopSource == nil else { return }
         if let source = IOPSNotificationCreateRunLoopSource({ _ in
             DispatchQueue.main.async {
@@ -20,43 +20,43 @@ enum PowerManagement {
         }
     }
 
-    static var isBatteryPowered: Bool {
+    package static var isBatteryPowered: Bool {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return false }
         guard let type = IOPSGetProvidingPowerSourceType(blob)?.takeRetainedValue() as String? else { return false }
         return type == "Battery Power"
     }
 
-    static var isLowPowerOrBatteryThrottled: Bool {
+    package static var isLowPowerOrBatteryThrottled: Bool {
         ProcessInfo.processInfo.isLowPowerModeEnabled ||
             (SceneFrameRate.throttleOnBattery && isBatteryPowered)
     }
 }
 
-enum SceneFrameRate: Int, CaseIterable {
+package enum SceneFrameRate: Int, CaseIterable {
     case automatic = 0, matchDisplay = -1, fps30 = 30, fps60 = 60, fps120 = 120, fps160 = 160
-    static let changed = Notification.Name("IdlesseSceneFrameRateChanged")
-    static var selected: SceneFrameRate {
+    package static let changed = Notification.Name("IdlesseSceneFrameRateChanged")
+    package static var selected: SceneFrameRate {
         get { SceneFrameRate(rawValue: UserDefaults.standard.integer(forKey: "sceneFrameRate")) ?? .automatic }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: "sceneFrameRate")
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }
-    static var throttleOnBattery: Bool {
+    package static var throttleOnBattery: Bool {
         get { UserDefaults.standard.object(forKey: "sceneFrameRateThrottleOnBattery") == nil ? false : UserDefaults.standard.bool(forKey: "sceneFrameRateThrottleOnBattery") }
         set {
             UserDefaults.standard.set(newValue, forKey: "sceneFrameRateThrottleOnBattery")
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }
-    var title: String {
+    package var title: String {
         switch self {
         case .automatic: return "Frame Rate: Auto"
         case .matchDisplay: return "Match Display"
         default: return "\(rawValue) fps"
         }
     }
-    func requested(maximum: Int) -> Int? {
+    package func requested(maximum: Int) -> Int? {
         let maximum = maximum > 0 ? maximum : 60
         PowerManagement.startMonitoring()
         if PowerManagement.isLowPowerOrBatteryThrottled {
@@ -71,57 +71,59 @@ enum SceneFrameRate: Int, CaseIterable {
 }
 
 /// Constant-space accounting; callbacks may arrive off the main thread.
-final class PresentedFrameCounter {
+package final class PresentedFrameCounter {
+    package init() {}
     private let lock = NSLock()
     private var count = 0
     private var gpuSeconds = 0.0
     private var completed = 0
-    func recordGPU(start: TimeInterval, end: TimeInterval) {
+    package func recordGPU(start: TimeInterval, end: TimeInterval) {
         guard start > 0, end >= start, end.isFinite else { return }
         lock.lock()
         gpuSeconds += end - start
         completed += 1
         lock.unlock()
     }
-    var gpuTotals: (seconds: Double, frames: Int) {
+    package var gpuTotals: (seconds: Double, frames: Int) {
         lock.lock()
         defer { lock.unlock() }
         return (gpuSeconds, completed)
     }
-    func record(presentedTime: TimeInterval) {
+    package func record(presentedTime: TimeInterval) {
         guard presentedTime > 0, presentedTime.isFinite else { return }
         lock.lock()
         count += 1
         lock.unlock()
     }
-    var total: Int {
+    package var total: Int {
         lock.lock()
         defer { lock.unlock() }
         return count
     }
 }
 
-struct PresentationRateSample {
+package struct PresentationRateSample {
+    package init() {}
     private var previous: (count: Int, time: TimeInterval)?
-    mutating func sample(count: Int, time: TimeInterval) -> Double? {
+    package mutating func sample(count: Int, time: TimeInterval) -> Double? {
         defer { previous = (count, time) }
         guard let previous, time > previous.time, count >= previous.count else { return nil }
         return Double(count - previous.count) / (time - previous.time)
     }
 }
 
-struct RendererDiagnostics {
-    enum State { case ready, running, paused, disposed }
-    var state: State
-    var animated: Bool
-    var activeResources: Int
-    var loopCount: Int = 0
-    var frameCount: Int = 0
-    var audioMuted: Bool = true
-    var allowsDisplaySleep: Bool = true
+package struct RendererDiagnostics {
+    package enum State { case ready, running, paused, disposed }
+    package var state: State
+    package var animated: Bool
+    package var activeResources: Int
+    package var loopCount: Int = 0
+    package var frameCount: Int = 0
+    package var audioMuted: Bool = true
+    package var allowsDisplaySleep: Bool = true
 }
 
-protocol SceneRenderer: AnyObject {
+package protocol SceneRenderer: AnyObject {
     var view: NSView { get }
     var diagnostics: RendererDiagnostics { get }
     var isReadyForDisplay: Bool { get }
@@ -138,14 +140,14 @@ protocol SceneRenderer: AnyObject {
 }
 
 extension SceneRenderer {
-    var isReadyForDisplay: Bool { true }
-    func refreshSceneTime() { view.needsDisplay = true }
-    func setMuted(_ muted: Bool) {}
-    func updateScene(_ scene: SceneDescriptor) -> Bool { false }
-    var presentedFrameCount: Int? { nil }
-    var gpuTotals: (seconds: Double, frames: Int)? { nil }
+    package var isReadyForDisplay: Bool { true }
+    package func refreshSceneTime() { view.needsDisplay = true }
+    package func setMuted(_ muted: Bool) {}
+    package func updateScene(_ scene: SceneDescriptor) -> Bool { false }
+    package var presentedFrameCount: Int? { nil }
+    package var gpuTotals: (seconds: Double, frames: Int)? { nil }
     // AVPlayerLayer follows source playback; static images do not need a redraw loop.
-    func setPreferredFrameRate(_ rate: Int?) {}
+    package func setPreferredFrameRate(_ rate: Int?) {}
 }
 
 /// Holds the player in a sublayer so the view itself can clip it.
@@ -190,7 +192,7 @@ private final class VideoWallpaperView: NSView {
 /// StaticImageRenderer. Metal scenes show the first frame; animation lives in
 /// the Standard compositor.
 extension ImageCanvasView {
-    func setSceneFraming(focus: SceneFocus?, bleed: SceneBleed?) {
+    package func setSceneFraming(focus: SceneFocus?, bleed: SceneBleed?) {
         fillFocus = focus.map { CGPoint(x: $0.x, y: $0.y) }
         if focus != nil || bleed?.isEmpty == false {
             fillFrame = { content, bounds in
@@ -202,8 +204,8 @@ extension ImageCanvasView {
     }
 }
 
-final class AnimatedImageRenderer: SceneRenderer {
-    let view: NSView
+package final class AnimatedImageRenderer: SceneRenderer {
+    package let view: NSView
     private let canvas = ImageCanvasView()
     private let source: CGImageSource
     private let count: Int
@@ -214,12 +216,12 @@ final class AnimatedImageRenderer: SceneRenderer {
     private var timer: Timer?
     private var state: RendererDiagnostics.State = .ready
 
-    var diagnostics: RendererDiagnostics {
+    package var diagnostics: RendererDiagnostics {
         RendererDiagnostics(state: state, animated: true, activeResources: 1,
             loopCount: loops, frameCount: frames)
     }
 
-    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil) throws {
+    package init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil) throws {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 1 else {
             throw SceneError.invalid("Not an animated image.")
@@ -280,13 +282,13 @@ final class AnimatedImageRenderer: SceneRenderer {
         self.timer = timer
     }
 
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
         if paused { timer?.invalidate(); timer = nil } else { arm() }
     }
-    func setPreferredFrameRate(_ rate: Int?) {}
-    func releaseResources() {
+    package func setPreferredFrameRate(_ rate: Int?) {}
+    package func releaseResources() {
         state = .disposed
         timer?.invalidate(); timer = nil
         canvas.currentImage = nil
@@ -295,10 +297,10 @@ final class AnimatedImageRenderer: SceneRenderer {
 }
 
 /// Static single-frame fallback; see AnimatedImageRenderer above for loops.
-final class StaticImageRenderer: SceneRenderer {
-    let view: NSView
-    private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 1)
-    init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, pixelLimit: CGFloat = DisplayImageDecoder.pixelBudget) throws {
+package final class StaticImageRenderer: SceneRenderer {
+    package let view: NSView
+    package private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 1)
+    package init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, pixelLimit: CGFloat = DisplayImageDecoder.pixelBudget) throws {
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         guard let url = playable.assetURL,
               let image = DisplayImageDecoder.load(url, target: size, mode: .fill, pixelLimit: pixelLimit) else {
@@ -310,11 +312,11 @@ final class StaticImageRenderer: SceneRenderer {
         canvas.currentImage = image
         view = canvas
     }
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
     }
-    func releaseResources() {
+    package func releaseResources() {
         (view as? ImageCanvasView)?.currentImage = nil
         diagnostics.state = .disposed
         diagnostics.activeResources = 0
@@ -324,36 +326,36 @@ final class StaticImageRenderer: SceneRenderer {
 /// Manages a single shared video playback engine across multiple display surfaces.
 /// This prevents multiple hardware decoders (VTDecoderXPCService) from duplicating
 /// uncompressed framebuffers when the same scene or video is displayed across monitors.
-final class SharedVideoHub {
-    final class TrackedVideo {
-        let nodeID: UUID
-        let url: URL
-        let player: AVQueuePlayer
-        var looper: AVPlayerLooper?
-        var statusObserver: NSKeyValueObservation?
-        var followsClock: Bool = false
-        var seekInFlight: Bool = false
-        var lastCorrection: Double = -.infinity
-        var transportRevision: UInt64?
+package final class SharedVideoHub {
+    package final class TrackedVideo {
+        package let nodeID: UUID
+        package let url: URL
+        package let player: AVQueuePlayer
+        package var looper: AVPlayerLooper?
+        package var statusObserver: NSKeyValueObservation?
+        package var followsClock: Bool = false
+        package var seekInFlight: Bool = false
+        package var lastCorrection: Double = -.infinity
+        package var transportRevision: UInt64?
 
-        struct CachedFrame {
-            let buffer: CVPixelBuffer
-            let wrapper: CVMetalTexture?
-            let texture: MTLTexture?
-            let time: CMTime
+        package struct CachedFrame {
+            package let buffer: CVPixelBuffer
+            package let wrapper: CVMetalTexture?
+            package let texture: MTLTexture?
+            package let time: CMTime
         }
-        var recentFrames: [CachedFrame] = []
-        var latestTexture: MTLTexture?
-        var latestWrapper: CVMetalTexture?
-        var latestBuffer: CVPixelBuffer?
+        package var recentFrames: [CachedFrame] = []
+        package var latestTexture: MTLTexture?
+        package var latestWrapper: CVMetalTexture?
+        package var latestBuffer: CVPixelBuffer?
 
-        init(nodeID: UUID, url: URL, player: AVQueuePlayer) {
+        package init(nodeID: UUID, url: URL, player: AVQueuePlayer) {
             self.nodeID = nodeID
             self.url = url
             self.player = player
         }
 
-        func prepareOutputs() {
+        package func prepareOutputs() {
             for replica in looper?.loopingPlayerItems ?? player.items() {
                 replica.preferredForwardBufferDuration = 0.5
                 guard !replica.outputs.contains(where: { $0 is AVPlayerItemVideoOutput }) else { continue }
@@ -378,10 +380,10 @@ final class SharedVideoHub {
         }
     }
 
-    struct SampledFrame {
-        let texture: MTLTexture?
-        let wrapper: CVMetalTexture?
-        let buffer: CVPixelBuffer?
+    package struct SampledFrame {
+        package let texture: MTLTexture?
+        package let wrapper: CVMetalTexture?
+        package let buffer: CVPixelBuffer?
     }
 
     private let lock = NSLock()
@@ -389,17 +391,17 @@ final class SharedVideoHub {
     private var cache: CVMetalTextureCache?
     private var isClosed = false
 
-    var primaryPlayer: AVQueuePlayer? {
+    package var primaryPlayer: AVQueuePlayer? {
         lock.lock(); defer { lock.unlock() }
         return videos.values.first?.player
     }
 
-    var loopCount: Int {
+    package var loopCount: Int {
         lock.lock(); defer { lock.unlock() }
         return videos.values.compactMap { $0.looper?.loopCount }.min() ?? 0
     }
 
-    init(scene: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) {
+    package init(scene: SceneDescriptor, clock: SceneClock, onError: @escaping (String) -> Void) {
         if let device = MTLCreateSystemDefaultDevice() {
             CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
         }
@@ -438,12 +440,12 @@ final class SharedVideoHub {
         }
     }
 
-    func player(for nodeID: UUID) -> AVQueuePlayer? {
+    package func player(for nodeID: UUID) -> AVQueuePlayer? {
         lock.lock(); defer { lock.unlock() }
         return videos[nodeID]?.player
     }
 
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         lock.lock(); defer { lock.unlock() }
         guard !isClosed else { return }
         for video in videos.values {
@@ -454,7 +456,7 @@ final class SharedVideoHub {
             }
         }
     }
-    func setMuted(_ muted: Bool) {
+    package func setMuted(_ muted: Bool) {
         lock.lock(); defer { lock.unlock() }
         for video in videos.values {
             video.player.isMuted = muted
@@ -462,7 +464,7 @@ final class SharedVideoHub {
         }
     }
 
-    func sample(nodeID: UUID, clock: SceneClock, isRunning: Bool) -> SampledFrame? {
+    package func sample(nodeID: UUID, clock: SceneClock, isRunning: Bool) -> SampledFrame? {
         lock.lock(); defer { lock.unlock() }
         guard !isClosed, let tracked = videos[nodeID] else { return nil }
         if tracked.followsClock {
@@ -525,7 +527,7 @@ final class SharedVideoHub {
         }
     }
 
-    func close() {
+    package func close() {
         lock.lock(); defer { lock.unlock() }
         guard !isClosed else { return }
         isClosed = true
@@ -542,20 +544,20 @@ final class SharedVideoHub {
     deinit { close() }
 }
 
-final class VideoRenderer: SceneRenderer {
-    var isReadyForDisplay: Bool { (view as? VideoWallpaperView)?.playerLayer.isReadyForDisplay == true }
-    let view: NSView
+package final class VideoRenderer: SceneRenderer {
+    package var isReadyForDisplay: Bool { (view as? VideoWallpaperView)?.playerLayer.isReadyForDisplay == true }
+    package let view: NSView
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var observation: NSKeyValueObservation?
     private var sizeObservation: NSKeyValueObservation?
     private var state: RendererDiagnostics.State = .ready
-    var diagnostics: RendererDiagnostics {
+    package var diagnostics: RendererDiagnostics {
         RendererDiagnostics(state: state, animated: true, activeResources: player == nil ? 0 : 1,
             loopCount: looper?.loopCount ?? 0, audioMuted: player?.isMuted ?? true,
             allowsDisplaySleep: !(player?.preventsDisplaySleepDuringVideoPlayback ?? false))
     }
-    init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil, onError: @escaping (String) -> Void) {
+    package init(url: URL, bounds: NSRect, focus: SceneFocus? = nil, bleed: SceneBleed? = nil, onError: @escaping (String) -> Void) {
         let view = VideoWallpaperView(frame: bounds)
         view.focus = focus
         view.bleed = bleed
@@ -587,16 +589,16 @@ final class VideoRenderer: SceneRenderer {
             }
         }
     }
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
         if paused { player?.pause() } else { player?.play() }
     }
-    func setMuted(_ muted: Bool) {
+    package func setMuted(_ muted: Bool) {
         player?.isMuted = muted
         if !muted { player?.volume = 1 }
     }
-    func releaseResources() {
+    package func releaseResources() {
         state = .disposed
         observation = nil
         player?.pause()
@@ -610,20 +612,20 @@ final class VideoRenderer: SceneRenderer {
 }
 
 /// Array order is back to front. Normal alpha composition only.
-final class LayeredSceneRenderer: SceneRenderer {
-    var isReadyForDisplay: Bool { zip(children, nodes).allSatisfy { !$0.1.visible || $0.0.isReadyForDisplay } }
-    let view: NSView
+package final class LayeredSceneRenderer: SceneRenderer {
+    package var isReadyForDisplay: Bool { zip(children, nodes).allSatisfy { !$0.1.visible || $0.0.isReadyForDisplay } }
+    package let view: NSView
     private var children: [SceneRenderer] = []
     private var nodes: [SceneNode] = []
     private var state: RendererDiagnostics.State = .ready
-    var gpuTotals: (seconds: Double, frames: Int)? {
+    package var gpuTotals: (seconds: Double, frames: Int)? {
         children.count == 1 ? children.first?.gpuTotals : nil
     }
-    var presentedFrameCount: Int? {
+    package var presentedFrameCount: Int? {
         // Separate layer surfaces cannot be reported as one scene presentation.
         children.count == 1 ? children.first?.presentedFrameCount : nil
     }
-    var diagnostics: RendererDiagnostics {
+    package var diagnostics: RendererDiagnostics {
         let snapshots = children.map { $0.diagnostics }
         return RendererDiagnostics(state: state, animated: zip(snapshots, nodes).contains { $0.0.animated && $0.1.visible },
             activeResources: snapshots.reduce(0) { $0 + $1.activeResources },
@@ -632,7 +634,7 @@ final class LayeredSceneRenderer: SceneRenderer {
             audioMuted: snapshots.allSatisfy { $0.audioMuted },
             allowsDisplaySleep: snapshots.allSatisfy { $0.allowsDisplaySleep })
     }
-    init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
+    package init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
          onError: @escaping (String) -> Void, imagePixels: Int? = nil) throws {
         guard !playable.requiresMetal else { throw SceneError.invalid("Masks and color effects require the Metal renderer.") }
         let playable = try playable.evaluated()
@@ -680,7 +682,7 @@ final class LayeredSceneRenderer: SceneRenderer {
             }
         } catch { releaseResources(); throw error }
     }
-    func updateScene(_ scene: SceneDescriptor) -> Bool {
+    package func updateScene(_ scene: SceneDescriptor) -> Bool {
         guard !scene.requiresMetal, let scene = try? scene.evaluated() else { return false }
         guard state != .disposed, !scene.requiresMetal, let order = sceneResourceOrder(from: nodes, to: scene.nodes) else { return false }
         guard (try? SceneBudget.validate(scene.nodes)) != nil else { return false }
@@ -714,18 +716,18 @@ final class LayeredSceneRenderer: SceneRenderer {
         for (child, node) in zip(children, nodes) { child.setPaused(state != .running || !node.visible) }
         return true
     }
-    func setPreferredFrameRate(_ rate: Int?) {
+    package func setPreferredFrameRate(_ rate: Int?) {
         children.forEach { $0.setPreferredFrameRate(rate) }
     }
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         guard state != .disposed else { return }
         state = paused ? .paused : .running
         for (child, node) in zip(children, nodes) { child.setPaused(paused || !node.visible) }
     }
-    func setMuted(_ muted: Bool) {
+    package func setMuted(_ muted: Bool) {
         children.forEach { $0.setMuted(muted) }
     }
-    func releaseResources() {
+    package func releaseResources() {
         state = .disposed
         children.forEach { $0.releaseResources() }
         children.removeAll()
@@ -736,13 +738,13 @@ final class LayeredSceneRenderer: SceneRenderer {
 
 extension SceneTone {
     /// The softening named in a media file's sidecar, if it has one.
-    static func beside(_ media: URL) -> SceneTone? {
+    package static func beside(_ media: URL) -> SceneTone? {
         guard let tone = (try? SceneFraming.beside(media))??.tone, !tone.isNeutral else { return nil }
         return tone
     }
 
     /// A composition applying these adjustments, or nil when there is nothing to do.
-    func videoComposition(for asset: AVAsset) -> AVVideoComposition? {
+    package func videoComposition(for asset: AVAsset) -> AVVideoComposition? {
         guard !isNeutral else { return nil }
         let tone = self
         return AVMutableVideoComposition(asset: asset) { request in
@@ -757,7 +759,7 @@ extension SceneTone {
     /// soften curve is quoted in display values. Wrapping either in a manual
     /// linear-to-sRGB encode and decode converts twice, which is how full
     /// softening once pulled the peak down to 162 instead of 209.
-    func apply(to source: CIImage) -> CIImage {
+    package func apply(to source: CIImage) -> CIImage {
         let value = clamped
         guard !value.isNeutral else { return source }
         var image = source

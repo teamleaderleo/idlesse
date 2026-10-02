@@ -1,23 +1,23 @@
 import Foundation
 
-struct SceneTimeline: Codable, Sendable, Equatable {
-    enum Mode: String, Codable, Sendable { case once, loop, pingPong }
-    var duration: Double
-    var mode: Mode
-    var rate: Double = 1
-    var videosFollowScene: Bool = false
-    enum CodingKeys: String, CodingKey { case duration, mode, rate, videosFollowScene }
-    init(duration: Double, mode: Mode, rate: Double = 1, videosFollowScene: Bool = false) {
+public struct SceneTimeline: Codable, Sendable, Equatable {
+    package enum Mode: String, Codable, Sendable { case once, loop, pingPong }
+    package var duration: Double
+    package var mode: Mode
+    package var rate: Double = 1
+    package var videosFollowScene: Bool = false
+    package enum CodingKeys: String, CodingKey { case duration, mode, rate, videosFollowScene }
+    package init(duration: Double, mode: Mode, rate: Double = 1, videosFollowScene: Bool = false) {
         self.duration = duration; self.mode = mode; self.rate = rate; self.videosFollowScene = videosFollowScene
     }
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         duration = try values.decode(Double.self, forKey: .duration)
         mode = try values.decode(Mode.self, forKey: .mode)
         rate = try values.decodeIfPresent(Double.self, forKey: .rate) ?? 1
         videosFollowScene = try values.decodeIfPresent(Bool.self, forKey: .videosFollowScene) ?? false
     }
-    func validate() throws {
+    package func validate() throws {
         guard !videosFollowScene || mode != .pingPong else {
             throw SceneError.invalid("Video transport supports Once and Loop. Disable video following to use Ping-pong.")
         }
@@ -37,13 +37,14 @@ struct SceneTimeline: Codable, Sendable, Equatable {
 /// rarely centred: a subject sits to one side and a low-detail bleed margin runs
 /// off the other, precisely so a crop has somewhere to go. A centred crop spends
 /// the subject and the bleed equally, which is the one split that is never right.
-struct SceneFocus: Codable, Sendable, Equatable {
-    var x: Double
-    var y: Double
-    static let centre = SceneFocus(x: 0.5, y: 0.5)
+package struct SceneFocus: Codable, Sendable, Equatable {
+    package init(x: Double, y: Double) { self.x = x; self.y = y }
+    package var x: Double
+    package var y: Double
+    package static let centre = SceneFocus(x: 0.5, y: 0.5)
     /// Clamped rather than rejected: a focus slightly outside the frame is a
     /// harmless authoring slip, and refusing to draw a wallpaper over it is worse.
-    var clamped: SceneFocus { SceneFocus(x: min(max(x, 0), 1), y: min(max(y, 0), 1)) }
+    package var clamped: SceneFocus { SceneFocus(x: min(max(x, 0), 1), y: min(max(y, 0), 1)) }
 
     /// Where to put `content` so it covers `bounds` with this point kept in view,
     /// and with any declared `bleed` margin kept off screen.
@@ -58,7 +59,7 @@ struct SceneFocus: Codable, Sendable, Equatable {
     /// Layer geometry runs bottom-up while a focus is quoted from the top, hence
     /// the flip on y. Degenerate sizes fall back to the bounds, which renders as
     /// the centred fill rather than as nothing.
-    func filledFrame(content: CGSize, in bounds: CGRect, bleed: SceneBleed? = nil) -> CGRect {
+    package func filledFrame(content: CGSize, in bounds: CGRect, bleed: SceneBleed? = nil) -> CGRect {
         guard content.width > 0, content.height > 0, bounds.width > 0, bounds.height > 0 else { return bounds }
         let point = clamped
         let margin = (bleed ?? SceneBleed()).clamped
@@ -90,7 +91,7 @@ struct SceneFocus: Codable, Sendable, Equatable {
     /// The part of the frame a display of `display` size actually shows, in unit
     /// coordinates from the top-left: `filledFrame` read backwards, so an editor
     /// can outline each display over the whole frame instead of guessing.
-    func visibleRegion(content: CGSize, display: CGSize, bleed: SceneBleed? = nil) -> CGRect {
+    package func visibleRegion(content: CGSize, display: CGSize, bleed: SceneBleed? = nil) -> CGRect {
         let bounds = CGRect(origin: .zero, size: display)
         let frame = filledFrame(content: content, in: bounds, bleed: bleed)
         guard frame.width > 0, frame.height > 0 else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
@@ -110,19 +111,19 @@ struct SceneFocus: Codable, Sendable, Equatable {
 ///
 /// This is not matte. Matte is the renderer's background showing through a frame
 /// the camera failed to cover, and is a defect to fix in the recipe.
-struct SceneBleed: Codable, Sendable, Equatable {
-    var top: Double = 0
-    var left: Double = 0
-    var bottom: Double = 0
-    var right: Double = 0
-    var isEmpty: Bool { top == 0 && left == 0 && bottom == 0 && right == 0 }
-    init(top: Double = 0, left: Double = 0, bottom: Double = 0, right: Double = 0) {
+package struct SceneBleed: Codable, Sendable, Equatable {
+    package var top: Double = 0
+    package var left: Double = 0
+    package var bottom: Double = 0
+    package var right: Double = 0
+    package var isEmpty: Bool { top == 0 && left == 0 && bottom == 0 && right == 0 }
+    package init(top: Double = 0, left: Double = 0, bottom: Double = 0, right: Double = 0) {
         self.top = top; self.left = left; self.bottom = bottom; self.right = right
     }
     /// Every edge is optional. A synthesized decoder would demand all four, so
     /// `{"right": 0.05}` — the shape anyone would actually write for a margin on
     /// one side — would throw, and a swallowed throw means framing just vanishes.
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         top = try c.decodeIfPresent(Double.self, forKey: .top) ?? 0
         left = try c.decodeIfPresent(Double.self, forKey: .left) ?? 0
@@ -130,57 +131,57 @@ struct SceneBleed: Codable, Sendable, Equatable {
         right = try c.decodeIfPresent(Double.self, forKey: .right) ?? 0
     }
     /// Clamped so a slip cannot ask for more margin than there is frame.
-    var clamped: SceneBleed {
+    package var clamped: SceneBleed {
         let unit = { (v: Double) in min(max(v, 0), 0.45) }
         return SceneBleed(top: unit(top), left: unit(left), bottom: unit(bottom), right: unit(right))
     }
 }
 
 /// Metadata only: resolving a scene never retains decoded pixels or a player.
-struct SceneDescriptor: Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape, shader }
-    enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
-    var canvas: Canvas? = nil
+public struct SceneDescriptor: Codable, Sendable {
+    package enum Kind: String, Codable, Sendable { case image, video, gradient, group, particles, text, shape, shader }
+    package enum Canvas: String, Codable, Sendable { case perDisplay, desktopSpan }
+    package var canvas: Canvas? = nil
     /// Absent means centred, which is exactly the previous behaviour.
-    var focus: SceneFocus? = nil
+    package var focus: SceneFocus? = nil
     /// Margin every display should crop away before filling. Absent means none.
-    var bleed: SceneBleed? = nil
-    var metadata: SceneMetadata? = nil
-    var components: [String: SceneComponent]? = nil
-    let title: String
-    let nodes: [SceneNode]
-    var parameters: [String: SceneParameter] = [:]
-    var bindings: [SceneParameterBinding] = []
-    var timeline: SceneTimeline? = nil
-    var variants: [SceneVariant] = []
-    var assetURL: URL? { nodes.first?.assetURL }
-    var kind: Kind { nodes.first?.kind ?? .image }
-    var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
-    var assetNodes: [SceneNode] { allNodes + (components?.values.flatMap { $0.node.descendants } ?? []) }
-    var usesSmoothing: Bool { bindings.contains { $0.smoothing > 0 } }
-    var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
-    var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
-    var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
-    var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
-    var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
-    var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
-    var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .shader].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
-    var animated: Bool {
+    package var bleed: SceneBleed? = nil
+    package var metadata: SceneMetadata? = nil
+    package var components: [String: SceneComponent]? = nil
+    public let title: String
+    package let nodes: [SceneNode]
+    package var parameters: [String: SceneParameter] = [:]
+    package var bindings: [SceneParameterBinding] = []
+    public var timeline: SceneTimeline? = nil
+    package var variants: [SceneVariant] = []
+    package var assetURL: URL? { nodes.first?.assetURL }
+    package var kind: Kind { nodes.first?.kind ?? .image }
+    package var allNodes: [SceneNode] { nodes.flatMap { $0.descendants } }
+    package var assetNodes: [SceneNode] { allNodes + (components?.values.flatMap { $0.node.descendants } ?? []) }
+    package var usesSmoothing: Bool { bindings.contains { $0.smoothing > 0 } }
+    package var usesTracks: Bool { bindings.contains { $0.keyframes != nil } }
+    package var usesSignals: Bool { usesTracks || bindings.contains { $0.signal != nil } }
+    package var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
+    package var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
+    package var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
+    package var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
+    package var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .shader].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
+    package var animated: Bool {
         if usesSignals || nodes.contains(where: { $0.animated }) { return true }
         let referenced = Set(allNodes.compactMap { $0.maskNodeID })
         return allNodes.filter { referenced.contains($0.id) }.flatMap { $0.descendants }.contains {
             $0.hasAnimatedEffects || [.video, .gradient, .particles, .shader].contains($0.kind)
         }
     }
-    init(title: String, assetURL: URL, kind: Kind) {
+    package init(title: String, assetURL: URL, kind: Kind) {
         self.title = title
         self.nodes = [SceneNode(content: kind == .video ? .video(assetURL) : .image(assetURL))]
     }
-    init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = [], focus: SceneFocus? = nil, bleed: SceneBleed? = nil) {
+    package init(title: String, nodes: [SceneNode], parameters: [String: SceneParameter] = [:], bindings: [SceneParameterBinding] = [], timeline: SceneTimeline? = nil, canvas: Canvas? = nil, metadata: SceneMetadata? = nil, components: [String: SceneComponent]? = nil, variants: [SceneVariant] = [], focus: SceneFocus? = nil, bleed: SceneBleed? = nil) {
         self.title = title; self.nodes = nodes; self.parameters = parameters; self.bindings = bindings; self.timeline = timeline; self.canvas = canvas; self.metadata = metadata; self.components = components; self.variants = variants; self.focus = focus; self.bleed = bleed
     }
-    enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants, focus, bleed }
-    init(from decoder: Decoder) throws {
+    package enum CodingKeys: String, CodingKey { case canvas, metadata, components, title, nodes, parameters, bindings, timeline, variants, focus, bleed }
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         focus = try c.decodeIfPresent(SceneFocus.self, forKey: .focus)
         bleed = try c.decodeIfPresent(SceneBleed.self, forKey: .bleed)
@@ -194,13 +195,13 @@ struct SceneDescriptor: Codable, Sendable {
         timeline = try c.decodeIfPresent(SceneTimeline.self, forKey: .timeline)
         variants = try c.decodeIfPresent([SceneVariant].self, forKey: .variants) ?? []
     }
-    func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
+    package func replacingNodes(_ nodes: [SceneNode]) -> SceneDescriptor {
         let ids = Set(nodes.flatMap { $0.descendants }.map(\.id))
         var controls = parameters
         for key in controls.keys { controls[key]?.targets.removeAll { !ids.contains($0.nodeID) } }
         return SceneDescriptor(title: title, nodes: nodes, parameters: controls, bindings: bindings.filter { ids.contains($0.target.nodeID) && (try? $0.target.value(in: nodes)) != nil }, timeline: timeline, canvas: canvas, metadata: metadata, components: components, variants: variants, focus: focus, bleed: bleed)
     }
-    func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
+    package func duplicatingBindings(from source: SceneNode, to copy: SceneNode) -> SceneDescriptor {
         let pairs = zip(source.descendants, copy.descendants)
         var result = self
         for (old, new) in pairs {
@@ -219,7 +220,7 @@ struct SceneDescriptor: Codable, Sendable {
         }
         return result
     }
-    func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
+    package func evaluated(signals: SceneSignals = .init(), validating: Bool = true, smooth: ((ScenePropertyAddress, Double, Double) -> Double)? = nil) throws -> SceneDescriptor {
         if let focus, !focus.x.isFinite || !focus.y.isFinite { throw SceneError.invalid("Focus coordinates must be finite.") }
         if validating {
             try metadata?.validate()
@@ -315,19 +316,22 @@ struct SceneDescriptor: Codable, Sendable {
 
 /// Package-local reusable snapshots. Insertion expands to ordinary nodes and independent
 /// controls; later edits do not silently propagate to another instance.
-struct SceneComponent: Codable, Sendable {
-    var name: String
-    var node: SceneNode
-    var parameters: [String: SceneParameter]
-    var bindings: [SceneParameterBinding]
-    var scene: SceneDescriptor { .init(title: name, nodes: [node], parameters: parameters, bindings: bindings) }
-    func validate() throws {
+package struct SceneComponent: Codable, Sendable {
+    package init(name: String, node: SceneNode, parameters: [String: SceneParameter], bindings: [SceneParameterBinding]) {
+        self.name = name; self.node = node; self.parameters = parameters; self.bindings = bindings
+    }
+    package var name: String
+    package var node: SceneNode
+    package var parameters: [String: SceneParameter]
+    package var bindings: [SceneParameterBinding]
+    package var scene: SceneDescriptor { .init(title: name, nodes: [node], parameters: parameters, bindings: bindings) }
+    package func validate() throws {
         guard !name.isEmpty, name.count <= 120, node.descendants.allSatisfy({ $0.componentID == nil }) else {
             throw SceneError.invalid("Presets need a name and cannot contain other preset references.")
         }
         _ = try scene.evaluated()
     }
-    static func capture(_ node: SceneNode, from scene: SceneDescriptor) throws -> SceneComponent {
+    package static func capture(_ node: SceneNode, from scene: SceneDescriptor) throws -> SceneComponent {
         let ids = Set(node.descendants.map(\.id))
         guard node.descendants.allSatisfy({ $0.maskNodeID.map(ids.contains) ?? true }) else {
             throw SceneError.invalid("Include the mask layer in the selected group before creating a preset.")
@@ -344,7 +348,7 @@ struct SceneComponent: Codable, Sendable {
         let component = SceneComponent(name: node.displayName, node: strip(node), parameters: parameters, bindings: bindings)
         try component.validate(); return component
     }
-    func inserting(into scene: SceneDescriptor, id: String) throws -> SceneDescriptor {
+    package func inserting(into scene: SceneDescriptor, id: String) throws -> SceneDescriptor {
         try validate()
         guard scene.components?[id] != nil else { throw SceneError.invalid("This preset is not in the current package.") }
         var root = node.duplicated(); root.componentID = id
@@ -376,14 +380,17 @@ struct SceneComponent: Codable, Sendable {
     }
 }
 
-struct SceneMetadata: Codable, Sendable, Equatable {
-    var author: String? = nil
-    var description: String? = nil
-    var tags: [String]? = nil
-    var license: String? = nil
-    var createdWith: String? = nil
-    var previewTime: Double? = nil
-    func validate() throws {
+package struct SceneMetadata: Codable, Sendable, Equatable {
+    package init(author: String? = nil, description: String? = nil, tags: [String]? = nil, license: String? = nil, createdWith: String? = nil, previewTime: Double? = nil) {
+        self.author = author; self.description = description; self.tags = tags; self.license = license; self.createdWith = createdWith; self.previewTime = previewTime
+    }
+    package var author: String? = nil
+    package var description: String? = nil
+    package var tags: [String]? = nil
+    package var license: String? = nil
+    package var createdWith: String? = nil
+    package var previewTime: Double? = nil
+    package func validate() throws {
         guard (author?.utf8.count ?? 0) <= 160, (description?.utf8.count ?? 0) <= 4096,
               (license?.utf8.count ?? 0) <= 1024, (createdWith?.utf8.count ?? 0) <= 160,
               (tags?.count ?? 0) <= 32, tags?.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) ?? true,
@@ -395,10 +402,10 @@ struct SceneMetadata: Codable, Sendable, Equatable {
 
 /// Revision 21 freezes the container; feature names describe subsequent additions.
 /// Legacy revisions retain their explicit decode gates below and normalize to SceneDescriptor.
-enum SceneFormat {
-    static let revision = 21
-    static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants", "focus"]
-    static func features(_ scene: SceneDescriptor) -> Set<String> {
+package enum SceneFormat {
+    package static let revision = 21
+    package static let supported: Set<String> = ["groups", "particles", "effects", "composition", "desktop-span", "motion", "typed-controls", "text", "shapes", "local-presets", "dynamic-text", "shaders", "variants", "focus"]
+    package static func features(_ scene: SceneDescriptor) -> Set<String> {
         var result = Set<String>()
         if scene.focus != nil { result.insert("focus") }
         if scene.allNodes.contains(where: { $0.kind == .group }) { result.insert("groups") }
@@ -421,11 +428,12 @@ enum SceneFormat {
     }
 }
 
-struct SceneControlTarget: Codable, Sendable, Hashable {
-    enum Property: String, Codable, Sendable { case visible, blend, text, fill }
-    var nodeID: UUID
-    var property: Property
-    func apply(_ parameter: SceneParameter, to nodes: inout [SceneNode]) throws {
+package struct SceneControlTarget: Codable, Sendable, Hashable {
+    package init(nodeID: UUID, property: Property) { self.nodeID = nodeID; self.property = property }
+    package enum Property: String, Codable, Sendable { case visible, blend, text, fill }
+    package var nodeID: UUID
+    package var property: Property
+    package func apply(_ parameter: SceneParameter, to nodes: inout [SceneNode]) throws {
         guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else { throw SceneError.invalid("A control target is missing.") }
         var replacement = node
         switch property {
@@ -449,25 +457,25 @@ struct SceneControlTarget: Codable, Sendable, Hashable {
     }
 }
 
-struct SceneParameter: Codable, Sendable, Equatable {
-    enum ValueType: String, Codable, Sendable { case number, boolean, color, choice, string }
-    var name: String
-    var value: Double
-    var min: Double
-    var max: Double
-    var type: ValueType = .number
-    var text: String = ""
-    var boolean: Bool = false
-    var choices: [String] = []
-    var targets: [SceneControlTarget] = []
-    init(name: String, value: Double, min: Double, max: Double) {
+package struct SceneParameter: Codable, Sendable, Equatable {
+    package enum ValueType: String, Codable, Sendable { case number, boolean, color, choice, string }
+    package var name: String
+    package var value: Double
+    package var min: Double
+    package var max: Double
+    package var type: ValueType = .number
+    package var text: String = ""
+    package var boolean: Bool = false
+    package var choices: [String] = []
+    package var targets: [SceneControlTarget] = []
+    package init(name: String, value: Double, min: Double, max: Double) {
         self.name = name; self.value = value; self.min = min; self.max = max
     }
-    init(name: String, type: ValueType, text: String = "", boolean: Bool = false, choices: [String] = []) {
+    package init(name: String, type: ValueType, text: String = "", boolean: Bool = false, choices: [String] = []) {
         self.init(name: name, value: 0, min: 0, max: 1)
         self.type = type; self.text = text; self.boolean = boolean; self.choices = choices
     }
-    var isValid: Bool {
+    package var isValid: Bool {
         switch type {
         case .number: return [value, min, max, max - min].allSatisfy(\.isFinite) && min < max && (min...max).contains(value)
         case .boolean: return choices.isEmpty
@@ -476,8 +484,8 @@ struct SceneParameter: Codable, Sendable, Equatable {
         case .choice: return (1...32).contains(choices.count) && Set(choices).count == choices.count && choices.allSatisfy { !$0.isEmpty && $0.utf8.count <= 120 } && choices.contains(text)
         }
     }
-    enum CodingKeys: String, CodingKey { case name, value = "default", min, max, type, choices, targets }
-    init(from decoder: Decoder) throws {
+    package enum CodingKeys: String, CodingKey { case name, value = "default", min, max, type, choices, targets }
+    package init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         type = try c.decodeIfPresent(ValueType.self, forKey: .type) ?? .number
@@ -493,7 +501,7 @@ struct SceneParameter: Codable, Sendable, Equatable {
         }
         guard isValid else { throw SceneError.invalid("Invalid typed parameter default or limits.") }
     }
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(name, forKey: .name)
         if !targets.isEmpty { try c.encode(targets, forKey: .targets) }
@@ -510,12 +518,12 @@ struct SceneParameter: Codable, Sendable, Equatable {
 }
 
 
-enum SceneControlValue: Codable, Sendable, Equatable {
+package enum SceneControlValue: Codable, Sendable, Equatable {
     case number(Double)
     case boolean(Bool)
     case text(String)
 
-    init(_ parameter: SceneParameter) {
+    package init(_ parameter: SceneParameter) {
         switch parameter.type {
         case .number: self = .number(parameter.value)
         case .boolean: self = .boolean(parameter.boolean)
@@ -523,7 +531,7 @@ enum SceneControlValue: Codable, Sendable, Equatable {
         }
     }
 
-    var structurallyValid: Bool {
+    package var structurallyValid: Bool {
         switch self {
         case .number(let value): return value.isFinite
         case .boolean: return true
@@ -531,7 +539,7 @@ enum SceneControlValue: Codable, Sendable, Equatable {
         }
     }
 
-    func applying(to parameter: SceneParameter) -> SceneParameter? {
+    package func applying(to parameter: SceneParameter) -> SceneParameter? {
         var result = parameter
         switch (self, parameter.type) {
         case (.number(let value), .number):
@@ -547,7 +555,7 @@ enum SceneControlValue: Codable, Sendable, Equatable {
         return result.isValid ? result : nil
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let value = try? c.decode(Bool.self) { self = .boolean(value) }
         else if let value = try? c.decode(Double.self) { self = .number(value) }
@@ -558,7 +566,7 @@ enum SceneControlValue: Codable, Sendable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         guard structurallyValid else { throw SceneError.invalid("Variant control value exceeds its limits.") }
         var c = encoder.singleValueContainer()
         switch self {
@@ -569,16 +577,17 @@ enum SceneControlValue: Codable, Sendable, Equatable {
     }
 }
 
-struct SceneVariant: Codable, Sendable, Equatable {
-    static let maximumCount = 16
-    static let maximumOverrides = 16
-    static let maximumEncodedBytes = 16 * 1024
+package struct SceneVariant: Codable, Sendable, Equatable {
+    package init(id: UUID, name: String, values: [String: SceneControlValue]) { self.id = id; self.name = name; self.values = values }
+    package static let maximumCount = 16
+    package static let maximumOverrides = 16
+    package static let maximumEncodedBytes = 16 * 1024
 
-    var id: UUID
-    var name: String
-    var values: [String: SceneControlValue]
+    package var id: UUID
+    package var name: String
+    package var values: [String: SceneControlValue]
 
-    static func validate(_ variants: [SceneVariant]) throws {
+    package static func validate(_ variants: [SceneVariant]) throws {
         guard variants.count <= maximumCount else { throw SceneError.invalid("Use at most 16 scene variants.") }
         guard Set(variants.map(\.id)).count == variants.count else { throw SceneError.invalid("Scene variant identities must be unique.") }
         var names = Set<String>()
@@ -600,23 +609,27 @@ struct SceneVariant: Codable, Sendable, Equatable {
     }
 }
 
-struct SceneVariantDiagnostic: Sendable, Equatable {
-    enum Reason: String, Sendable { case variantUnavailable, missingControl, incompatibleValue }
-    let variantID: UUID?
-    let controlID: String?
-    let reason: Reason
+package struct SceneVariantDiagnostic: Sendable, Equatable {
+    package init(variantID: UUID?, controlID: String?, reason: Reason) { self.variantID = variantID; self.controlID = controlID; self.reason = reason }
+    package enum Reason: String, Sendable { case variantUnavailable, missingControl, incompatibleValue }
+    package let variantID: UUID?
+    package let controlID: String?
+    package let reason: Reason
 }
 
-struct SceneVariantApplication: Sendable {
-    let scene: SceneDescriptor
-    let selectedVariantID: UUID?
-    let diagnostics: [SceneVariantDiagnostic]
+package struct SceneVariantApplication: Sendable {
+    package init(scene: SceneDescriptor, selectedVariantID: UUID?, diagnostics: [SceneVariantDiagnostic]) {
+        self.scene = scene; self.selectedVariantID = selectedVariantID; self.diagnostics = diagnostics
+    }
+    package let scene: SceneDescriptor
+    package let selectedVariantID: UUID?
+    package let diagnostics: [SceneVariantDiagnostic]
 }
 
 extension SceneDescriptor {
     /// Apply only to the canonical authored descriptor. Runtime control edits belong in
     /// a separate layer above this result so switching variants always starts from Default.
-    func applyingVariant(id: UUID?) -> SceneVariantApplication {
+    package func applyingVariant(id: UUID?) -> SceneVariantApplication {
         guard let id else {
             return SceneVariantApplication(scene: self, selectedVariantID: nil, diagnostics: [])
         }
@@ -642,12 +655,16 @@ extension SceneDescriptor {
     }
 }
 
-struct SceneKeyframeTrack: Codable, Sendable, Equatable {
-    enum Interpolation: String, Codable, Sendable { case hold, linear, easeInOut }
-    struct Key: Codable, Sendable, Equatable { var time: Double; var value: Double }
-    var interpolation: Interpolation = .linear
-    var keys: [Key]
-    func movingKey(at index: Int, to time: Double) throws -> SceneKeyframeTrack {
+package struct SceneKeyframeTrack: Codable, Sendable, Equatable {
+    package enum Interpolation: String, Codable, Sendable { case hold, linear, easeInOut }
+    package struct Key: Codable, Sendable, Equatable {
+        package var time: Double; package var value: Double
+        package init(time: Double, value: Double) { self.time = time; self.value = value }
+    }
+    package init(interpolation: Interpolation = .linear, keys: [Key]) { self.interpolation = interpolation; self.keys = keys }
+    package var interpolation: Interpolation = .linear
+    package var keys: [Key]
+    package func movingKey(at index: Int, to time: Double) throws -> SceneKeyframeTrack {
         _ = try sample(at: 0)
         guard keys.indices.contains(index), time.isFinite else { throw SceneError.invalid("Choose an existing key and finite time.") }
         let lower = index == 0 ? 0 : keys[index - 1].time.nextUp
@@ -656,7 +673,7 @@ struct SceneKeyframeTrack: Codable, Sendable, Equatable {
         result.keys[index].time = min(upper, max(lower, time))
         return result
     }
-    func sample(at time: Double, validating: Bool = true) throws -> Double {
+    package func sample(at time: Double, validating: Bool = true) throws -> Double {
         guard !keys.isEmpty, keys.count <= 128, time.isFinite else { throw SceneError.invalid("A track needs 1–128 keys and a finite sample time.") }
         if validating {
             var previous = -1.0
@@ -683,30 +700,31 @@ struct SceneKeyframeTrack: Codable, Sendable, Equatable {
     }
 }
 
-struct SceneParameterBinding: Codable, Sendable {
-    struct Modifier: Codable, Sendable {
-        enum Operation: String, Codable, Sendable { case multiply, add }
-        var operation: Operation
-        var parameter: String? = nil
-        var value: Double? = nil
+package struct SceneParameterBinding: Codable, Sendable {
+    package struct Modifier: Codable, Sendable {
+        package init(operation: Operation, parameter: String? = nil, value: Double? = nil) { self.operation = operation; self.parameter = parameter; self.value = value }
+        package enum Operation: String, Codable, Sendable { case multiply, add }
+        package var operation: Operation
+        package var parameter: String? = nil
+        package var value: Double? = nil
     }
-    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
-    var target: ScenePropertyAddress
-    var parameter: String = ""
-    var scale: Double = 1
-    var offset: Double = 0
-    var signal: Signal? = nil
-    var period: Double = 8
-    var smoothing: Double = 0
-    var keyframes: SceneKeyframeTrack? = nil
-    var modifiers: [Modifier] = []
-    var referencedParameters: [String] { (parameter.isEmpty ? [] : [parameter]) + modifiers.compactMap(\.parameter) }
-    enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers, keyframes, smoothing }
-    init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = [], keyframes: SceneKeyframeTrack? = nil, smoothing: Double = 0) {
+    package enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
+    package var target: ScenePropertyAddress
+    package var parameter: String = ""
+    package var scale: Double = 1
+    package var offset: Double = 0
+    package var signal: Signal? = nil
+    package var period: Double = 8
+    package var smoothing: Double = 0
+    package var keyframes: SceneKeyframeTrack? = nil
+    package var modifiers: [Modifier] = []
+    package var referencedParameters: [String] { (parameter.isEmpty ? [] : [parameter]) + modifiers.compactMap(\.parameter) }
+    package enum CodingKeys: String, CodingKey { case target, parameter, scale, offset, signal, period, modifiers, keyframes, smoothing }
+    package init(target: ScenePropertyAddress, parameter: String = "", scale: Double = 1, offset: Double = 0, signal: Signal? = nil, period: Double = 8, modifiers: [Modifier] = [], keyframes: SceneKeyframeTrack? = nil, smoothing: Double = 0) {
         self.target = target; self.parameter = parameter; self.scale = scale; self.offset = offset; self.signal = signal; self.period = period
         self.modifiers = modifiers; self.keyframes = keyframes; self.smoothing = smoothing
     }
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         target = try values.decode(ScenePropertyAddress.self, forKey: .target)
         parameter = try values.decodeIfPresent(String.self, forKey: .parameter) ?? ""
@@ -720,32 +738,48 @@ struct SceneParameterBinding: Codable, Sendable {
     }
 }
 
-struct SceneAudioLevels: Sendable {
-    var level: Double = 0
-    var bass: Double = 0
-    var mid: Double = 0
-    var treble: Double = 0
+public struct SceneAudioLevels: Sendable {
+    public init(level: Double = 0, bass: Double = 0, mid: Double = 0, treble: Double = 0) {
+        self.level = level; self.bass = bass; self.mid = mid; self.treble = treble
+    }
+    public var level: Double = 0
+    public var bass: Double = 0
+    public var mid: Double = 0
+    public var treble: Double = 0
 }
 
-struct SceneSignals: Sendable {
-    var audio = SceneAudioLevels()
-    var time: Double = 0
-    var pointerX: Double = 0
-    var pointerY: Double = 0
+package struct SceneSignals: Sendable {
+    package init(audio: SceneAudioLevels = SceneAudioLevels(), time: Double = 0, pointerX: Double = 0, pointerY: Double = 0) {
+        self.audio = audio; self.time = time; self.pointerX = pointerX; self.pointerY = pointerY
+    }
+    package var audio = SceneAudioLevels()
+    package var time: Double = 0
+    package var pointerX: Double = 0
+    package var pointerY: Double = 0
 }
 
-struct SceneNode: Codable, Sendable {
-    var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
-    var componentID: String? = nil // Provenance only; instances are independent editable snapshots.
-    struct Emitter: Codable, Sendable, Equatable {
-        var count: Int = 128
-        var lifetime: Double = 6
-        var speed: Double = 0.12
-        var wind: Double = 0
-        var gravity: Double = 0
-        var size: Double = 0.008
-        var seed: Int = 1234
-        func validate() throws {
+package struct SceneNode: Codable, Sendable {
+    package init(id: UUID = UUID(), componentID: String? = nil, blend: Blend? = nil, maskAsset: URL? = nil, maskNodeID: UUID? = nil,
+                 maskChannel: MaskChannel? = nil, sprite: URL? = nil, style: Style = .plain, name: String? = nil, content: Content,
+                 visible: Bool = true, locked: Bool = false, opacity: Double = 1, transform: Transform = .identity) {
+        self.id = id; self.componentID = componentID; self.blend = blend; self.maskAsset = maskAsset; self.maskNodeID = maskNodeID
+        self.maskChannel = maskChannel; self.sprite = sprite; self.style = style; self.name = name; self.content = content
+        self.visible = visible; self.locked = locked; self.opacity = opacity; self.transform = transform
+    }
+    package var id = UUID() // Persisted in v6 packages; duplication assigns fresh identities.
+    package var componentID: String? = nil // Provenance only; instances are independent editable snapshots.
+    package struct Emitter: Codable, Sendable, Equatable {
+        package init(count: Int = 128, lifetime: Double = 6, speed: Double = 0.12, wind: Double = 0, gravity: Double = 0, size: Double = 0.008, seed: Int = 1234) {
+            self.count = count; self.lifetime = lifetime; self.speed = speed; self.wind = wind; self.gravity = gravity; self.size = size; self.seed = seed
+        }
+        package var count: Int = 128
+        package var lifetime: Double = 6
+        package var speed: Double = 0.12
+        package var wind: Double = 0
+        package var gravity: Double = 0
+        package var size: Double = 0.008
+        package var seed: Int = 1234
+        package func validate() throws {
             guard (1...512).contains(count), (0...65535).contains(seed),
                   lifetime.isFinite, (0.1...60).contains(lifetime),
                   speed.isFinite, (-1...1).contains(speed),
@@ -756,17 +790,22 @@ struct SceneNode: Codable, Sendable {
             }
         }
     }
-    struct Typography: Codable, Sendable, Equatable {
-        enum Alignment: String, Codable, Sendable { case left, center, right }
-        enum LiveSource: String, Codable, Sendable, CaseIterable {
+    package struct Typography: Codable, Sendable, Equatable {
+        package init(liveSource: LiveSource? = nil, text: String = "Hello, world", font: String = "HelveticaNeue", size: Double = 96, alignment: Alignment = .center,
+                     fill: String = "#FFFFFF", lineSpacing: Double = 8, width: Int = 1024, height: Int = 512) {
+            self.liveSource = liveSource; self.text = text; self.font = font; self.size = size; self.alignment = alignment
+            self.fill = fill; self.lineSpacing = lineSpacing; self.width = width; self.height = height
+        }
+        package enum Alignment: String, Codable, Sendable { case left, center, right }
+        package enum LiveSource: String, Codable, Sendable, CaseIterable {
             case time, timeWithSeconds, date, weekday
-            var title: String {
+            package var title: String {
                 switch self { case .time: return "Time"; case .timeWithSeconds: return "Time with Seconds"
                 case .date: return "Date"; case .weekday: return "Weekday" }
             }
         }
-        var liveSource: LiveSource? = nil
-        func resolved(at date: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+        package var liveSource: LiveSource? = nil
+        package func resolved(at date: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
             guard let source = liveSource else { return text }
             let formatter = DateFormatter(); formatter.locale = locale; formatter.timeZone = timeZone
             switch source {
@@ -777,30 +816,33 @@ struct SceneNode: Codable, Sendable {
             }
             return formatter.string(from: date)
         }
-        var text: String = "Hello, world"
-        var font: String = "HelveticaNeue"
-        var size: Double = 96
-        var alignment: Alignment = .center
-        var fill: String = "#FFFFFF"
-        var lineSpacing: Double = 8
-        var width: Int = 1024
-        var height: Int = 512
-        func validate() throws {
+        package var text: String = "Hello, world"
+        package var font: String = "HelveticaNeue"
+        package var size: Double = 96
+        package var alignment: Alignment = .center
+        package var fill: String = "#FFFFFF"
+        package var lineSpacing: Double = 8
+        package var width: Int = 1024
+        package var height: Int = 512
+        package func validate() throws {
             guard text.utf8.count <= 4096, !font.isEmpty, font.utf8.count <= 160,
                   size.isFinite, (4...512).contains(size), lineSpacing.isFinite, (0...256).contains(lineSpacing),
                   (32...4096).contains(width), (32...4096).contains(height),
                   SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid text, typography, fill or canvas dimensions.") }
         }
     }
-    struct Shape: Codable, Sendable, Equatable {
-        enum Primitive: String, Codable, Sendable { case rectangle, ellipse, line, roundedRectangle }
-        var primitive: Primitive = .roundedRectangle
-        var fill: String = "#FF4FA3"
-        var width: Int = 1024
-        var height: Int = 512
-        var cornerRadius: Double = 64
-        var lineWidth: Double = 8
-        func validate() throws {
+    package struct Shape: Codable, Sendable, Equatable {
+        package init(primitive: Primitive = .roundedRectangle, fill: String = "#FF4FA3", width: Int = 1024, height: Int = 512, cornerRadius: Double = 64, lineWidth: Double = 8) {
+            self.primitive = primitive; self.fill = fill; self.width = width; self.height = height; self.cornerRadius = cornerRadius; self.lineWidth = lineWidth
+        }
+        package enum Primitive: String, Codable, Sendable { case rectangle, ellipse, line, roundedRectangle }
+        package var primitive: Primitive = .roundedRectangle
+        package var fill: String = "#FF4FA3"
+        package var width: Int = 1024
+        package var height: Int = 512
+        package var cornerRadius: Double = 64
+        package var lineWidth: Double = 8
+        package func validate() throws {
             guard (32...4096).contains(width), (32...4096).contains(height),
                   cornerRadius.isFinite, (0...2048).contains(cornerRadius), lineWidth.isFinite, (1...512).contains(lineWidth),
                   SceneParameter(name: "Fill", type: .color, text: fill).isValid else { throw SceneError.invalid("Invalid shape dimensions, fill or radius.") }
@@ -810,16 +852,17 @@ struct SceneNode: Codable, Sendable {
     /// `float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]])`
     /// where `ShaderU` offers time, resolution, pointer, audio, and opacity.
     /// `V` (position, uv, fade, canvasUV) matches the scene vertex output.
-    struct Shader: Codable, Sendable, Equatable {
-        var source: String = Shader.plasma
-        var speed: Double = 1
-        func validate() throws {
+    package struct Shader: Codable, Sendable, Equatable {
+        package init(source: String = Shader.plasma, speed: Double = 1) { self.source = source; self.speed = speed }
+        package var source: String = Shader.plasma
+        package var speed: Double = 1
+        package func validate() throws {
             guard !source.isEmpty, source.utf8.count <= 32768,
                   speed.isFinite, (0.01...10).contains(speed) else {
                 throw SceneError.invalid("Shaders need 1–32768 characters of Metal code and speed 0.01–10.")
             }
         }
-        static let plasma = """
+        package static let plasma = """
         fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
             float2 p = (in.uv - 0.5) * u.resolution / min(u.resolution.x, u.resolution.y);
             float t = u.time;
@@ -830,21 +873,23 @@ struct SceneNode: Codable, Sendable {
         }
         """
     }
-    indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]), text(Typography), shape(Shape), shader(Shader) }
-    struct Transform: Codable, Sendable {
-        let x: Double?
-        let y: Double?
-        let scale: Double?
-        let rotation: Double?
-        static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
+    package indirect enum Content: Codable, Sendable { case image(URL), video(URL), gradient, particles(Emitter), group([SceneNode]), text(Typography), shape(Shape), shader(Shader) }
+    package struct Transform: Codable, Sendable {
+        package init(x: Double?, y: Double?, scale: Double?, rotation: Double?) { self.x = x; self.y = y; self.scale = scale; self.rotation = rotation }
+        package let x: Double?
+        package let y: Double?
+        package let scale: Double?
+        package let rotation: Double?
+        package static let identity = Transform(x: nil, y: nil, scale: nil, rotation: nil)
     }
-    struct Style: Codable, Sendable, Equatable {
-        struct Effect: Codable, Sendable, Equatable {
-            enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette, displacement }
-            var id: UUID? = UUID()
-            var type: Kind
-            var amount: Double
-            var range: ClosedRange<Double> {
+    package struct Style: Codable, Sendable, Equatable {
+        package struct Effect: Codable, Sendable, Equatable {
+            package init(id: UUID? = UUID(), type: Kind, amount: Double) { self.id = id; self.type = type; self.amount = amount }
+            package enum Kind: String, Codable, Sendable { case blur, bloom, exposure, saturation, vignette, displacement }
+            package var id: UUID? = UUID()
+            package var type: Kind
+            package var amount: Double
+            package var range: ClosedRange<Double> {
                 switch type {
                 case .displacement: return 0...0.1
                 case .blur: return 0...24
@@ -854,18 +899,18 @@ struct SceneNode: Codable, Sendable {
                 }
             }
         }
-        var effects: [Effect] = []
-        enum Mask: String, Codable, Sendable { case ellipse }
-        var mask: Mask? = nil
-        var exposure: Double = 0
-        var saturation: Double = 1
-        var vignette: Double = 0
-        static let plain = Style()
-        init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1, vignette: Double = 0) {
+        package var effects: [Effect] = []
+        package enum Mask: String, Codable, Sendable { case ellipse }
+        package var mask: Mask? = nil
+        package var exposure: Double = 0
+        package var saturation: Double = 1
+        package var vignette: Double = 0
+        package static let plain = Style()
+        package init(mask: Mask? = nil, exposure: Double = 0, saturation: Double = 1, vignette: Double = 0) {
             self.mask = mask; self.exposure = exposure; self.saturation = saturation; self.vignette = vignette
         }
-        enum CodingKeys: String, CodingKey { case mask, exposure, saturation, vignette, effects }
-        init(from decoder: Decoder) throws {
+        package enum CodingKeys: String, CodingKey { case mask, exposure, saturation, vignette, effects }
+        package init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             mask = try values.decodeIfPresent(Mask.self, forKey: .mask)
             exposure = try values.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
@@ -874,18 +919,18 @@ struct SceneNode: Codable, Sendable {
             effects = try values.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         }
     }
-    enum Blend: String, Codable, Sendable { case normal, add, multiply, screen }
-    enum MaskChannel: String, Codable, Sendable { case alpha, luma }
-    var blend: Blend? = nil
-    var maskAsset: URL? = nil
-    var maskNodeID: UUID? = nil
-    var maskChannel: MaskChannel? = nil
-    var sprite: URL? = nil
-    var needsComposition: Bool { blend != nil && blend != .normal || maskAsset != nil || maskNodeID != nil }
-    var assets: [URL] { [assetURL, maskAsset, sprite].compactMap { $0 } }
-    var style: Style = .plain
-    var name: String? = nil
-    var displayName: String {
+    package enum Blend: String, Codable, Sendable { case normal, add, multiply, screen }
+    package enum MaskChannel: String, Codable, Sendable { case alpha, luma }
+    package var blend: Blend? = nil
+    package var maskAsset: URL? = nil
+    package var maskNodeID: UUID? = nil
+    package var maskChannel: MaskChannel? = nil
+    package var sprite: URL? = nil
+    package var needsComposition: Bool { blend != nil && blend != .normal || maskAsset != nil || maskNodeID != nil }
+    package var assets: [URL] { [assetURL, maskAsset, sprite].compactMap { $0 } }
+    package var style: Style = .plain
+    package var name: String? = nil
+    package var displayName: String {
         if let name { return name }
         if let assetURL { return assetURL.deletingPathExtension().lastPathComponent }
         if let typography {
@@ -902,23 +947,23 @@ struct SceneNode: Codable, Sendable {
         }
         return kind == .group ? "Group" : kind == .particles ? "Particles" : kind == .shader ? "Shader" : "Gradient"
     }
-    var content: Content
-    var visible = true
-    var locked = false
-    var opacity: Double = 1
-    var transform: Transform = .identity
-    var kind: SceneDescriptor.Kind {
+    package var content: Content
+    package var visible = true
+    package var locked = false
+    package var opacity: Double = 1
+    package var transform: Transform = .identity
+    package var kind: SceneDescriptor.Kind {
         switch content { case .image: return .image; case .video: return .video; case .gradient: return .gradient; case .group: return .group; case .particles: return .particles; case .text: return .text; case .shape: return .shape; case .shader: return .shader }
     }
-    var typography: Typography? { if case .text(let value) = content { return value }; return nil }
-    var shape: Shape? { if case .shape(let value) = content { return value }; return nil }
-    var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
-    var shader: Shader? { if case .shader(let shader) = content { return shader }; return nil }
-    var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
-    var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
-    var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
-    var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles, .shader].contains(kind))) }
-    func duplicated() -> SceneNode {
+    package var typography: Typography? { if case .text(let value) = content { return value }; return nil }
+    package var shape: Shape? { if case .shape(let value) = content { return value }; return nil }
+    package var emitter: Emitter? { if case .particles(let emitter) = content { return emitter }; return nil }
+    package var shader: Shader? { if case .shader(let shader) = content { return shader }; return nil }
+    package var children: [SceneNode] { if case .group(let nodes) = content { return nodes }; return [] }
+    package var descendants: [SceneNode] { [self] + children.flatMap { $0.descendants } }
+    package var hasAnimatedEffects: Bool { style.effects.contains { $0.type == .displacement && $0.amount > 0 } }
+    package var animated: Bool { visible && (hasAnimatedEffects || (kind == .group ? children.contains { $0.animated } : [.video, .gradient, .particles, .shader].contains(kind))) }
+    package func duplicated() -> SceneNode {
         let identities = Dictionary(uniqueKeysWithValues: descendants.map { ($0.id, UUID()) })
         func copy(_ node: SceneNode) -> SceneNode {
             var result = node
@@ -930,7 +975,7 @@ struct SceneNode: Codable, Sendable {
         }
         return copy(self)
     }
-    var assetURL: URL? {
+    package var assetURL: URL? {
         switch content { case .image(let url), .video(let url): return url; case .gradient, .group, .particles, .text, .shape, .shader: return nil }
     }
 }
@@ -942,21 +987,21 @@ struct SceneNode: Codable, Sendable {
 /// desktop that is otherwise dim. These correct it at playback without touching
 /// the file, so deleting the sidecar restores the original. Every field is
 /// optional and neutral at 0, so `{"soften": 0.3}` still means what it did.
-struct SceneTone: Codable, Sendable, Equatable {
+package struct SceneTone: Codable, Sendable, Equatable {
     /// Rolls highlights off, 0...1; shadows and midtones are left alone.
-    var soften: Double = 0
+    package var soften: Double = 0
     /// Stops of exposure, -2...2, applied to linear light like a camera would.
-    var exposure: Double = 0
+    package var exposure: Double = 0
     /// -1...1 around mid-grey.
-    var contrast: Double = 0
+    package var contrast: Double = 0
     /// -1 is greyscale, 1 doubles saturation.
-    var saturation: Double = 0
-    enum CodingKeys: String, CodingKey { case soften, exposure, contrast, saturation }
+    package var saturation: Double = 0
+    package enum CodingKeys: String, CodingKey { case soften, exposure, contrast, saturation }
 
-    init(soften: Double = 0, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0) {
+    package init(soften: Double = 0, exposure: Double = 0, contrast: Double = 0, saturation: Double = 0) {
         self.soften = soften; self.exposure = exposure; self.contrast = contrast; self.saturation = saturation
     }
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         soften = try container.decodeIfPresent(Double.self, forKey: .soften) ?? 0
         exposure = try container.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
@@ -964,7 +1009,7 @@ struct SceneTone: Codable, Sendable, Equatable {
         saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
     }
     /// Neutral fields are left out, so a sidecar only says what was changed.
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         let value = clamped
         if value.soften != 0 { try container.encode(value.soften, forKey: .soften) }
@@ -973,17 +1018,17 @@ struct SceneTone: Codable, Sendable, Equatable {
         if value.saturation != 0 { try container.encode(value.saturation, forKey: .saturation) }
     }
 
-    var clamped: SceneTone {
+    package var clamped: SceneTone {
         func unit(_ v: Double, _ low: Double, _ high: Double) -> Double { v.isFinite ? min(max(v, low), high) : 0 }
         return SceneTone(soften: unit(soften, 0, 1), exposure: unit(exposure, -2, 2),
                          contrast: unit(contrast, -1, 1), saturation: unit(saturation, -1, 1))
     }
-    var isNeutral: Bool { clamped == SceneTone() }
+    package var isNeutral: Bool { clamped == SceneTone() }
 
     /// Points for a tone curve over sRGB-encoded values. Shadows and midtones
     /// stay where they are; the curve bends only above the middle, so the
     /// picture keeps its contrast and loses its glare.
-    var curve: [CGPoint] {
+    package var curve: [CGPoint] {
         let amount = CGFloat(clamped.soften)
         return [CGPoint(x: 0, y: 0), CGPoint(x: 0.25, y: 0.25), CGPoint(x: 0.5, y: 0.5 - 0.02 * amount),
                 CGPoint(x: 0.75, y: 0.75 - 0.08 * amount), CGPoint(x: 1, y: 1 - 0.18 * amount)]
@@ -1002,15 +1047,16 @@ struct SceneTone: Codable, Sendable, Equatable {
 /// Missing or malformed is not an error: framing is an optional refinement, and
 /// a wallpaper that refuses to play because a preferences file has a typo in it
 /// is worse than one that plays centred.
-struct SceneFraming: Decodable {
-    var focus: SceneFocus?
-    var bleed: SceneBleed?
-    var tone: SceneTone?
+package struct SceneFraming: Decodable {
+    package init(focus: SceneFocus? = nil, bleed: SceneBleed? = nil, tone: SceneTone? = nil) { self.focus = focus; self.bleed = bleed; self.tone = tone }
+    package var focus: SceneFocus?
+    package var bleed: SceneBleed?
+    package var tone: SceneTone?
 
-    static func url(for media: URL) -> URL {
+    package static func url(for media: URL) -> URL {
         media.deletingPathExtension().appendingPathExtension("framing.json")
     }
-    static func beside(_ media: URL) throws -> SceneFraming? {
+    package static func beside(_ media: URL) throws -> SceneFraming? {
         let path = url(for: media)
         guard FileManager.default.fileExists(atPath: path.path) else { return nil }
         let data = try Data(contentsOf: path)
@@ -1022,7 +1068,7 @@ struct SceneFraming: Decodable {
     /// place. Values that change nothing -- a centred focus, an empty margin, no
     /// softening -- are dropped rather than written, and a sidecar left with
     /// nothing in it is removed, so resetting a file really does restore it.
-    func write(beside media: URL) throws {
+    package func write(beside media: URL) throws {
         let path = SceneFraming.url(for: media)
         var contents: [String: Any] = [:]
         if let data = try? Data(contentsOf: path), data.count <= 4096,
@@ -1043,18 +1089,19 @@ struct SceneFraming: Decodable {
     }
 }
 
-protocol SceneSource {
+package protocol SceneSource {
     func resolve(_ url: URL) async throws -> SceneDescriptor
 }
 
-enum SceneError: LocalizedError {
+package enum SceneError: LocalizedError {
     case invalid(String)
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self { case .invalid(let message): return message }
     }
 }
 
-struct LocalSceneSource: SceneSource {
+public struct LocalSceneSource: SceneSource {
+    public init() {}
     private struct Manifest: Decodable {
         let version: Int
         let title: String
@@ -1103,7 +1150,7 @@ struct LocalSceneSource: SceneSource {
         }
     }
 
-    func resolve(_ url: URL) async throws -> SceneDescriptor {
+    public func resolve(_ url: URL) async throws -> SceneDescriptor {
         let task = Task.detached(priority: .userInitiated) { try Self.read(url) }
         return try await withTaskCancellationHandler(operation: {
             let result = try await task.value
@@ -1151,7 +1198,7 @@ struct LocalSceneSource: SceneSource {
         }
     }
 
-    static func read(_ url: URL) throws -> SceneDescriptor {
+    package static func read(_ url: URL) throws -> SceneDescriptor {
         try Task.checkCancellation()
         guard url.isFileURL else { throw SceneError.invalid("Download this scene before opening it.") }
         if url.pathExtension.lowercased() != "idlesse" {
@@ -1301,13 +1348,14 @@ struct LocalSceneSource: SceneSource {
 }
 
 /// A typed, serializable target shared by future controls and animation tracks.
-struct ScenePropertyAddress: Codable, Sendable, Hashable {
-    enum Property: String, Codable, Sendable, CaseIterable {
+package struct ScenePropertyAddress: Codable, Sendable, Hashable {
+    package init(nodeID: UUID, property: Property, effectID: UUID? = nil) { self.nodeID = nodeID; self.property = property; self.effectID = effectID }
+    package enum Property: String, Codable, Sendable, CaseIterable {
         case x = "transform.x", y = "transform.y", scale = "transform.scale", rotation = "transform.rotation"
         case particleSize = "emitter.size", particleWind = "emitter.wind", particleSpeed = "emitter.speed"
         case effectAmount = "effect.amount"
         case opacity, exposure = "style.exposure", saturation = "style.saturation", vignette = "style.vignette"
-        var range: ClosedRange<Double> {
+        package var range: ClosedRange<Double> {
             switch self {
             case .x, .y, .exposure: return -2...2
             case .scale: return 0.05...4
@@ -1320,19 +1368,19 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
             }
         }
     }
-    let nodeID: UUID
-    let property: Property
-    var effectID: UUID? = nil
-    static func targets(for node: SceneNode) -> [Self] {
+    package let nodeID: UUID
+    package let property: Property
+    package var effectID: UUID? = nil
+    package static func targets(for node: SceneNode) -> [Self] {
         Property.allCases.filter { $0 != .effectAmount && (node.emitter != nil || ![.particleSize, .particleWind, .particleSpeed].contains($0)) }.map { Self(nodeID: node.id, property: $0) }
         + node.style.effects.map { Self(nodeID: node.id, property: .effectAmount, effectID: $0.id) }
     }
-    func label(in nodes: [SceneNode]) -> String {
+    package func label(in nodes: [SceneNode]) -> String {
         guard let effectID, let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }),
               let index = node.style.effects.firstIndex(where: { $0.id == effectID }) else { return property.rawValue }
         return "Effect \(index + 1) · \(node.style.effects[index].type.rawValue) amount"
     }
-    func range(in nodes: [SceneNode]) throws -> ClosedRange<Double> {
+    package func range(in nodes: [SceneNode]) throws -> ClosedRange<Double> {
         guard (property == .effectAmount) == (effectID != nil) else { throw SceneError.invalid("Effect amount requires an effect ID, and other properties cannot use one.") }
         guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else { throw SceneError.invalid("The target layer no longer exists.") }
         guard ![Property.particleSize, .particleWind, .particleSpeed].contains(property) || node.emitter != nil else {
@@ -1343,7 +1391,7 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
         return effect.range
     }
 
-    func value(in nodes: [SceneNode]) throws -> Double {
+    package func value(in nodes: [SceneNode]) throws -> Double {
         _ = try range(in: nodes)
         guard let node = nodes.flatMap({ $0.descendants }).first(where: { $0.id == nodeID }) else {
             throw SceneError.invalid("The property target no longer exists.")
@@ -1365,7 +1413,7 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
     }
 
     /// Reject invalid values before mutation; bindings must explicitly clamp their output.
-    func set(_ value: Double, in nodes: inout [SceneNode]) throws {
+    package func set(_ value: Double, in nodes: inout [SceneNode]) throws {
         guard value.isFinite, try range(in: nodes).contains(value) else {
             throw SceneError.invalid("The property value is outside its supported range.")
         }
@@ -1395,13 +1443,14 @@ struct ScenePropertyAddress: Codable, Sendable, Hashable {
 }
 
 /// Writes a self-contained copy, leaving the source package and its assets untouched.
-enum ScenePackageWriter {
-    struct Revision: Equatable, Sendable {
-        let manifest: Data
-        let scene: Data
-        let files: [String]
+package enum ScenePackageWriter {
+    package struct Revision: Equatable, Sendable {
+        package init(manifest: Data, scene: Data, files: [String]) { self.manifest = manifest; self.scene = scene; self.files = files }
+        package let manifest: Data
+        package let scene: Data
+        package let files: [String]
     }
-    static func revision(of package: URL) throws -> Revision {
+    package static func revision(of package: URL) throws -> Revision {
         let files = FileManager.default
         guard let entries = files.enumerator(at: package, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isSymbolicLinkKey]) else {
             throw SceneError.invalid("The scene package is no longer available.")
@@ -1421,7 +1470,7 @@ enum ScenePackageWriter {
         }
         return try Revision(manifest: json("manifest.json"), scene: json("scene.json"), files: records.sorted())
     }
-    static func write(_ scene: SceneDescriptor, to destination: URL, replacing expected: Revision? = nil) throws {
+    package static func write(_ scene: SceneDescriptor, to destination: URL, replacing expected: Revision? = nil) throws {
         try SceneBudget.validate(scene.nodes)
         _ = try scene.evaluated()
         let files = FileManager.default
@@ -1552,7 +1601,7 @@ enum ScenePackageWriter {
 }
 
 /// Returns old resource indices in the new drawing order, only for metadata edits.
-func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
+package func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
     guard old.count == new.count, Set(old.map { $0.id }).count == old.count,
           Set(new.map { $0.id }).count == new.count else { return nil }
     var order: [Int] = []
@@ -1567,16 +1616,16 @@ func sceneResourceOrder(from old: [SceneNode], to new: [SceneNode]) -> [Int]? {
 }
 
 /// Per-display retained image allowance; video decoder and drawable memory are separate.
-enum SceneBudget {
-    static let maxGroups = 4
-    static let maxGroupDepth = 2
-    static let intermediateTextureBytes = 128 * 1024 * 1024
-    static let maxNodes = 16
-    static let maxVideos = 2
-    static let maxGradients = 4
-    static let maxShaders = 4
-    static let decodedImagePixels = 32_000_000
-    static func validate(_ roots: [SceneNode]) throws {
+package enum SceneBudget {
+    package static let maxGroups = 4
+    package static let maxGroupDepth = 2
+    package static let intermediateTextureBytes = 128 * 1024 * 1024
+    package static let maxNodes = 16
+    package static let maxVideos = 2
+    package static let maxGradients = 4
+    package static let maxShaders = 4
+    package static let decodedImagePixels = 32_000_000
+    package static func validate(_ roots: [SceneNode]) throws {
         func walk(_ nodes: [SceneNode], depth: Int) throws -> [SceneNode] {
             guard depth <= maxGroupDepth else { throw SceneError.invalid("Groups may nest at most two levels deep.") }
             var result: [SceneNode] = []
@@ -1632,13 +1681,13 @@ enum SceneBudget {
     }
     /// Two in-flight frames share a fixed byte allowance. Larger group surfaces
     /// are reduced uniformly; images/video assets themselves are never rewritten.
-    static func groupTargetSize(width: Double, height: Double, count: Int) -> (width: Int, height: Int)? {
+    package static func groupTargetSize(width: Double, height: Double, count: Int) -> (width: Int, height: Int)? {
         guard width.isFinite, height.isFinite, width >= 1, height >= 1, (1...(maxGroups + 4 * maxNodes + 2)).contains(count) else { return nil }
         let pixels = Double(intermediateTextureBytes / (2 * count) - 65_536) / 4
         let scale = min(1, 16384 / max(width, height), sqrt(pixels / width / height))
         return (max(1, Int(floor(width * scale))), max(1, Int(floor(height * scale))))
     }
-    static func imagePixels(_ nodes: [SceneNode]) -> Int {
+    package static func imagePixels(_ nodes: [SceneNode]) -> Int {
         var count = 0
         for node in nodes.flatMap({ $0.descendants }) {
             if [.image, .text, .shape].contains(node.kind) { count += 1 }
@@ -1650,13 +1699,13 @@ enum SceneBudget {
 }
 
 /// Tree edits retain node identity so renderers can keep media resources alive.
-enum SceneTree {
-    static func siblings(of id: UUID, in nodes: [SceneNode]) -> [SceneNode]? {
+package enum SceneTree {
+    package static func siblings(of id: UUID, in nodes: [SceneNode]) -> [SceneNode]? {
         if nodes.contains(where: { $0.id == id }) { return nodes }
         for node in nodes { if let found = siblings(of: id, in: node.children) { return found } }
         return nil
     }
-    static func edit(_ id: UUID, in nodes: inout [SceneNode], _ body: (inout [SceneNode], Int) -> Void) -> Bool {
+    package static func edit(_ id: UUID, in nodes: inout [SceneNode], _ body: (inout [SceneNode], Int) -> Void) -> Bool {
         if let index = nodes.firstIndex(where: { $0.id == id }) { body(&nodes, index); return true }
         for index in nodes.indices where nodes[index].kind == .group {
             var children = nodes[index].children
@@ -1667,18 +1716,18 @@ enum SceneTree {
 }
 
 /// Runtime-only filter memory, bounded by the scene's 64 unique binding targets.
-final class SceneBindingSmoother {
+package final class SceneBindingSmoother {
     private var values: [ScenePropertyAddress: Double] = [:]
     private var lastTime: Double?
     private var revision: UInt64?
     private var delta: Double = 0
-    func reset() { values.removeAll(keepingCapacity: true); lastTime = nil; revision = nil }
-    func beginFrame(time: Double, revision: UInt64) {
+    package func reset() { values.removeAll(keepingCapacity: true); lastTime = nil; revision = nil }
+    package func beginFrame(time: Double, revision: UInt64) {
         if self.revision != revision { reset(); self.revision = revision }
         delta = lastTime.map { max(0, time - $0) } ?? 0
         lastTime = time
     }
-    func sample(target: ScenePropertyAddress, value: Double, duration: Double) -> Double {
+    package func sample(target: ScenePropertyAddress, value: Double, duration: Double) -> Double {
         guard duration > 0, let previous = values[target] else { values[target] = value; return value }
         let alpha = -expm1(-delta / duration)
         let filtered = previous * (1 - alpha) + value * alpha

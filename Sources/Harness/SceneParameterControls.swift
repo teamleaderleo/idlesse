@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Generated controls shared by Studio and the desktop host. No media is copied.
 final class SceneParameterControls: NSView {

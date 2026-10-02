@@ -72,6 +72,7 @@ compile_saver_arch() {
     -swift-version 5 \
     "${SWIFT_OPT[@]}" \
     -module-name Idlesse \
+    -package-name idlesse \
     -emit-executable \
     -Xlinker -bundle \
     "${SHARED_SOURCES[@]}" \
@@ -118,6 +119,10 @@ build_saver() {
 # Keep the raw swiftc release/fallback path aligned with the SwiftPM app target:
 # every Swift source under Sources belongs to IdlesseApp except application
 # extension sources, which are compiled into their own sandboxed processes.
+# SwiftPM builds Sources/Runtime as the separate IdlesseRuntime module; this
+# path compiles it into the app module instead, so app files guard
+# `import IdlesseRuntime` with canImport and every runtime compile passes
+# -package-name for the runtime's `package` declarations.
 APP_SOURCES=()
 while IFS= read -r source; do
   APP_SOURCES+=( "$source" )
@@ -136,7 +141,7 @@ app_framework_args() {
 compile_app_full() {
   local arch="$1"
   local args=( -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" -swift-version 5
-    "${SWIFT_OPT[@]}" -module-name IdlesseApp )
+    "${SWIFT_OPT[@]}" -module-name IdlesseApp -package-name idlesse )
   local f
   for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
   xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} "${args[@]}" "${APP_SOURCES[@]}" \
@@ -176,7 +181,7 @@ compile_preview_extension() {
   hash="$( (xcrun swiftc --version 2>/dev/null | head -n 1; printf '%s' "${SWIFT_OPT[*]}-$arch-$MIN_MACOS-$module"; cat "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider") | shasum -a 256 | cut -d' ' -f1)"
   if [[ ! -f "$appex_cache/$hash" ]]; then
     xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} -sdk "$SDK" -target "$arch-apple-macosx$MIN_MACOS" \
-      -swift-version 5 "${SWIFT_OPT[@]}" -module-name "$module" \
+      -swift-version 5 "${SWIFT_OPT[@]}" -module-name "$module" -package-name idlesse \
       -application-extension -emit-executable -Xlinker -e -Xlinker _NSExtensionMain \
       "${PREVIEW_RUNTIME_SOURCES[@]}" "$provider" \
       -framework AppKit -framework AVFoundation -framework MetalKit -framework Metal \

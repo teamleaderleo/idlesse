@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Presentation-only ownership state for properties shown in Studio's persistent inspector.
 /// SceneParameterBinding and SceneParameter remain the source of truth for authored behavior.

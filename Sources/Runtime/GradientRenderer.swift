@@ -2,20 +2,20 @@ import AppKit
 import MetalKit
 
 /// A built-in Metal node; no community shader execution or permissions required.
-final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
+package final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private let presentations = PresentedFrameCounter()
-    var presentedFrameCount: Int? { presentations.total }
-    var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
-    let view: NSView
+    package var presentedFrameCount: Int? { presentations.total }
+    package var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
+    package let view: NSView
     private let metal: MTKView
     private var queue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
     private let clock: SceneClock
     private let onError: (String) -> Void
     private let inFlight = DispatchSemaphore(value: 2)
-    private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: true, activeResources: 1)
+    package private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: true, activeResources: 1)
 
-    init(bounds: NSRect, clock: SceneClock, onError: @escaping (String) -> Void) throws {
+    package init(bounds: NSRect, clock: SceneClock, onError: @escaping (String) -> Void) throws {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.invalid("Metal is unavailable on this Mac.")
         }
@@ -52,8 +52,8 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         super.init()
         metal.delegate = self
     }
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-    func draw(in view: MTKView) {
+    package func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    package func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let pipeline, let queue,
               inFlight.wait(timeout: .now()) == .success else { return }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
@@ -90,7 +90,7 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
 
     /// Bounded offscreen readback for verifying the actual production GPU pipeline.
-    func renderProbe() throws -> [UInt8] {
+    package func renderProbe() throws -> [UInt8] {
         guard let device = metal.device, let queue, let pipeline else {
             throw SceneError.invalid("The renderer has been disposed.")
         }
@@ -119,16 +119,16 @@ final class GradientRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         return bytes
     }
 
-    func setPreferredFrameRate(_ rate: Int?) {
+    package func setPreferredFrameRate(_ rate: Int?) {
         guard diagnostics.state != .disposed else { return }
         metal.preferredFramesPerSecond = rate ?? 30
     }
-    func setPaused(_ paused: Bool) {
+    package func setPaused(_ paused: Bool) {
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
         metal.isPaused = paused
     }
-    func releaseResources() {
+    package func releaseResources() {
         metal.isPaused = true
         metal.delegate = nil
         metal.releaseDrawables()

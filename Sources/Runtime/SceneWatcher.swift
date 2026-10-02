@@ -3,12 +3,12 @@ import Darwin
 
 /// Event-driven observation of the package, metadata, and referenced assets.
 /// Parent directories catch atomic-save replacements. No polling or recursive scan.
-final class SceneWatcher {
+package final class SceneWatcher {
     private var sources: [DispatchSourceFileSystemObject] = []
     private var pending: DispatchWorkItem?
     private let urls: [URL]
     private let onChange: () -> Void
-    init(package: URL, assets: [URL], onChange: @escaping () -> Void) {
+    package init(package: URL, assets: [URL], onChange: @escaping () -> Void) {
         urls = Array(Set([package, package.deletingLastPathComponent(),
                           package.appendingPathComponent("manifest.json"),
                           package.appendingPathComponent("scene.json")] + assets + assets.map { $0.deletingLastPathComponent() }))

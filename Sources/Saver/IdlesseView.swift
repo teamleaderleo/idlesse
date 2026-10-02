@@ -1,5 +1,8 @@
 import AppKit
 import ScreenSaver
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 @objc(IdlesseView)
 final class IdlesseView: ScreenSaverView {

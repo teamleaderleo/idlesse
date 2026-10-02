@@ -3,6 +3,9 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import UniformTypeIdentifiers
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 private final class DesktopWindow: NSPanel {
     override var canBecomeKey: Bool { false }

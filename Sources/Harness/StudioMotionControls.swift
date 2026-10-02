@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 enum StudioMotionCommand {
     case select

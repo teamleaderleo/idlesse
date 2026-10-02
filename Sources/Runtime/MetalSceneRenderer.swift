@@ -4,14 +4,14 @@ import MetalKit
 import CoreVideo
 import CoreText
 
-struct MetalShaderDiagnostic: Equatable, Sendable {
-    enum Severity: String, Sendable { case error, warning, note }
-    var line: Int?
-    var column: Int?
-    var severity: Severity
-    var message: String
+package struct MetalShaderDiagnostic: Equatable, Sendable {
+    package enum Severity: String, Sendable { case error, warning, note }
+    package var line: Int?
+    package var column: Int?
+    package var severity: Severity
+    package var message: String
 
-    var displayText: String {
+    package var displayText: String {
         let location: String
         if let line, let column { location = "Line \(line):\(column) — " }
         else if let line { location = "Line \(line) — " }
@@ -20,19 +20,19 @@ struct MetalShaderDiagnostic: Equatable, Sendable {
     }
 }
 
-struct MetalShaderCompilationError: LocalizedError {
-    var diagnostics: [MetalShaderDiagnostic]
-    var fallback: String
+package struct MetalShaderCompilationError: LocalizedError {
+    package var diagnostics: [MetalShaderDiagnostic]
+    package var fallback: String
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         guard !diagnostics.isEmpty else { return "Shader failed to compile: \(fallback)" }
         return (["Shader failed to compile."] + diagnostics.map(\.displayText)).joined(separator: "\n")
     }
 }
 
-enum MetalShaderCompiler {
-    static let sourceName = "StudioShader"
-    static let prelude = """
+package enum MetalShaderCompiler {
+    package static let sourceName = "StudioShader"
+    package static let prelude = """
     #include <metal_stdlib>
     using namespace metal;
     struct V { float4 position [[position]]; float2 uv; float fade; float2 canvasUV; };
@@ -51,7 +51,7 @@ enum MetalShaderCompiler {
     }
     """
 
-    static func makeLibrary(_ shader: SceneNode.Shader, device: MTLDevice) throws -> MTLLibrary {
+    package static func makeLibrary(_ shader: SceneNode.Shader, device: MTLDevice) throws -> MTLLibrary {
         try shader.validate()
         let combined = prelude + "\n" + validationVertex + "\n#line 1 \"\(sourceName)\"\n" + shader.source
         do {
@@ -62,7 +62,7 @@ enum MetalShaderCompiler {
         }
     }
 
-    static func validate(_ shader: SceneNode.Shader, device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
+    package static func validate(_ shader: SceneNode.Shader, device: MTLDevice? = MTLCreateSystemDefaultDevice()) throws {
         guard let device else { throw SceneError.invalid("Metal is unavailable on this Mac.") }
         let library = try makeLibrary(shader, device: device)
         guard let fragment = library.makeFunction(name: "shaderMain") else {
@@ -83,7 +83,7 @@ enum MetalShaderCompiler {
         }
     }
 
-    static func parseDiagnostics(_ text: String) -> [MetalShaderDiagnostic] {
+    package static func parseDiagnostics(_ text: String) -> [MetalShaderDiagnostic] {
         let pattern = #"(?:^|\n)(?:StudioShader|program_source|[^:\n]+):(\d+)(?::(\d+))?:\s*(error|warning|note):\s*([^\n]+)"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -103,13 +103,13 @@ enum MetalShaderCompiler {
 }
 
 extension SceneNode.Shader {
-    struct Preset: Sendable {
-        let name: String
-        let source: String
-        let speed: Double
+    package struct Preset: Sendable {
+        package let name: String
+        package let source: String
+        package let speed: Double
     }
 
-    static let studioPresets: [Preset] = [
+    package static let studioPresets: [Preset] = [
         .init(name: "Plasma", source: plasma, speed: 1),
         .init(name: "Noise / Grain", source: """
         fragment float4 shaderMain(V in [[stage_in]], constant ShaderU &u [[buffer(1)]]) {
@@ -179,9 +179,9 @@ extension SceneNode.Shader {
 
 /// Experimental SDR compositor. One drawable per display; groups use bounded offscreen passes.
 /// Keep the layer renderer as the default until color and power parity are measured.
-final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
+public final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     // Optional GPU-only presentation consumer; it must not retain the source drawable.
-    var mirrorFrame: ((MTLCommandBuffer, CAMetalDrawable) -> Void)? {
+    package var mirrorFrame: ((MTLCommandBuffer, CAMetalDrawable) -> Void)? {
         didSet { metal.framebufferOnly = mirrorFrame == nil }
     }
 
@@ -286,12 +286,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
     }
     private let presentations = PresentedFrameCounter()
-    var presentedFrameCount: Int? { presentations.total }
-    var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
-    let view: NSView
+    package var presentedFrameCount: Int? { presentations.total }
+    package var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
+    public let view: NSView
     private let metal: MTKView
-    var desktopFrame: CGRect?
-    var displayFrame: CGRect?
+    package var desktopFrame: CGRect?
+    package var displayFrame: CGRect?
     private let clock: SceneClock
     private let onError: (String) -> Void
     private var queue: MTLCommandQueue?
@@ -302,8 +302,8 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     private var sourceScene: SceneDescriptor?
     private let bindingSmoother = SceneBindingSmoother()
     private let targets = GroupTexturePool()
-    var intermediateTextureBytes: Int { targets.allocatedBytes }
-    var videoTransportPositions: [Double] { inputs.filter { $0.followsClock }.compactMap { $0.player?.currentTime().seconds } }
+    package var intermediateTextureBytes: Int { targets.allocatedBytes }
+    package var videoTransportPositions: [Double] { inputs.filter { $0.followsClock }.compactMap { $0.player?.currentTime().seconds } }
     private var visibleIDs: Set<UUID> {
         func visit(_ nodes: [SceneNode]) -> [UUID] {
             nodes.filter { $0.visible }.flatMap { [$0.id] + visit($0.children) }
@@ -324,14 +324,20 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     private var needsFrame = true
     private let gate = DispatchSemaphore(value: 2)
-    private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 0)
+    package private(set) var diagnostics = RendererDiagnostics(state: .ready, animated: false, activeResources: 0)
     private var framesSinceCacheFlush = 0
     private var lastObservedLoopCount = 0
 
     private var sharedHub: SharedVideoHub?
 
-    init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
-         onError: @escaping (String) -> Void, sharedHub: SharedVideoHub? = nil) throws {
+    /// Embedding hosts render a resolved scene into `view`, driven by `clock`.
+    public convenience init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
+                            onError: @escaping (String) -> Void) throws {
+        try self.init(playable: playable, bounds: bounds, scale: scale, clock: clock, onError: onError, sharedHub: nil)
+    }
+
+    package init(playable: SceneDescriptor, bounds: NSRect, scale: CGFloat, clock: SceneClock,
+         onError: @escaping (String) -> Void, sharedHub: SharedVideoHub?) throws {
         self.sharedHub = sharedHub
         let authored = playable
         let playable = try playable.evaluated()
@@ -446,7 +452,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         metal.delegate = self
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         needsFrame = true
         if !diagnostics.animated { view.draw() }
     }
@@ -744,7 +750,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         return true
     }
-    func updateScene(_ scene: SceneDescriptor) -> Bool {
+    package func updateScene(_ scene: SceneDescriptor) -> Bool {
         let authored = scene
         guard (sourceScene?.timeline?.videosFollowScene == true) == (scene.timeline?.videosFollowScene == true) else { return false }
         guard let scene = try? scene.evaluated(signals: currentSignals()) else { return false }
@@ -769,11 +775,11 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         metal.draw()
         return true
     }
-    var onFirstFrameReady: (() -> Void)?
+    public var onFirstFrameReady: (() -> Void)?
     private var deliveredFirstFrame = false
-    var isReadyForDisplay: Bool { deliveredFirstFrame }
+    public var isReadyForDisplay: Bool { deliveredFirstFrame }
 
-    func draw(in view: MTKView) {
+    public func draw(in view: MTKView) {
         guard diagnostics.state != .disposed, let queue, gate.wait(timeout: .now()) == .success else { return }
         if diagnostics.state == .running { updateSignals(sampledSignals()) }
         let changed = updateVideos()
@@ -825,7 +831,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         updateDrawScheduling()
     }
-    func refreshSceneTime() {
+    package func refreshSceneTime() {
         guard diagnostics.state != .disposed else { return }
         updateSignals(sampledSignals())
         needsFrame = true
@@ -903,7 +909,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         for (input, node) in zip(inputs, evaluated.allNodes) { input.node = node }
         needsFrame = true
     }
-    static func smokeTestGroupTextureBudget() throws {
+    package static func smokeTestGroupTextureBudget() throws {
         let parsed = MetalShaderCompiler.parseDiagnostics("StudioShader:7:11: error: unknown identifier")
         precondition(parsed.first?.line == 7 && parsed.first?.column == 11,
             "Shader diagnostics must retain user-source line and column information")
@@ -1008,10 +1014,10 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         precondition(effectPool.allocatedBytes == 0)
     }
     /// Small GPU readback for tests; never used by the display loop.
-    func renderProbe(signals: SceneSignals? = nil, dimension: Int = 32) throws -> [UInt8] {
+    package func renderProbe(signals: SceneSignals? = nil, dimension: Int = 32) throws -> [UInt8] {
         try renderFrame(signals: signals, width: dimension, height: dimension)
     }
-    func renderFrame(signals: SceneSignals? = nil, width: Int, height: Int, sampleVideo: Bool = true, referenceDate: Date? = nil) throws -> [UInt8] {
+    package func renderFrame(signals: SceneSignals? = nil, width: Int, height: Int, sampleVideo: Bool = true, referenceDate: Date? = nil) throws -> [UInt8] {
         guard (32...3840).contains(width), (32...2160).contains(height) else { throw SceneError.invalid("Frame size must be 32–3840 by 32–2160 pixels.") }
         if let signals { updateSignals(signals) }
         try updateText(at: (referenceDate ?? textOrigin).addingTimeInterval(signals?.time ?? 0))
@@ -1053,7 +1059,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
 
     /// Offline decoding has no dependency on AVPlayer wall-clock delivery.
-    @MainActor func prepareOfflineVideo(at time: Double, size: CGSize) async throws {
+    @MainActor package func prepareOfflineVideo(at time: Double, size: CGSize) async throws {
         guard let device = metal.device else { throw SceneError.invalid("Renderer disposed.") }
         for input in inputs where input.node.kind == .video {
             try Task.checkCancellation()
@@ -1078,7 +1084,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
     }
 
-    func setPreferredFrameRate(_ rate: Int?) {
+    public func setPreferredFrameRate(_ rate: Int?) {
         guard diagnostics.state != .disposed else { return }
         let targetRate = rate ?? 60
         let requiresHighRefresh = (sourceScene?.usesPointer == true && clock.pointerEnabled) ||
@@ -1086,7 +1092,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                                   (roots.flatMap { $0.descendants }.contains { $0.kind == .particles || $0.kind == .shader })
         metal.preferredFramesPerSecond = requiresHighRefresh ? targetRate : min(targetRate, 60)
     }
-    func setPaused(_ paused: Bool) {
+    public func setPaused(_ paused: Bool) {
         bindingSmoother.reset()
         guard diagnostics.state != .disposed else { return }
         diagnostics.state = paused ? .paused : .running
@@ -1099,14 +1105,14 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         updateDrawScheduling()
         if !diagnostics.animated || inputs.contains(where: { $0.followsClock }) { metal.draw() }
     }
-    func setMuted(_ muted: Bool) {
+    public func setMuted(_ muted: Bool) {
         guard diagnostics.state != .disposed else { return }
         inputs.forEach {
             $0.player?.isMuted = muted
             if !muted { $0.player?.volume = 1 }
         }
     }
-    func releaseResources() {
+    public func releaseResources() {
         textTimer?.invalidate(); textTimer = nil
         metal.isPaused = true
         metal.delegate = nil
@@ -1126,7 +1132,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     deinit { releaseResources() }
 
     /// Convert the shared AppKit fill rectangle into top-down texture coordinates.
-    static func mediaFraming(content: CGSize, aspect: CGFloat, focus: SceneFocus?, bleed: SceneBleed?) -> SIMD4<Float> {
+    package static func mediaFraming(content: CGSize, aspect: CGFloat, focus: SceneFocus?, bleed: SceneBleed?) -> SIMD4<Float> {
         let bounds = CGRect(x: 0, y: 0, width: aspect, height: 1)
         let frame = (focus ?? .centre).filledFrame(content: content, in: bounds, bleed: bleed)
         return SIMD4(Float(bounds.width / frame.width), Float(bounds.height / frame.height),

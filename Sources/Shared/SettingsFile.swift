@@ -1,5 +1,8 @@
 import Darwin
 import Foundation
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 struct IdlesseStoredSettings: Codable, Equatable {
     var schemaVersion: Int = 1

@@ -2,32 +2,32 @@ import Foundation
 
 /// One monotonic timeline shared by every surface of an active scene.
 /// Video loops are not frame-locked to this clock yet.
-final class SceneClock {
+public final class SceneClock {
     private let now: () -> TimeInterval
     private var anchor: TimeInterval
     private var accumulated: TimeInterval = 0
     private var authored: SceneTimeline?
-    private(set) var revision: UInt64 = 0
-    private(set) var playbackRate: Double = 1
-    private(set) var loopRange: Range<TimeInterval>?
-    private(set) var isPaused = true
+    package private(set) var revision: UInt64 = 0
+    package private(set) var playbackRate: Double = 1
+    package private(set) var loopRange: Range<TimeInterval>?
+    public private(set) var isPaused = true
     /// Explicit host opt-in, never granted by a package manifest.
-    var pointerEnabled = false
-    var audioEnabled = false { didSet { audioActivityChanged?(audioEnabled && !isPaused) } }
-    var audioActivityChanged: ((Bool) -> Void)?
-    var audioLevels: () -> SceneAudioLevels = { SceneAudioLevels() }
-    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    public var pointerEnabled = false
+    public var audioEnabled = false { didSet { audioActivityChanged?(audioEnabled && !isPaused) } }
+    package var audioActivityChanged: ((Bool) -> Void)?
+    public var audioLevels: () -> SceneAudioLevels = { SceneAudioLevels() }
+    public init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now
         anchor = now()
     }
     private var phase: TimeInterval { accumulated + (isPaused ? 0 : max(0, now() - anchor) * playbackRate) }
-    var time: TimeInterval { wrapped(phase) }
-    var isAtEnd: Bool { authored?.mode == .once && phase >= (authored?.duration ?? 0) }
-    var effectiveRate: Double {
+    public var time: TimeInterval { wrapped(phase) }
+    package var isAtEnd: Bool { authored?.mode == .once && phase >= (authored?.duration ?? 0) }
+    package var effectiveRate: Double {
         if isPaused || isAtEnd { return 0 }
         return playbackRate
     }
-    func configure(timeline: SceneTimeline?) throws {
+    public func configure(timeline: SceneTimeline?) throws {
         try timeline?.validate()
         try configure(time: 0, rate: timeline?.rate ?? 1, loop: nil)
         authored = timeline
@@ -55,7 +55,7 @@ final class SceneClock {
     }
     /// Atomic transport edit. These settings are host-session state, not authored scene data.
     /// Clearing the loop keeps the authored timeline as the wrap basis.
-    func configure(time: TimeInterval, rate: Double, loop: Range<TimeInterval>?) throws {
+    package func configure(time: TimeInterval, rate: Double, loop: Range<TimeInterval>?) throws {
         guard time.isFinite, (0...86400).contains(time), rate.isFinite, (0.1...4).contains(rate) else {
             throw SceneError.invalid("Use a time of 0–86400 seconds and a playback rate of 0.1–4.")
         }
@@ -71,13 +71,13 @@ final class SceneClock {
         accumulated = wrapped(time)
         anchor = now()
     }
-    func seek(to time: TimeInterval) throws {
+    package func seek(to time: TimeInterval) throws {
         guard time.isFinite, (0...86400).contains(time) else { throw SceneError.invalid("Use a time of 0–86400 seconds.") }
         revision &+= 1
         accumulated = time
         anchor = now()
     }
-    func setPaused(_ paused: Bool) {
+    public func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
         accumulated = phase
         anchor = now()

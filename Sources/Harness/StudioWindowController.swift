@@ -1,5 +1,8 @@
 import AppKit
 import UniformTypeIdentifiers
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 private final class StudioInspectorView: NSView {
     override var isFlipped: Bool { true }
