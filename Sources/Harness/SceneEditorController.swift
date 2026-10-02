@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Selection indexes the document's preorder traversal, never a visible table row.
 final class SceneEditorController {

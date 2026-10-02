@@ -3,6 +3,9 @@ import AVFoundation
 import UniformTypeIdentifiers
 import ImageIO
 import CoreImage
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Native reference library with one on-demand poster, never a grid of live renderers.
 final class SceneLibraryController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {

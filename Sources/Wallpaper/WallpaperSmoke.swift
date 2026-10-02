@@ -1,6 +1,9 @@
 import AppKit
 import AVFoundation
 import MetalKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 enum WallpaperSmoke {
     static func run(videoURL: URL) throws {

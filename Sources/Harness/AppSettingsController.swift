@@ -1,5 +1,8 @@
 import AppKit
 import UniformTypeIdentifiers
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Session frame restore that refuses garbage: a saved frame from a different
 /// screen layout (or a runaway resize) that dwarfs the default size is

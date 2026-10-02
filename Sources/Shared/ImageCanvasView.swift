@@ -1,37 +1,37 @@
 import AppKit
 
-final class ImageCanvasView: NSView {
+package final class ImageCanvasView: NSView {
     /// Unit coordinates measured from the top-left; only used for aspect fill.
     // Runtime hosts can provide shared crop geometry without coupling the saver to Scene types.
-    var fillFrame: ((CGSize, CGRect) -> CGRect)? { didSet { needsDisplay = true } }
-    var fillFocus: CGPoint? { didSet { needsDisplay = true } }
-    var currentImage: NSImage? {
+    package var fillFrame: ((CGSize, CGRect) -> CGRect)? { didSet { needsDisplay = true } }
+    package var fillFocus: CGPoint? { didSet { needsDisplay = true } }
+    package var currentImage: NSImage? {
         didSet { needsDisplay = true }
     }
 
-    var nextImage: NSImage? {
+    package var nextImage: NSImage? {
         didSet { needsDisplay = true }
     }
 
-    var transitionProgress: CGFloat = 0 {
+    package var transitionProgress: CGFloat = 0 {
         didSet { needsDisplay = true }
     }
 
-    var scalingMode: IdlesseScalingMode = .fit {
+    package var scalingMode: IdlesseScalingMode = .fit {
         didSet { needsDisplay = true }
     }
 
-    var backdropColor: NSColor = .black {
+    package var backdropColor: NSColor = .black {
         didSet { needsDisplay = true }
     }
 
-    var message: String? {
+    package var message: String? {
         didSet { needsDisplay = true }
     }
 
-    override var isOpaque: Bool { backdropColor.alphaComponent == 1 }
+    package override var isOpaque: Bool { backdropColor.alphaComponent == 1 }
 
-    override func draw(_ dirtyRect: NSRect) {
+    package override func draw(_ dirtyRect: NSRect) {
         backdropColor.setFill()
         NSBezierPath(rect: bounds).fill()
 
@@ -69,7 +69,7 @@ final class ImageCanvasView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    func destinationRect(for image: NSImage) -> NSRect {
+    package func destinationRect(for image: NSImage) -> NSRect {
         let source = image.size
         guard source.width > 0, source.height > 0 else { return .zero }
 

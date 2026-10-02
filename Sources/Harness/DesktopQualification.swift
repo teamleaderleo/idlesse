@@ -1,5 +1,8 @@
 import AppKit
 import Darwin
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// A separate test process: no scene/library settings or input grants are persisted.
 enum DesktopQualification {

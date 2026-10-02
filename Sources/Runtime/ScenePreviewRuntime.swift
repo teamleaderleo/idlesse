@@ -2,15 +2,15 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-struct ScenePreviewFrame {
-    let title: String
-    let metadata: SceneMetadata?
-    let previewTime: Double
-    let image: CGImage
+package struct ScenePreviewFrame {
+    package let title: String
+    package let metadata: SceneMetadata?
+    package let previewTime: Double
+    package let image: CGImage
 
-    var pixelSize: CGSize { CGSize(width: CGFloat(image.width), height: CGFloat(image.height)) }
+    package var pixelSize: CGSize { CGSize(width: CGFloat(image.width), height: CGFloat(image.height)) }
 
-    func pngData() throws -> Data {
+    package func pngData() throws -> Data {
         guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
             throw SceneError.invalid("Could not encode the scene preview.")
         }
@@ -35,8 +35,8 @@ private struct ScenePreviewRenderSession {
 /// One representative still renderer shared by Finder, Quick Look and Library.
 /// Package resolution stays in LocalSceneSource and pixels come from the
 /// production Metal compositor instead of a second preview implementation.
-enum ScenePreviewRuntime {
-    static func renderPackage(at url: URL, pixelSize: CGSize) async throws -> ScenePreviewFrame {
+package enum ScenePreviewRuntime {
+    package static func renderPackage(at url: URL, pixelSize: CGSize) async throws -> ScenePreviewFrame {
         guard url.isFileURL, url.pathExtension.lowercased() == "idlesse" else {
             throw SceneError.invalid("Quick Look previews require an .idlesse package.")
         }
@@ -48,7 +48,7 @@ enum ScenePreviewRuntime {
 
     /// Full offline still path. Video frames are prepared at the same authored
     /// poster time before the production compositor samples the scene.
-    static func render(scene: SceneDescriptor, pixelSize: CGSize) async throws -> ScenePreviewFrame {
+    package static func render(scene: SceneDescriptor, pixelSize: CGSize) async throws -> ScenePreviewFrame {
         let session = try makeSession(scene: scene, pixelSize: pixelSize)
         defer { session.renderer.releaseResources() }
         try Task.checkCancellation()
@@ -64,7 +64,7 @@ enum ScenePreviewRuntime {
     /// package has no prepared video frame to sample (for example an assetless
     /// procedural Library thumbnail). It shares the same clock, input policy,
     /// compositor, readback checks and output bounds as the full path.
-    static func renderImmediate(scene: SceneDescriptor, pixelSize: CGSize) throws -> ScenePreviewFrame {
+    package static func renderImmediate(scene: SceneDescriptor, pixelSize: CGSize) throws -> ScenePreviewFrame {
         let session = try makeSession(scene: scene, pixelSize: pixelSize)
         defer { session.renderer.releaseResources() }
         return try finish(session)

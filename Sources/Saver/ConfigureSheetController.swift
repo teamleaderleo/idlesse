@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 final class ConfigureSheetController: NSObject {
     let window: NSWindow

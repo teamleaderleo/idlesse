@@ -1,7 +1,7 @@
 import Foundation
 
 /// Constant-memory crossover envelopes, not a recording or an FFT history.
-struct AudioBandAnalyzer {
+package struct AudioBandAnalyzer {
     private struct Filter {
         var dc = 0.0, low = 0.0, high = 0.0
         mutating func sample(_ input: Double, dcCoefficient: Double, lowCoefficient: Double, highCoefficient: Double) -> (Double, Double, Double, Double) {
@@ -20,14 +20,14 @@ struct AudioBandAnalyzer {
     private var sums = SceneAudioLevels()
     private var energy = SceneAudioLevels()
     private var count = 0
-    init(sampleRate: Double) throws {
+    package init(sampleRate: Double) throws {
         guard sampleRate.isFinite, (8_000...192_000).contains(sampleRate) else { throw SceneError.invalid("Unsupported audio sample rate.") }
         self.sampleRate = sampleRate
         dcCoefficient = -expm1(-2 * .pi * 20 / sampleRate)
         lowCoefficient = -expm1(-2 * .pi * 200 / sampleRate)
         highCoefficient = -expm1(-2 * .pi * 2_000 / sampleRate)
     }
-    mutating func append(left l: Float, right r: Float) {
+    package mutating func append(left l: Float, right r: Float) {
         let a = left.sample(Double(l), dcCoefficient: dcCoefficient, lowCoefficient: lowCoefficient, highCoefficient: highCoefficient)
         let b = right.sample(Double(r), dcCoefficient: dcCoefficient, lowCoefficient: lowCoefficient, highCoefficient: highCoefficient)
         sums.level += (a.0 + b.0) * 0.5
@@ -36,7 +36,7 @@ struct AudioBandAnalyzer {
         sums.treble += (a.3 + b.3) * 0.5
         count += 1
     }
-    mutating func finishBlock() -> SceneAudioLevels {
+    package mutating func finishBlock() -> SceneAudioLevels {
         guard count > 0 else { return SceneAudioLevels() }
         let elapsed = Double(count) / sampleRate
         func envelope(_ sum: Double, _ previous: Double) -> Double {

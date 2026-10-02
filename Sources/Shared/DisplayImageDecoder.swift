@@ -3,10 +3,10 @@ import ImageIO
 
 /// Decode only the first frame at display resolution. Never retain the source file
 /// or an unbounded NSImage representation alongside the decoded bitmap.
-enum DisplayImageDecoder {
-    static let pixelBudget: CGFloat = 16_000_000
+package enum DisplayImageDecoder {
+    package static let pixelBudget: CGFloat = 16_000_000
 
-    static func load(_ url: URL, target: CGSize, mode: IdlesseScalingMode, pixelLimit: CGFloat = pixelBudget) -> NSImage? {
+    package static func load(_ url: URL, target: CGSize, mode: IdlesseScalingMode, pixelLimit: CGFloat = pixelBudget) -> NSImage? {
         guard pixelLimit.isFinite, pixelLimit >= 1 else { return nil }
         guard let source = CGImageSourceCreateWithURL(url as CFURL,
             [kCGImageSourceShouldCache: false] as CFDictionary),

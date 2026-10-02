@@ -2,6 +2,9 @@ import AppKit
 import AVFoundation
 import CoreImage
 import UniformTypeIdentifiers
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Crops and adjusts a plain picture or video by writing its framing sidecar,
 /// without re-exporting anything.

@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Renderer lifecycle and measurements, independent of document editing and AppKit controls.
 final class ScenePreviewHost {

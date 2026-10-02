@@ -1,5 +1,8 @@
 import AppKit
 import ImageIO
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Primary Idlesse window. Library keeps ownership of its original NSWindow;
 /// Home wraps Library content inside that same window and never reparents it

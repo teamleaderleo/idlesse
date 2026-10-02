@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// View state only; changing the visible interval never changes authored keys.
 struct TimelineViewport {

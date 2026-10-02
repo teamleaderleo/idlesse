@@ -1,6 +1,9 @@
 import AppKit
 import ScreenSaver
 import UniformTypeIdentifiers
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var window: NSWindow!

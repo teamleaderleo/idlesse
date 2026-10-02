@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Package-level regression checks through the production loader and Metal pipeline.
 /// No windows, input permissions, wallpaper preferences or library state are touched.

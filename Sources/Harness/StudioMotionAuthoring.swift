@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Session-facing ownership derived from the canonical scene binding model.
 enum StudioMotionOwnership: Equatable {

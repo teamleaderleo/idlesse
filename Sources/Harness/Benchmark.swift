@@ -2,6 +2,9 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 import Darwin
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// Runs the production saver and decoder with isolated preferences. No user photos,
 /// settings changes, screenshot permissions, or persistent image cache are required.

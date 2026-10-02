@@ -1,4 +1,7 @@
 import AppKit
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 enum AudioSmoke {
     /// Explicit manual test: plays a quiet fixture; records only scalar peak levels.

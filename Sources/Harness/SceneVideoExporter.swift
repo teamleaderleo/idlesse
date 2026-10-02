@@ -1,5 +1,8 @@
 import AppKit
 import AVFoundation
+#if canImport(IdlesseRuntime)
+import IdlesseRuntime
+#endif
 
 /// A bounded, silent export of the authored scene. No desktop windows or input grants.
 @MainActor enum SceneVideoExporter {
