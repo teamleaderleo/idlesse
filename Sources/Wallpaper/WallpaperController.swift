@@ -230,6 +230,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private static let resumeKey = "wallpaperResumeBookmark"
     private static let pauseKey = "wallpaperResumePaused"
     private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
+    private static let replaceSystemBackdropKey = "wallpaperReplaceSystemBackdrop"
     private static let origBackdropPrefix = "wallpaperOrigBackdrop."
     private static let stillsDirName = "Idlesse/Desktop Backdrops"
 
@@ -245,6 +246,29 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         set {
             resumeDefaults.set(newValue, forKey: Self.sameDisplaysKey)
             refreshDisplayAssignments()
+        }
+    }
+
+    /// When enabled (the default), Idlesse installs a matching native still for
+    /// menu-bar, Spaces and Show Desktop continuity. Disabling leaves the user's
+    /// native wallpaper in place and renders Idlesse above it.
+    var replacesSystemBackdrop: Bool {
+        get {
+            if resumeDefaults.object(forKey: Self.replaceSystemBackdropKey) == nil { return true }
+            return resumeDefaults.bool(forKey: Self.replaceSystemBackdropKey)
+        }
+        set {
+            resumeDefaults.set(newValue, forKey: Self.replaceSystemBackdropKey)
+            if newValue {
+                if let playable, let selectedURL {
+                    syncSystemBackdrop(scene: playable, sourceURL: selectedURL, request: generation)
+                }
+            } else {
+                backdropTask?.cancel()
+                backdropTask = nil
+                restoreOriginalBackdrops()
+            }
+            updateMenu()
         }
     }
 
@@ -509,9 +533,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             precondition(!c.isLoading, "Resume timed out")
         }
         let first = host()
+        precondition(first.replacesSystemBackdrop, "System backdrop takeover must default on")
         first.select(url)
         settle(first)
         precondition(first.isRunning)
+        first.replacesSystemBackdrop = false
+        precondition(!first.replacesSystemBackdrop && defaults.object(forKey: replaceSystemBackdropKey) != nil,
+                     "Backdrop opt-out must persist through the injected defaults")
+        let policyRead = host()
+        precondition(!policyRead.replacesSystemBackdrop, "A fresh host must see the persisted backdrop opt-out")
+        first.replacesSystemBackdrop = true
+        precondition(policyRead.replacesSystemBackdrop, "Re-enabling backdrop takeover must persist immediately")
         first.togglePause()
         first.shutdown()
         precondition(defaults.data(forKey: resumeKey) != nil)
@@ -526,7 +558,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let third = host()
         third.restoreSelection()
         precondition(!third.isRunning && !third.isLoading, "Stop must suppress restart")
-        print("Resume checks passed: selection, autoplay-resume, quit, failed replacement, explicit stop")
+        print("Resume checks passed: selection, backdrop policy, autoplay-resume, quit, failed replacement, explicit stop")
     }
 
     private func saveSelection() {
@@ -1066,7 +1098,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// A full-resolution SDR still gives macOS matching material for menu-bar/Show Desktop
     /// regions it composites from the system wallpaper rather than our window.
     private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int) {
-        guard persistsSelection && presentsWindows else { return }
+        guard persistsSelection && presentsWindows && replacesSystemBackdrop else { return }
         backdropTask?.cancel()
         backdropTask = Task { @MainActor [weak self] in
             guard let self else { return }

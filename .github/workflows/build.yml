@@ -54,6 +54,9 @@ jobs:
       - name: Run canonical wallpaper smoke
         run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-wallpaper "$PWD/Tests/Fixtures/tiny-loop.mp4"'
 
+      - name: Verify wallpaper resume and backdrop policy
+        run: '"build/Idlesse.app/Contents/MacOS/Idlesse" -comfort.liveMenuStrip NO --smoke-resume "$PWD/Tests/Fixtures/tiny-loop.mp4"'
+
       - name: Verify bundles
         run: |
           file "build/Idlesse.saver/Contents/MacOS/Idlesse"
