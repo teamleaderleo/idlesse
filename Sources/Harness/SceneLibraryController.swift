@@ -12,6 +12,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let builtin: URL?
         let entry: SceneLibraryStore.Entry?
     }
+    private struct LibraryItemMetadata {
+        let sourceName: String
+        let mediaType: String
+        let searchText: String
+        let mediaRank: Int
+        let byteLength: Int64
+    }
     private struct OpenedItem {
         let url: URL
         let access: SceneLibraryStore.Access?
@@ -181,6 +188,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var favoriteOnly = false
     private var unopenedOnly = false
     private var sourceFilterID: String?
+    private var sourceNamesByID: [String: String] = [:]
+    private var itemMetadataByID: [String: LibraryItemMetadata] = [:]
     private let viewModeControl = NSSegmentedControl(labels: ["List", "Grid"], trackingMode: .selectOne, target: nil, action: nil)
     private let collectionActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let sourceActions = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -757,10 +766,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     }
 
     private func sourceName(for item: Item) -> String {
-        if let sourceID = item.entry?.sourceID,
-           let source = store.catalog.sources.first(where: { $0.id == sourceID }) {
-            return source.name
-        }
+        if let sourceID = item.entry?.sourceID, let name = sourceNamesByID[sourceID] { return name }
         return item.builtin == nil ? "Imported" : "Included"
     }
 
@@ -768,22 +774,33 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         item.builtin != nil ? "scene" : (item.entry?.inferredMediaType ?? "media")
     }
 
+    private func metadata(for item: Item) -> LibraryItemMetadata {
+        if let cached = itemMetadataByID[item.id] { return cached }
+        let source = sourceName(for: item)
+        let type = mediaType(for: item)
+        let entry = item.entry
+        let fields: [String?] = [item.title, source, entry?.relativeMediaPath,
+                                 entry?.series, entry?.character, entry?.variant] + (entry?.tags ?? []).map { Optional($0) }
+        let searchable = fields.compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " ")
+        let value = LibraryItemMetadata(sourceName: source, mediaType: type, searchText: searchable,
+                                        mediaRank: Self.mediaSortRank(type), byteLength: entry?.observation?.byteLength ?? 0)
+        itemMetadataByID[item.id] = value
+        return value
+    }
+
     private func browseMetadata(for item: Item) -> String {
-        "\(sourceName(for: item)) · \(mediaType(for: item).capitalized)"
+        let metadata = metadata(for: item)
+        return "\(metadata.sourceName) · \(metadata.mediaType.capitalized)"
     }
 
     /// Search the human-facing name as well as the catalog fields that explain
     /// where an Air Blue item came from. This keeps a source or character query
     /// useful even when the normalized display title is terse.
     private func searchableText(for item: Item) -> String {
-        guard let entry = item.entry else { return item.title }
-        var fields: [String?] = [item.title, sourceName(for: item), entry.relativeMediaPath,
-                                 entry.series, entry.character, entry.variant]
-        fields.append(contentsOf: entry.tags.map { Optional($0) })
-        return fields.compactMap { value in
-            guard let value, !value.isEmpty else { return nil }
-            return value
-        }.joined(separator: " ")
+        metadata(for: item).searchText
     }
 
     private static func restoredSortMode() -> Int {
@@ -962,11 +979,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         updateMediaFilterTitles()
         let oldIDs = items.map(\.id)
         let catalog = allItems()
+        sourceNamesByID = Dictionary(uniqueKeysWithValues: store.catalog.sources.map { ($0.id, $0.name) })
+        itemMetadataByID.removeAll(keepingCapacity: true)
+        itemMetadataByID.reserveCapacity(catalog.count)
+        for item in catalog { _ = metadata(for: item) }
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         sort.isEnabled = activeCollection == nil && scope != .recent
         sort.toolTip = !query.isEmpty ? "Sort search results" : (activeCollection != nil ? "Collection order" : "Sort wallpapers")
         let scores: [String: Double] = query.isEmpty ? [:] : catalog.reduce(into: [:]) { scores, item in
-            scores[item.id] = Self.fuzzyScore(query: query, in: self.searchableText(for: item))
+            scores[item.id] = Self.fuzzyScore(query: query, in: self.metadata(for: item).searchText)
         }
         let collectionPositions: [String: Int] = (activeCollection?.sceneIDs ?? []).enumerated().reduce(into: [:]) { positions, entry in
             if positions[entry.element] == nil { positions[entry.element] = entry.offset }
@@ -974,6 +995,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let refinementCount = (favoriteOnly ? 1 : 0) + (unopenedOnly ? 1 : 0) + (sourceFilterID == nil ? 0 : 1)
         refinementButton.title = refinementCount == 0 ? "Filters" : "Filters · \(refinementCount)"
         let needsMediaType = homeNavigation ? mediaFilter.indexOfSelectedItem > 0 : (4...6).contains(filter.indexOfSelectedItem)
+        let metadataByID = itemMetadataByID
         items = catalog.filter { item in
             let matches = query.isEmpty || scores[item.id] != nil
             guard matches else { return false }
@@ -1037,13 +1059,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let order = $0.title.localizedStandardCompare($1.title)
                 return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
             case 5:
-                let a = Self.mediaSortRank(self.mediaType(for: $0)), b = Self.mediaSortRank(self.mediaType(for: $1))
+                let a = metadataByID[$0.id]?.mediaRank ?? 3, b = metadataByID[$1.id]?.mediaRank ?? 3
                 if a != b { return a < b }
             case 6:
-                let order = self.sourceName(for: $0).localizedStandardCompare(self.sourceName(for: $1))
+                let a = metadataByID[$0.id]?.sourceName ?? "", b = metadataByID[$1.id]?.sourceName ?? ""
+                let order = a.localizedStandardCompare(b)
                 if order != .orderedSame { return order == .orderedAscending }
             case 7:
-                let a = $0.entry?.observation?.byteLength ?? 0, b = $1.entry?.observation?.byteLength ?? 0
+                let a = metadataByID[$0.id]?.byteLength ?? 0, b = metadataByID[$1.id]?.byteLength ?? 0
                 if a != b { return a > b }
             default:
                 break

@@ -38,10 +38,14 @@ assert "Search wallpapers, sources, or tags" in library
 assert '"Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened", "Best Match"' in library
 assert '"Media Type", "Source A–Z", "Largest First"' in library
 assert "searchableText(for item: Item)" in library
-assert "entry.relativeMediaPath" in library
+assert "entry?.relativeMediaPath" in library
 assert "poster.setAccessibilityLabel(\"Preview of" in library
 assert "Preparing preview…" in library
 assert "durationSeconds" in library
+assert "private struct LibraryItemMetadata" in library
+assert "sourceNamesByID" in library
+assert "itemMetadataByID.reserveCapacity(catalog.count)" in library
+assert "let metadataByID = itemMetadataByID" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [
