@@ -300,7 +300,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     private func route(_ url: URL) {
         if url.scheme?.lowercased() == "idlesse", url.host?.lowercased() == "automation" {
-            AutomationAppHost.current?.handleAutomationURL(url)
+            Task { @MainActor in AutomationAppHost.current?.handleAutomationURL(url) }
             return
         }
         switch IdlesseExternalOpenRoute.classify(url) {
