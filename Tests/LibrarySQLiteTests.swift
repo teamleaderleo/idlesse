@@ -6,6 +6,7 @@ struct LibrarySQLiteChecks {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         try migrationRoundTripAndIndexes()
         try embeddedNULCatalogIdentitySurvivesMigration()
+        try jsonFallbackPreservesDurableStackFields()
         try deterministicExportIgnoresMapInsertionOrder()
         try nilAndEmptyStateRoundTripsExactly()
         try highChurnStateDoesNotRewriteEntries()
@@ -137,6 +138,33 @@ struct LibrarySQLiteChecks {
         precondition(reopened.catalog == catalog, "Embedded-NUL Source/catalog pairs changed across SQLite migration")
         let historical = try Data(contentsOf: file)
         precondition(historical == original, "SQLite migration rewrote the JSON recovery snapshot")
+    }
+
+    private static func jsonFallbackPreservesDurableStackFields() throws {
+        let dir = try folder("json-fallback-stack-fields")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        var catalog = sampleCatalog()
+        catalog.entries[1].groupID = "night-group"
+        catalog.entries[2].groupID = "night-group"
+        let original = try writeJSON(catalog, to: file)
+        let store = try SceneLibraryStore(file: file)
+
+        setenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR", "1", 1)
+        defer { unsetenv("IDLESSE_LIBRARY_SQLITE_TEST_FAIL_BEFORE_SELECTOR") }
+        let stack = try store.createStack(name: "Night Pair", sceneIDs: ["present", "missing"], representativeID: "present")
+
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(!reopened.usesSQLiteCatalog, "Injected pre-selector failure unexpectedly selected SQLite")
+        precondition(reopened.catalog.version == SceneLibraryStore.catalogVersion)
+        precondition(reopened.catalog.stacks == [stack], "JSON fallback dropped the durable stack")
+        precondition(reopened.catalog.entries[1].groupID == "night-group" && reopened.catalog.entries[2].groupID == "night-group",
+                     "JSON fallback dropped durable Source group fields")
+        let encoded = try Data(contentsOf: file)
+        precondition(encoded != original, "The stack mutation did not update the JSON fallback")
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        precondition(object?["version"] as? Int == SceneLibraryStore.catalogVersion,
+                     "JSON fallback wrote the old catalog version")
     }
 
     private static func deterministicExportIgnoresMapInsertionOrder() throws {
