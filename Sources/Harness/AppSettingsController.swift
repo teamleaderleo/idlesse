@@ -119,11 +119,12 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     /// owns the supplied view and wrap it in Home inside its existing window.
     /// The view never becomes a child of Settings.
     func installLibrary(_ view: NSView) {
-        guard home == nil else { return }
         libraryWindow = view.window
         guard let library = view.window?.windowController as? SceneLibraryController else { return }
         library.hostWindow = library.window
-        home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort)
+        if home == nil {
+            home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort)
+        }
     }
 
     func present(tab: Int? = nil) {

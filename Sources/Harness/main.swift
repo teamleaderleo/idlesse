@@ -105,7 +105,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             window?.orderOut(nil)
             if let library, let content = library.window?.contentView {
                 library.embedded = true
-                library.hostWindow = appSettings.window
+                // Library remains the owner of its own window. Settings only
+                // provides the compatibility installer for the Home shell.
+                library.hostWindow = library.window
                 appSettings.installLibrary(content)
                 appSettings.onLibraryVisible = { [weak library] in library?.refreshEmbedded() }
                 appSettings.onClose = { [weak library] in library?.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
