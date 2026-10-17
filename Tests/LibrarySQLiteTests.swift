@@ -5,6 +5,7 @@ struct LibrarySQLiteChecks {
     static func main() throws {
         unsetenv("IDLESSE_LIBRARY_BACKEND")
         try migrationRoundTripAndIndexes()
+        try embeddedNULCatalogIdentitySurvivesMigration()
         try deterministicExportIgnoresMapInsertionOrder()
         try nilAndEmptyStateRoundTripsExactly()
         try highChurnStateDoesNotRewriteEntries()
@@ -113,6 +114,29 @@ struct LibrarySQLiteChecks {
         let exportA = try reopened.debugExportData()
         let exportB = try SceneLibrarySQLiteCatalog.deterministicDebugExport(reopened.catalog)
         precondition(exportA == exportB)
+    }
+
+    private static func embeddedNULCatalogIdentitySurvivesMigration() throws {
+        let dir = try folder("embedded-nul-identity")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.json")
+        var catalog = sampleCatalog()
+        catalog.sources[0].id = "a\u{0}b"
+        catalog.sources.append(.init(id: "a", name: "Source B", bookmark: Data([4, 5, 6])))
+        catalog.entries[1].sourceID = "a\u{0}b"
+        catalog.entries[1].catalogID = "c"
+        catalog.entries[2].sourceID = "a"
+        catalog.entries[2].catalogID = "b\u{0}c"
+        let original = try writeJSON(catalog, to: file)
+
+        let store = try SceneLibraryStore(file: file)
+        precondition(store.catalog == catalog, "Embedded-NUL Source/catalog pairs were rejected on JSON open")
+        try store.withIndexLock { try SceneLibrarySQLiteCatalog.migrate(store.catalog, fromJSON: file) }
+        let reopened = try SceneLibraryStore(file: file)
+        precondition(reopened.usesSQLiteCatalog)
+        precondition(reopened.catalog == catalog, "Embedded-NUL Source/catalog pairs changed across SQLite migration")
+        let historical = try Data(contentsOf: file)
+        precondition(historical == original, "SQLite migration rewrote the JSON recovery snapshot")
     }
 
     private static func deterministicExportIgnoresMapInsertionOrder() throws {
