@@ -14,6 +14,8 @@ extension SceneLibraryStore {
         var favorite: Bool
         var recent: Date?
         var collectionIDs: [String]
+        /// Absent in older recovery records, which restore Default selections.
+        var collectionSelections: [String: [SceneSelection]]? = nil
         var removedAt: Date
     }
 
@@ -316,6 +318,10 @@ extension SceneLibraryStore {
             RemovedEntry(entry: entry, source: entry.sourceID.flatMap { sources[$0] },
                          favorite: previous.favorites.contains(entry.id), recent: previous.recent[entry.id],
                          collectionIDs: previous.collections.filter { $0.sceneIDs.contains(entry.id) }.map(\.id),
+                         collectionSelections: Dictionary(uniqueKeysWithValues: previous.collections.compactMap { collection in
+                             let selections = collection.items.filter { $0.sceneID == entry.id }
+                             return selections.isEmpty ? nil : (collection.id, selections)
+                         }),
                          removedAt: now)
         }
         let removedIDs = Set(removed.map(\.id))
@@ -402,9 +408,14 @@ extension SceneLibraryStore {
             next.recent.removeValue(forKey: oldest)
         }
         for index in next.collections.indices where record.collectionIDs.contains(next.collections[index].id) {
-            if !next.collections[index].sceneIDs.contains(id), next.collections[index].sceneIDs.count < 256 {
-                next.collections[index].sceneIDs.append(id)
+            let selections = record.collectionSelections?[next.collections[index].id] ?? [.init(sceneID: id)]
+            guard selections.count <= 256, selections.allSatisfy({ $0.sceneID == id }),
+                  Set(selections).count == selections.count else {
+                throw Self.libraryFailure("Its collection recovery selections are invalid, so the Library was left unchanged.")
             }
+            let additions = selections.filter { !next.collections[index].items.contains($0) }
+            guard next.collections[index].items.count + additions.count <= 256 else { continue }
+            next.collections[index].items.append(contentsOf: additions)
         }
         try commitCatalog(next)
         guard catalog.entries.contains(where: { $0.id == id }) else {
