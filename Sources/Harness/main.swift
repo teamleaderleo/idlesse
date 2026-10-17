@@ -7,6 +7,10 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var saverView: IdlesseView!
     private var settingsButton: NSButton!
     private var pauseButton: NSButton!
+    private var statusItem: NSStatusItem?
+    private weak var statusPauseItem: NSMenuItem?
+    private weak var statusWallpaperItem: NSMenuItem?
+    private var allowingWindowClose = false
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
     private lazy var modes = AmbientModesController(wallpaper: wallpaper, comfort: comfort)
@@ -146,14 +150,17 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             try? ("Idlesse build \(stamp)\n".data(using: .utf8)?.write(to: URL(fileURLWithPath: "/tmp/idlesse-state.log")))
         }
         installMenu()
+        installStatusItem()
         wallpaper.persistsSelection = true
         wallpaper.onStart = { [weak self] in
             self?.saverView?.stopAnimation()
             self?.window?.orderOut(nil)
+            self?.refreshStatusItem()
         }
         wallpaper.onStop = { [weak self] in
             self?.library?.releaseActiveUseAccess()
             self?.showLibrary()
+            self?.refreshStatusItem()
         }
         wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
         wallpaper.presentingWindow = { [weak self] in self?.appSettings.window }
@@ -161,6 +168,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.onSelectionCommitted = { [weak self] url in
             self?.modes.adoptManualSelection(url)
             self?.noteRecentScene(url)
+            self?.refreshStatusItem()
         }
         hotKeys.onNext = { [weak self] in self?.stepWallpaper(delta: 1) }
         hotKeys.onPrevious = { [weak self] in self?.stepWallpaper(delta: -1) }
@@ -244,12 +252,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             route(pendingSceneURL)
             self.pendingSceneURL = nil
         }
+        refreshStatusItem()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showLibrary()
         return true
     }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
@@ -310,6 +321,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
     @objc private func nextWallpaper() { stepWallpaper(delta: 1) }
     @objc private func previousWallpaper() { stepWallpaper(delta: -1) }
+    @objc private func toggleWallpaperPause() {
+        wallpaper.togglePause()
+        refreshStatusItem()
+    }
+    private func refreshStatusItem() {
+        statusPauseItem?.title = wallpaper.isPausedByUser ? "Resume Wallpaper" : "Pause Wallpaper"
+        statusWallpaperItem?.title = wallpaper.isRunning ? "Wallpaper: Running" : "Wallpaper: Stopped"
+        statusWallpaperItem?.isEnabled = false
+    }
     @objc private func applyRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         wallpaper.select(url)
@@ -332,7 +352,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        scenePreview.mayQuit() ? .terminateNow : .terminateCancel
+        guard scenePreview.mayQuit() else { return .terminateCancel }
+        allowingWindowClose = true
+        return .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -348,6 +370,13 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func windowDidMiniaturize(_ notification: Notification) { saverView?.stopAnimation() }
     func windowDidDeminiaturize(_ notification: Notification) { saverView?.startAnimation() }
     func windowWillClose(_ notification: Notification) { saverView?.stopAnimation() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window, !allowingWindowClose else { return true }
+        saverView?.stopAnimation()
+        sender.orderOut(nil)
+        refreshStatusItem()
+        return false
+    }
     func applicationDidHide(_ notification: Notification) { saverView?.stopAnimation(); scenePreview.applicationVisibilityChanged() }
     func applicationDidUnhide(_ notification: Notification) {
         scenePreview.applicationVisibilityChanged()
@@ -532,6 +561,42 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         helpItem.submenu = help
         mainMenu.addItem(helpItem)
         NSApp.mainMenu = mainMenu
+    }
+
+    private func installStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = item.button {
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Idlesse Wallpaper")
+            button.image?.isTemplate = true
+            button.toolTip = "Idlesse Wallpaper"
+            button.setAccessibilityLabel("Idlesse Wallpaper")
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let library = menu.addItem(withTitle: "Open Library", action: #selector(showLibrary), keyEquivalent: "")
+        library.target = self
+        let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "")
+        settings.target = self
+        menu.addItem(.separator())
+        let wallpaperState = menu.addItem(withTitle: "Wallpaper: Stopped", action: nil, keyEquivalent: "")
+        wallpaperState.isEnabled = false
+        statusWallpaperItem = wallpaperState
+        let pause = menu.addItem(withTitle: "Pause Wallpaper", action: #selector(toggleWallpaperPause), keyEquivalent: "")
+        pause.target = self
+        statusPauseItem = pause
+        let next = menu.addItem(withTitle: "Next Wallpaper", action: #selector(nextWallpaper), keyEquivalent: "")
+        next.target = self
+        let previous = menu.addItem(withTitle: "Previous Wallpaper", action: #selector(previousWallpaper), keyEquivalent: "")
+        previous.target = self
+        let restore = menu.addItem(withTitle: "Show / Restore Windows", action: #selector(WallpaperController.revealDesktop), keyEquivalent: "")
+        restore.target = wallpaper
+        menu.addItem(.separator())
+        let quit = menu.addItem(withTitle: "Quit Idlesse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
+        item.menu = menu
+        statusItem = item
+        refreshStatusItem()
     }
 }
 
