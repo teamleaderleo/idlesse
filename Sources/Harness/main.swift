@@ -10,6 +10,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var statusItem: NSStatusItem?
     private weak var statusPauseItem: NSMenuItem?
     private weak var statusWallpaperItem: NSMenuItem?
+    private weak var statusChooseItem: NSMenuItem?
+    private weak var statusNextItem: NSMenuItem?
+    private weak var statusPreviousItem: NSMenuItem?
     private var allowingWindowClose = false
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
@@ -338,9 +341,16 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
     }
     private func refreshStatusItem() {
+        let running = wallpaper.isRunning
         statusPauseItem?.title = wallpaper.isPausedByUser ? "Resume Wallpaper" : "Pause Wallpaper"
-        statusWallpaperItem?.title = wallpaper.isRunning ? "Wallpaper: Running" : "Wallpaper: Stopped"
+        statusPauseItem?.isEnabled = running
+        statusWallpaperItem?.title = running ? "Wallpaper: Running" : "Wallpaper: Stopped"
         statusWallpaperItem?.isEnabled = false
+        statusChooseItem?.isEnabled = true
+        let canCycle = running && (library?.hasCycleCandidates == true)
+        statusNextItem?.isEnabled = canCycle
+        statusPreviousItem?.isEnabled = canCycle
+        statusItem?.button?.toolTip = running ? "Idlesse — Wallpaper running" : "Idlesse — Ready"
     }
     @objc private func applyRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
@@ -577,15 +587,20 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     private func installStatusItem() {
         guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
             button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Idlesse Wallpaper")
             button.image?.isTemplate = true
-            button.toolTip = "Idlesse Wallpaper"
+            button.title = " Idlesse"
+            button.imagePosition = .imageLeading
+            button.font = .systemFont(ofSize: 12, weight: .medium)
+            button.toolTip = "Idlesse — Ready"
             button.setAccessibilityLabel("Idlesse Wallpaper")
         }
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let heading = menu.addItem(withTitle: "Idlesse Wallpaper", action: nil, keyEquivalent: "")
+        heading.isEnabled = false
         let library = menu.addItem(withTitle: "Open Library", action: #selector(openLibraryFromStatusItem), keyEquivalent: "")
         library.target = self
         let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "")
@@ -597,10 +612,15 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let pause = menu.addItem(withTitle: "Pause Wallpaper", action: #selector(toggleWallpaperPause), keyEquivalent: "")
         pause.target = self
         statusPauseItem = pause
+        let choose = menu.addItem(withTitle: "Choose Wallpaper…", action: #selector(WallpaperController.chooseWallpaper), keyEquivalent: "")
+        choose.target = wallpaper
+        statusChooseItem = choose
         let next = menu.addItem(withTitle: "Next Wallpaper", action: #selector(nextWallpaper), keyEquivalent: "")
         next.target = self
+        statusNextItem = next
         let previous = menu.addItem(withTitle: "Previous Wallpaper", action: #selector(previousWallpaper), keyEquivalent: "")
         previous.target = self
+        statusPreviousItem = previous
         let restore = menu.addItem(withTitle: "Show / Restore Windows", action: #selector(WallpaperController.revealDesktop), keyEquivalent: "")
         restore.target = wallpaper
         menu.addItem(.separator())
