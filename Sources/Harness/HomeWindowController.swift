@@ -61,6 +61,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let sameDisplaysButton = LibraryHoverButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private var rows: [SidebarRow] = []
     private var currentRow: SidebarRow = .library
+    private var sourceSummaries: [String: String] = [:]
+    private var sourceThumbnails: [String: NSImage] = [:]
     private var sidebarItem: NSSplitViewItem?
     private weak var navigationSplit: NSSplitView?
     private var refreshTimer: Timer?
@@ -300,6 +302,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             if !store.catalog.sources.isEmpty {
                 next.append(.group("Sources"))
                 next.append(contentsOf: store.catalog.sources.map { .source(id: $0.id, name: $0.name) })
+                sourceSummaries = Dictionary(uniqueKeysWithValues: store.catalog.sources.compactMap { source in
+                    guard let summary = library.sourceSummary(source.id) else { return nil }
+                    return (source.id, summary)
+                })
             }
         }
         rows = next
@@ -370,7 +376,22 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         }
         let cell = NSTableCellView(frame: .zero)
         let image = NSImageView(frame: .zero)
-        image.image = entry.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: entry.title) }
+        if case .source(let sourceID, _) = entry {
+            image.image = sourceThumbnails[sourceID] ?? NSImage(systemSymbolName: "folder", accessibilityDescription: entry.title)
+            image.imageScaling = .scaleProportionallyUpOrDown
+            image.wantsLayer = true
+            image.layer?.cornerRadius = 4
+            image.layer?.masksToBounds = true
+            if sourceThumbnails[sourceID] == nil {
+                library.requestSourceThumbnail(sourceID) { [weak self, weak image] thumbnail in
+                    guard let self, let thumbnail else { return }
+                    self.sourceThumbnails[sourceID] = thumbnail
+                    image?.image = thumbnail
+                }
+            }
+        } else {
+            image.image = entry.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: entry.title) }
+        }
         image.contentTintColor = .secondaryLabelColor
         image.translatesAutoresizingMaskIntoConstraints = false
         text.translatesAutoresizingMaskIntoConstraints = false
@@ -381,12 +402,16 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         NSLayoutConstraint.activate([
             image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 14),
             image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            image.widthAnchor.constraint(equalToConstant: 16),
-            image.heightAnchor.constraint(equalToConstant: 16),
+            image.widthAnchor.constraint(equalToConstant: 24),
+            image.heightAnchor.constraint(equalToConstant: 20),
             text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
             text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
             text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
+        if case .source(let sourceID, _) = entry, let summary = sourceSummaries[sourceID] {
+            text.toolTip = summary
+            cell.setAccessibilityLabel("\(entry.title), \(summary)")
+        }
         return cell
     }
 
@@ -424,6 +449,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         displaysView.isHidden = true
         window.title = currentRow.title
         library.setSourceFilter(id)
+        if let summary = sourceSummaries[id] { library.showSourceSummary(summary) }
         library.refreshEmbedded()
     }
 

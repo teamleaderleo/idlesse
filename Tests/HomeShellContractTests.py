@@ -28,6 +28,9 @@ assert "let selectedImages = Dictionary(grouping: images.filter" in library
 assert "func setSourceFilter(_ sourceID: String?)" in library
 assert ".group(\"Sources\")" in home
 assert "case .source(let id, _): showSource(id)" in home
+assert "sourceSummaries" in home
+assert "requestSourceThumbnail(sourceID)" in home
+assert "func sourceSummary(_ sourceID: String)" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [
