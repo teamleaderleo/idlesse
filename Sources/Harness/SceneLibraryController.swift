@@ -97,6 +97,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         }
         reload(selecting: changed ? selectionByScope[scope] : nil)
     }
+
+    /// Select a folder-backed Source from Home's primary navigation.
+    /// Source identity stays in the existing filter path so rescan/relink and
+    /// the standalone Library browser continue to share one implementation.
+    func setSourceFilter(_ sourceID: String?) {
+        sourceFilterID = sourceID
+        setScope(.library)
+    }
     private let inspectorButton = LibraryHoverButton(frame: .zero)
     private let libraryActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let browserSplit = NSSplitViewController()

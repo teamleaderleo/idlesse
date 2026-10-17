@@ -13,6 +13,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         case favorites
         case recent
         case collection(id: String, name: String)
+        case source(id: String, name: String)
 
         var title: String {
             switch self {
@@ -22,6 +23,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             case .favorites: return "Favorites"
             case .recent: return "Recent"
             case .collection(_, let name): return name
+            case .source(_, let name): return name
             }
         }
         var symbol: String? {
@@ -32,6 +34,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             case .favorites: return "star.fill"
             case .recent: return "clock"
             case .collection: return "rectangle.stack"
+            case .source: return "folder"
             }
         }
         var selectable: Bool {
@@ -294,6 +297,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         ]
         if let store = try? SceneLibraryStore(file: indexURL) {
             next.append(contentsOf: store.catalog.collections.map { .collection(id: $0.id, name: $0.name) })
+            if !store.catalog.sources.isEmpty {
+                next.append(.group("Sources"))
+                next.append(contentsOf: store.catalog.sources.map { .source(id: $0.id, name: $0.name) })
+            }
         }
         rows = next
         sidebar.reloadData()
@@ -388,6 +395,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         guard rows.indices.contains(index) else { return }
         switch rows[index] {
         case .library, .favorites, .recent, .collection(_, _): showLibraryScope(rows[index])
+        case .source(let id, _): showSource(id)
         case .displays: showDisplays()
         case .group: break
         }
@@ -406,6 +414,16 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         case .collection(let id, _): library.setScope(.collection(id))
         default: break
         }
+        library.refreshEmbedded()
+    }
+
+    private func showSource(_ id: String) {
+        library.setSearchEnabled(true)
+        currentRow = rows.first { if case .source(let sourceID, _) = $0 { return sourceID == id }; return false } ?? .library
+        libraryView.isHidden = false
+        displaysView.isHidden = true
+        window.title = currentRow.title
+        library.setSourceFilter(id)
         library.refreshEmbedded()
     }
 
