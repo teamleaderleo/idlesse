@@ -249,6 +249,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var persistsSelection = false
     var resumeDefaults = UserDefaults.standard
     private static let resumeKey = "wallpaperResumeBookmark"
+    private static let resumeVariantKey = "wallpaperResumeVariant"
     private static let pauseKey = "wallpaperResumePaused"
     private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
     private static let origBackdropPrefix = "wallpaperOrigBackdrop."
@@ -307,6 +308,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         return url
     }
 
+    func explicitDisplayVariantID(for displayID: UInt32) -> UUID? {
+        let persistentID = Self.persistentDisplayIdentifier(displayID)
+        return displayAssignmentStore.selection(
+            persistentID: persistentID, legacyDisplayID: displayID)?.variantID
+    }
+
     func displayURL(for displayID: UInt32) -> URL? {
         if sameWallpaperOnAllDisplays || desktopSpanActive { return selectedURL }
         return explicitDisplayURL(for: displayID) ?? selectedURL
@@ -330,7 +337,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     func setDisplayURL(_ url: URL, for displayID: UInt32) {
         do {
-            displayAssignmentStore.setBookmarkData(try bookmarkData(for: url),
+            displayAssignmentStore.setSelection(.init(bookmarkData: try bookmarkData(for: url)),
                 persistentID: Self.persistentDisplayIdentifier(displayID))
             refreshDisplayAssignments()
         } catch {
@@ -351,7 +358,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// `retainedAccess` keeps a source-root grant alive while we mint a scoped
     /// bookmark for the chosen Library item. A desktop-span scene is always
     /// global; ordinary scenes can become stable per-display overrides.
-    func assignLibraryWallpaper(_ url: URL, to displayID: UInt32?, retaining retainedAccess: AnyObject? = nil, allowsDesktopSpan: Bool = true) {
+    func assignLibraryWallpaper(_ url: URL, to displayID: UInt32?, variantID: UUID? = nil,
+                                retaining retainedAccess: AnyObject? = nil, allowsDesktopSpan: Bool = true) {
         do {
             let data = try bookmarkData(for: url)
             var stale = false
@@ -361,7 +369,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             guard let displayID else {
                 resumeDefaults.set(true, forKey: Self.sameDisplaysKey)
                 Self.appendLine("Idlesse-display target=all action=library-selection")
-                select(scopedURL, automatic: true)
+                select(scopedURL, variantID: variantID, automatic: true)
                 return
             }
             let assignmentRequest = UUID()
@@ -372,14 +380,15 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 let access = scopedURL.startAccessingSecurityScopedResource()
                 defer { if access { scopedURL.stopAccessingSecurityScopedResource() } }
                 do {
-                    let candidate = try await self.source.resolve(scopedURL)
+                    let authoredCandidate = try await self.source.resolve(scopedURL)
+                    let candidate = authoredCandidate.applyingVariant(id: variantID).scene
                     if candidate.canvas == .desktopSpan {
                         guard allowsDesktopSpan else {
                             self.showError("This wallpaper spans all displays. Use Set Wallpaper to apply it across the desktop.")
                             return
                         }
                         Self.appendLine("Idlesse-display target=\(Self.persistentDisplayIdentifier(displayID)) action=desktop-span-all-displays")
-                        self.select(scopedURL, automatic: true)
+                        self.select(scopedURL, variantID: variantID, automatic: true)
                         return
                     }
                     var replacement: WallpaperSurface?
@@ -390,7 +399,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == displayID
                        }) {
                         var preparationError: String?
-                        let synchronizedSurface = self.surfaces.first { $0.sourceURL == scopedURL.standardizedFileURL && $0.videoHub != nil }
+                        let synchronizedSurface = variantID == nil ? self.surfaces.first {
+                            $0.sourceURL == scopedURL.standardizedFileURL && $0.videoHub != nil
+                        } : nil
                         let displayScene = synchronizedSurface?.sceneDescriptor ?? candidate
                         let hub = synchronizedSurface?.videoHub ?? (candidate.allNodes.contains { $0.kind == .video } ?
                             SharedVideoHub(scene: candidate, clock: self.clock) { [weak self] message in self?.showError(message) } : nil)
@@ -427,16 +438,17 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         for screen in NSScreen.screens {
                             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32,
                                   id != displayID else { continue }
-                            self.displayAssignmentStore.setBookmarkData(sharedData,
+                            self.displayAssignmentStore.setSelection(
+                                .init(bookmarkData: sharedData, variantID: self.requestedVariantID),
                                 persistentID: Self.persistentDisplayIdentifier(id))
                         }
                     }
-                    self.displayAssignmentStore.setBookmarkData(data,
+                    self.displayAssignmentStore.setSelection(.init(bookmarkData: data, variantID: variantID),
                         persistentID: Self.persistentDisplayIdentifier(displayID))
                     self.resumeDefaults.set(false, forKey: Self.sameDisplaysKey)
                     Self.appendLine("Idlesse-display target=\(Self.persistentDisplayIdentifier(displayID)) action=library-assignment")
                     if self.selectedURL == nil || self.playable?.canvas == .desktopSpan {
-                        self.select(scopedURL, automatic: true)
+                        self.select(scopedURL, variantID: variantID, automatic: true)
                     } else if let replacement {
                         let previous = self.surfaces.filter { $0.displayID == displayID }
                         self.surfaces.removeAll { $0.displayID == displayID }
@@ -493,7 +505,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             } else {
                 url = try URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
             }
-            select(url, automatic: true)
+            let variantID = resumeDefaults.string(forKey: Self.resumeVariantKey).flatMap(UUID.init(uuidString:))
+            select(url, variantID: variantID, automatic: true)
         } catch {
             lastReloadError = "The previous wallpaper is unavailable. Choose it again in Wallpapers."
             updateMenu()
@@ -504,6 +517,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         final class ControlledSource: SceneSource {
             var blocked = false
             var entered = false
+            let variantID = UUID()
             func resolve(_ url: URL) async throws -> SceneDescriptor {
                 if url.lastPathComponent == "slow" {
                     entered = true
@@ -511,7 +525,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     while blocked { await Task.yield(); try? await Task.sleep(nanoseconds: 5_000_000) }
                 }
                 if url.lastPathComponent == "bad" { throw SceneError.invalid("Expected load failure") }
-                return SceneDescriptor(title: url.lastPathComponent, nodes: [SceneNode(content: .gradient)])
+                return SceneDescriptor(title: url.lastPathComponent, nodes: [SceneNode(content: .gradient)],
+                    parameters: ["amount": .init(name: "Amount", value: 0.2, min: 0, max: 1)],
+                    variants: [.init(id: variantID, name: "Night", values: ["amount": .number(0.8)])])
             }
         }
         let source = ControlledSource()
@@ -544,12 +560,25 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let drainUntil = Date().addingTimeInterval(0.1)
         while Date() < drainUntil { _ = RunLoop.current.run(mode: .default, before: drainUntil) }
         precondition(host.selectedURL == latest && errors.isEmpty, "Late cancelled loads must not replace playback or report errors")
+        let beforeVariantTime = host.sceneTime
+        host.selectVariant(source.variantID)
+        wait { !host.isLoading }
+        precondition(host.requestedVariantID == source.variantID && host.effectiveVariantID == source.variantID,
+                     "A live variant switch must adopt and persist the requested variant")
+        precondition(host.playable?.parameters["amount"]?.value == 0.8 && host.sceneTime == beforeVariantTime,
+                     "A compatible variant switch must preserve the active scene clock")
+        let missingVariant = UUID()
+        host.selectVariant(missingVariant)
+        wait { !host.isLoading }
+        precondition(host.requestedVariantID == missingVariant && host.effectiveVariantID == nil &&
+                     host.variantDiagnostics.contains { $0.reason == .variantUnavailable },
+                     "A missing variant must fall back to Default while retaining its request")
         let working = host.surfaces.first
         host.select(URL(fileURLWithPath: "/transaction/bad")); wait { !host.isLoading }
         precondition(host.selectedURL == latest && host.surfaces.first === working,
                      "Failed loads must retain the active surface")
         precondition(errors.count == 1, "Only the current failed load should report an error")
-        print("Selection transactions passed: retain active surface, latest wins, late cancellation, failed load")
+        print("Selection transactions passed: retain active surface, latest wins, variant switch/fallback, late cancellation, failed load")
     }
 
     static func smokeVideoPreparation(url: URL) throws {
@@ -640,10 +669,16 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 data = try selectedURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
             }
             resumeDefaults.set(data, forKey: Self.resumeKey)
+            if let requestedVariantID {
+                resumeDefaults.set(requestedVariantID.uuidString, forKey: Self.resumeVariantKey)
+            } else {
+                resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
+            }
             resumeDefaults.set(pausedByUser, forKey: Self.pauseKey)
         } catch {
             // Never resume an older wallpaper after the latest selection could not be saved.
             resumeDefaults.removeObject(forKey: Self.resumeKey)
+            resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
         }
     }
 
@@ -696,6 +731,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         Nodes: \(nodes.count)
         Video nodes: \(nodes.filter { $0.kind == .video }.count)
         Creative renderer required: \(playable?.requiresMetal ?? false)
+        Requested variant: \(requestedVariantID?.uuidString ?? "Default")
+        Effective variant: \(effectiveVariantID?.uuidString ?? "Default")
+        Variant diagnostics: \(variantDiagnostics.count)
         Same wallpaper on all displays: \(sameWallpaperOnAllDisplays)
         Desktop span active: \(desktopSpanActive)
         Coverage rest enabled: \(coveragePauseEnabled)
@@ -712,6 +750,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private var audioSession: SceneAudioSession?
     private var watcher: SceneWatcher?
     private(set) var lastReloadError: String?
+    /// The requested variant remains durable even when its authored scene is
+    /// temporarily missing it; rendering falls back to Default until repair.
+    private(set) var requestedVariantID: UUID?
+    private(set) var effectiveVariantID: UUID?
+    private(set) var variantDiagnostics: [SceneVariantDiagnostic] = []
+    private var canonicalPlayable: SceneDescriptor?
     private(set) var revision = 0
     var sceneTime: TimeInterval { clock.time }
     private var source: SceneSource = LocalSceneSource()
@@ -1196,11 +1240,21 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// Fires after any successful (non-reload) selection with the adopted URL.
     var onSelectionCommitted: ((URL) -> Void)?
 
-    func select(_ url: URL, reloading: Bool = false, automatic: Bool = false, restoringPause: Bool? = nil) {
+    /// Rebuild the active scene in place from its canonical package while
+    /// retaining the current clock/media phase when the timeline is compatible.
+    func selectVariant(_ variantID: UUID?) {
+        guard let selectedURL else { return }
+        select(selectedURL, variantID: variantID, reloading: true, automatic: true, replacingVariant: true)
+    }
+
+    func select(_ url: URL, variantID: UUID? = nil, reloading: Bool = false,
+                automatic: Bool = false, restoringPause: Bool? = nil,
+                replacingVariant: Bool = false) {
         if !reloading && !automatic { onManualSelection?() }
         if !reloading { watcher = nil }
         generation += 1
         let request = generation
+        let requestedVariant = replacingVariant ? variantID : (reloading ? requestedVariantID : variantID)
         loadTask?.cancel()
         finishTransition()
         isLoading = true
@@ -1218,7 +1272,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
             }
             do {
-                let playable = try await self.source.resolve(url)
+                let authored = try await self.source.resolve(url)
+                let application = authored.applyingVariant(id: requestedVariant)
+                let playable = application.scene
                 for node in playable.allNodes where node.kind == .video {
                     guard let assetURL = node.assetURL else { continue }
                     let asset = AVURLAsset(url: assetURL)
@@ -1279,7 +1335,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 self.selectedURL = url
                 self.scopeStarted = access
+                self.canonicalPlayable = authored
                 self.playable = playable
+                self.requestedVariantID = requestedVariant
+                self.effectiveVariantID = application.selectedVariantID
+                self.variantDiagnostics = application.diagnostics
                 adopted = true
                 if !reloading { self.pausedByUser = restoringPause ?? false }
                 if !reuseClock {
@@ -1364,7 +1424,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             self.stop()
             self.showError(message)
         } : nil
-        var overrideGroups: [URL: (SceneDescriptor, SharedVideoHub?)] = [:]
+        var overrideGroups: [String: (SceneDescriptor, SharedVideoHub?)] = [:]
+        let authoredBase = canonicalPlayable ?? playable
         do {
             for screen in NSScreen.screens {
                 var screenPlayable = playable
@@ -1373,25 +1434,28 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 var screenScope: WallpaperScopeLease?
                 if !sharesSceneAcrossDisplays {
                     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+                    let overrideVariantID = explicitDisplayVariantID(for: displayID)
                     if let overrideURL = explicitDisplayURL(for: displayID), overrideURL != selectedURL {
                         let lease = WallpaperScopeLease(overrideURL)
                         if let resolved = try? LocalSceneSource.read(overrideURL) {
                             if resolved.canvas == .desktopSpan {
                                 Self.appendLine("Idlesse-display display=\(Self.persistentDisplayIdentifier(displayID)) action=ignore-saved-desktop-span")
                             } else {
-                                let key = overrideURL.standardizedFileURL
+                                let key = overrideURL.standardizedFileURL.path + "#" + (overrideVariantID?.uuidString ?? "default")
                                 if let group = overrideGroups[key] {
                                     screenPlayable = group.0
                                     screenHub = group.1
                                 } else {
-                                    screenPlayable = resolved
-                                    screenHub = resolved.allNodes.contains { $0.kind == .video } ? SharedVideoHub(scene: resolved, clock: clock) { [weak self] message in self?.showError(message) } : nil
+                                    screenPlayable = resolved.applyingVariant(id: overrideVariantID).scene
+                                    screenHub = screenPlayable.allNodes.contains { $0.kind == .video } ? SharedVideoHub(scene: screenPlayable, clock: clock) { [weak self] message in self?.showError(message) } : nil
                                     overrideGroups[key] = (screenPlayable, screenHub)
                                 }
                                 screenSource = overrideURL
                                 screenScope = lease
                             }
                         }
+                    } else if let overrideVariantID {
+                        screenPlayable = authoredBase.applyingVariant(id: overrideVariantID).scene
                     }
                 }
                 let surface = try autoreleasepool {
@@ -1464,13 +1528,19 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     rememberOriginalBackdrop(for: screen)
                     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
                     var backdropScene = scene
+                    let authoredBase = self.canonicalPlayable ?? scene
                     var displayScope: WallpaperScopeLease?
                     if !sameWallpaperOnAllDisplays, scene.canvas != .desktopSpan,
-                       let overrideURL = explicitDisplayURL(for: displayID), overrideURL != sourceURL {
-                        let lease = WallpaperScopeLease(overrideURL)
-                        if let resolved = try? LocalSceneSource.read(overrideURL), resolved.canvas != .desktopSpan {
-                            backdropScene = resolved
-                            displayScope = lease
+                       let overrideURL = explicitDisplayURL(for: displayID) {
+                        let variantID = explicitDisplayVariantID(for: displayID)
+                        if overrideURL != sourceURL {
+                            let lease = WallpaperScopeLease(overrideURL)
+                            if let resolved = try? LocalSceneSource.read(overrideURL), resolved.canvas != .desktopSpan {
+                                backdropScene = resolved.applyingVariant(id: variantID).scene
+                                displayScope = lease
+                            }
+                        } else {
+                            backdropScene = authoredBase.applyingVariant(id: variantID).scene
                         }
                     }
                     // Native backing resolution (within probe limits) so the still
@@ -1651,6 +1721,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     @objc func stop() {
         if persistsSelection {
             resumeDefaults.removeObject(forKey: Self.resumeKey)
+            resumeDefaults.removeObject(forKey: Self.resumeVariantKey)
             resumeDefaults.removeObject(forKey: Self.pauseKey)
         }
         onManualSelection?()
@@ -1672,7 +1743,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         if scopeStarted { selectedURL?.stopAccessingSecurityScopedResource() }
         scopeStarted = false
         selectedURL = nil
+        canonicalPlayable = nil
         playable = nil
+        requestedVariantID = nil
+        effectiveVariantID = nil
+        variantDiagnostics = []
         isLoading = false
         pausedByUser = false
         logState("stop")
