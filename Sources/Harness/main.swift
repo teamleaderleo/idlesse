@@ -325,6 +325,18 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaper.togglePause()
         refreshStatusItem()
     }
+    @objc private func openLibraryFromStatusItem() {
+        statusItem?.menu?.cancelTracking()
+        // Let AppKit finish dismissing the status menu before presenting the
+        // Library window. Presenting synchronously from a menu callback can
+        // leave the window behind the menu or fail to activate after hiding.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSApp.unhide(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            self.showLibrary()
+        }
+    }
     private func refreshStatusItem() {
         statusPauseItem?.title = wallpaper.isPausedByUser ? "Resume Wallpaper" : "Pause Wallpaper"
         statusWallpaperItem?.title = wallpaper.isRunning ? "Wallpaper: Running" : "Wallpaper: Stopped"
@@ -574,7 +586,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         }
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let library = menu.addItem(withTitle: "Open Library", action: #selector(showLibrary), keyEquivalent: "")
+        let library = menu.addItem(withTitle: "Open Library", action: #selector(openLibraryFromStatusItem), keyEquivalent: "")
         library.target = self
         let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "")
         settings.target = self
