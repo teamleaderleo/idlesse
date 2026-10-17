@@ -407,7 +407,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         readyThumbnails.totalCostLimit = 96 * 1024 * 1024
         thumbnails.countLimit = 256
         thumbnails.totalCostLimit = 96 * 1024 * 1024
-        search.placeholderString = ""
+        search.placeholderString = "Search wallpapers, sources, or tags"
         search.setAccessibilityLabel("Search wallpapers")
         search.delegate = self
         search.target = self
@@ -415,9 +415,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         search.sendsWholeSearchString = true
         filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         filter.target = self; filter.action = #selector(filterChanged)
-        sort.addItems(withTitles: ["Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened"])
+        sort.addItems(withTitles: ["Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened", "Best Match",
+                                   "Media Type", "Source A–Z", "Largest First"])
         sort.target = self; sort.action = #selector(filterChanged)
-        sort.selectItem(at: min(max(0, UserDefaults.standard.integer(forKey: "Idlesse.library.sortMode")), sort.numberOfItems - 1))
+        sort.selectItem(at: min(Self.restoredSortMode(), sort.numberOfItems - 1))
         pendingFilterTitle = UserDefaults.standard.string(forKey: "Idlesse.library.filterTitle")
         importButton.target = self
         importButton.action = #selector(addScenes)
@@ -754,6 +755,52 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             "Hare-Camping": "Hare (Camping)", "Shiroko-Terror": "Shiroko (Terror)", "Vivian-Trust": "Vivian (Trust)"]
         return variants[name] ?? name.replacingOccurrences(of: "-", with: " ")
     }
+
+    private func sourceName(for item: Item) -> String {
+        if let sourceID = item.entry?.sourceID,
+           let source = store.catalog.sources.first(where: { $0.id == sourceID }) {
+            return source.name
+        }
+        return item.builtin == nil ? "Imported" : "Included"
+    }
+
+    private func mediaType(for item: Item) -> String {
+        item.builtin != nil ? "scene" : (item.entry?.inferredMediaType ?? "media")
+    }
+
+    private func browseMetadata(for item: Item) -> String {
+        "\(sourceName(for: item)) · \(mediaType(for: item).capitalized)"
+    }
+
+    /// Search the human-facing name as well as the catalog fields that explain
+    /// where an Air Blue item came from. This keeps a source or character query
+    /// useful even when the normalized display title is terse.
+    private func searchableText(for item: Item) -> String {
+        guard let entry = item.entry else { return item.title }
+        var fields: [String?] = [item.title, sourceName(for: item), entry.relativeMediaPath,
+                                 entry.series, entry.character, entry.variant]
+        fields.append(contentsOf: entry.tags.map { Optional($0) })
+        return fields.compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " ")
+    }
+
+    private static func restoredSortMode() -> Int {
+        guard let stored = UserDefaults.standard.object(forKey: "Idlesse.library.sortMode") as? Int else { return 0 }
+        // The first four modes are persisted by older builds. Keep their
+        // positions stable while allowing newer modes to append safely.
+        return min(max(0, stored), 7)
+    }
+
+    private static func mediaSortRank(_ type: String) -> Int {
+        switch type {
+        case "video": return 0
+        case "scene": return 1
+        case "image": return 2
+        default: return 3
+        }
+    }
     private func allItems() -> [Item] {
         Self.builtinScenes().map { Item(id: "builtin.\($0.name)", title: $0.title, builtin: $0.url, entry: nil) }
             + store.catalog.entries.filter { $0.availability == .present }
@@ -916,10 +963,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let oldIDs = items.map(\.id)
         let catalog = allItems()
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        sort.isEnabled = query.isEmpty && activeCollection == nil && scope != .recent
-        sort.toolTip = !query.isEmpty ? "Search results are ordered by relevance" : (activeCollection != nil ? "Collection order" : "Sort wallpapers")
+        sort.isEnabled = activeCollection == nil && scope != .recent
+        sort.toolTip = !query.isEmpty ? "Sort search results" : (activeCollection != nil ? "Collection order" : "Sort wallpapers")
         let scores: [String: Double] = query.isEmpty ? [:] : catalog.reduce(into: [:]) { scores, item in
-            scores[item.id] = Self.fuzzyScore(query: query, in: item.title)
+            scores[item.id] = Self.fuzzyScore(query: query, in: self.searchableText(for: item))
         }
         let collectionPositions: [String: Int] = (activeCollection?.sceneIDs ?? []).enumerated().reduce(into: [:]) { positions, entry in
             if positions[entry.element] == nil { positions[entry.element] = entry.offset }
@@ -964,17 +1011,45 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             if activeCollection != nil {
                 return (collectionPositions[$0.id] ?? Int.max) < (collectionPositions[$1.id] ?? Int.max)
             }
-            if !query.isEmpty {
-                let a = scores[$0.id] ?? .infinity
-                let b = scores[$1.id] ?? .infinity
-                if a != b { return a < b }
-            }
-            if (homeNavigation && scope == .recent) || sort.indexOfSelectedItem == 1 || sort.indexOfSelectedItem == 3 {
+            if homeNavigation && scope == .recent {
                 let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
-                if a != b { return sort.indexOfSelectedItem == 3 && scope != .recent ? a < b : a > b }
+                if a != b { return a > b }
+            }
+            switch sort.indexOfSelectedItem {
+            case 0:
+                let order = $0.title.localizedStandardCompare($1.title)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+            case 1:
+                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                if a != b { return a > b }
+            case 2:
+                let order = $0.title.localizedStandardCompare($1.title)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedDescending
+            case 3:
+                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                if a != b { return a < b }
+            case 4:
+                if !query.isEmpty {
+                    let a = scores[$0.id] ?? .infinity
+                    let b = scores[$1.id] ?? .infinity
+                    if a != b { return a < b }
+                }
+                let order = $0.title.localizedStandardCompare($1.title)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+            case 5:
+                let a = Self.mediaSortRank(self.mediaType(for: $0)), b = Self.mediaSortRank(self.mediaType(for: $1))
+                if a != b { return a < b }
+            case 6:
+                let order = self.sourceName(for: $0).localizedStandardCompare(self.sourceName(for: $1))
+                if order != .orderedSame { return order == .orderedAscending }
+            case 7:
+                let a = $0.entry?.observation?.byteLength ?? 0, b = $1.entry?.observation?.byteLength ?? 0
+                if a != b { return a > b }
+            default:
+                break
             }
             let order = $0.title.localizedStandardCompare($1.title)
-            return order == .orderedSame ? $0.id < $1.id : order == (sort.indexOfSelectedItem == 2 ? .orderedDescending : .orderedAscending)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }
         table.reloadData()
         gridView.update(items: items, selectedID: selected?.id)
@@ -1000,6 +1075,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let item = items[row]
         let text = NSTextField(labelWithString: (store.catalog.favorites.contains(item.id) ? "★  " : "") + item.title)
         text.lineBreakMode = .byTruncatingTail
+        text.font = .systemFont(ofSize: 13, weight: .medium)
+        let metadata = NSTextField(labelWithString: browseMetadata(for: item))
+        metadata.font = .systemFont(ofSize: 11)
+        metadata.textColor = .secondaryLabelColor
+        metadata.lineBreakMode = .byTruncatingMiddle
         let cell = NSTableCellView()
         cell.textField = text
         let thumbnail = NSImageView()
@@ -1015,6 +1095,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         requestThumbnail(for: item) { [weak thumbnail] image in thumbnail?.image = image }
         text.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(text)
+        metadata.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(metadata)
         NSLayoutConstraint.activate([
             thumbnail.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
             thumbnail.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -1022,7 +1104,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             thumbnail.heightAnchor.constraint(equalToConstant: 45),
             text.leadingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
-            text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            text.topAnchor.constraint(equalTo: cell.topAnchor, constant: 10),
+            metadata.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            metadata.trailingAnchor.constraint(equalTo: text.trailingAnchor),
+            metadata.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 2),
+            metadata.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -8)
         ])
         return cell
     }
@@ -1322,8 +1408,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             return
         }
         if titleLabel.stringValue != selected.title { titleLabel.stringValue = selected.title }
+        poster.setAccessibilityLabel("Preview of \(selected.title)")
+        poster.toolTip = "Drag to use \(selected.title)"
         favorite.title = store.catalog.favorites.contains(selected.id) ? "★" : "☆"
-        setDetail(knownDetails[selected.id] ?? "")
+        setDetail(knownDetails[selected.id] ?? "Preparing preview…")
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if token == self.generation { self.task = nil } }
@@ -1395,7 +1483,15 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             let transform = try await track.load(.preferredTransform)
             let displayed = size.applying(transform)
             let fps = try await track.load(.nominalFrameRate)
-            return " · \(Int(abs(displayed.width))) × \(Int(abs(displayed.height))) · \(String(format: "%g", fps)) fps"
+            let duration = try await asset.load(.duration)
+            let durationSeconds = duration.seconds
+            var parts = ["\(Int(abs(displayed.width))) × \(Int(abs(displayed.height)))", "\(String(format: "%g", fps)) fps"]
+            if durationSeconds.isFinite, durationSeconds > 0 {
+                let minutes = Int(durationSeconds) / 60
+                let seconds = Int(durationSeconds.rounded()) % 60
+                parts.append(minutes > 0 ? String(format: "%dm %02ds", minutes, seconds) : String(format: "%ds", seconds))
+            }
+            return " · " + parts.joined(separator: " · ")
         }
         guard ext != "idlesse" else { return "" }
         return await Task.detached(priority: .utility) {
