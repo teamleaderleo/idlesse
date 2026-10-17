@@ -256,6 +256,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private static let resumeKey = "wallpaperResumeBookmark"
     private static let resumeVariantKey = "wallpaperResumeVariant"
     private static let pauseKey = "wallpaperResumePaused"
+    private static let nativeWallpaperKey = "wallpaperPreserveNativeWallpaper"
     private static let sameDisplaysKey = "wallpaperSameOnAllDisplays"
     private static let origBackdropPrefix = "wallpaperOrigBackdrop."
     private static let stillsDirName = "Idlesse/Desktop Backdrops"
@@ -272,6 +273,27 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         set {
             resumeDefaults.set(newValue, forKey: Self.sameDisplaysKey)
             refreshDisplayAssignments()
+        }
+    }
+
+    /// Controls whether Idlesse installs a matching native desktop still under
+    /// its live surfaces. The default preserves the existing behavior; callers
+    /// can opt out without changing the active renderer or persisted selection.
+    var preservesNativeWallpaper: Bool {
+        get {
+            if resumeDefaults.object(forKey: Self.nativeWallpaperKey) == nil { return true }
+            return resumeDefaults.bool(forKey: Self.nativeWallpaperKey)
+        }
+        set {
+            resumeDefaults.set(newValue, forKey: Self.nativeWallpaperKey)
+            backdropTask?.cancel()
+            backdropTask = nil
+            if !newValue {
+                restoreOriginalBackdrops()
+            } else if let playable, let selectedURL {
+                syncSystemBackdrop(scene: playable, sourceURL: selectedURL, request: generation)
+            }
+            updateMenu()
         }
     }
 
@@ -1544,7 +1566,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// A full-resolution SDR still gives macOS matching material for menu-bar/Show Desktop
     /// regions it composites from the system wallpaper rather than our window.
     private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int, onlyDisplayID: UInt32? = nil) {
-        guard persistsSelection && presentsWindows else { return }
+        guard persistsSelection && presentsWindows && preservesNativeWallpaper else { return }
         backdropTask?.cancel()
         let canonical = canonicalPlayable ?? scene
         let variantID = requestedVariantID
