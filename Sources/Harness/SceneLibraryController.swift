@@ -2225,11 +2225,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         controller.search.stringValue = "Undertow"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
         precondition(controller.items.map(\.id) == beforeTyping, "Typing should not rebuild synchronously")
-        let searchDeadline = Date().addingTimeInterval(2)
-        while controller.pendingSearch != nil && Date() < searchDeadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        let searchDeadline = Date().addingTimeInterval(5)
+        while (controller.pendingSearch != nil || controller.items.count != 1 || controller.items.first?.title != "Undertow") &&
+              Date() < searchDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
-        precondition(controller.items.count == 1 && controller.items.first?.title == "Undertow")
+        precondition(controller.pendingSearch == nil && controller.items.count == 1 && controller.items.first?.title == "Undertow",
+                     "Debounced search did not settle on Undertow before the smoke deadline")
         controller.search.stringValue = "Aurora"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
         controller.commitSearch()

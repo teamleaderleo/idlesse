@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Resume a texture-restoration/export batch. No application preferences are edited."""
-import argparse, os, sys, fcntl, hashlib, json, re, shutil, subprocess, threading, time, zipfile
+import argparse, contextlib, os, sys, fcntl, hashlib, json, re, shutil, subprocess, threading, time, zipfile
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import smooth_edges
 
 
 def save(path, value):
@@ -26,9 +27,55 @@ def scale_atlas(text):
                      for line in text.splitlines()) + '\n'
 
 
-def run(argv, log, cwd=None, timeout=1200, env=None):
+def run(argv, log, cwd=None, timeout=1200, env=None, progress=None):
+    """Run to completion into `log`. With `progress`, also echo the renderer's
+    frame count as it goes, so a ten-minute x265 export is not a silent one."""
     with log.open('ab') as stream:
-        subprocess.run(argv, cwd=cwd, stdout=stream, stderr=stream, check=True, timeout=timeout, env=env)
+        if progress is None:
+            subprocess.run(argv, cwd=cwd, stdout=stream, stderr=stream, check=True, timeout=timeout, env=env)
+            return
+        process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        expired = threading.Event()
+        timer = threading.Timer(timeout, lambda: (expired.set(), process.kill()))
+        timer.start()
+        try:
+            for line in process.stdout:
+                stream.write(line)
+                match = re.match(rb'Frame (\d+)', line)
+                if match and int(match.group(1)) % 60 == 0:
+                    print(progress(int(match.group(1))), flush=True)
+        finally:
+            timer.cancel()
+        if process.wait() != 0:
+            if expired.is_set():
+                raise subprocess.TimeoutExpired(argv, timeout)
+            raise subprocess.CalledProcessError(process.returncode, argv)
+
+
+@contextlib.contextmanager
+def encoder_slot(root, x265):
+    """Hardware encodes take the workspace's one lock. x265 exports are CPU work
+    that one job cannot saturate, so IDLESSE_X265_JOBS (default 3) may run at once."""
+    if not x265:
+        with (root / '.media-encoder.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield 0
+        return
+    slots = max(1, int(os.environ.get('IDLESSE_X265_JOBS', '3')))
+    while True:
+        for slot in range(slots):
+            lock = (root / f'.media-encoder-x265-{slot}.lock').open('a')
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock.close()
+                continue
+            try:
+                yield slot
+            finally:
+                lock.close()
+            return
+        time.sleep(2)
 
 
 def probe(path):
@@ -88,7 +135,10 @@ def main():
     parser.add_argument('--job-name', default='batch-2026-09-10')
     parser.add_argument('--port', type=int, default=18763)
     parser.add_argument('--frame-asset', action='append', default=[])
-    parser.add_argument('--encoder', choices=['webcodecs','frames'], default='webcodecs')
+    parser.add_argument('--encoder', choices=['webcodecs','frames','x265'], default='webcodecs',
+        help='x265 sends lossless frames to 10-bit HEVC: slower, without gradient banding; several can run at once')
+    parser.add_argument('--edges', choices=['original', 'smooth'], default='original',
+        help='smooth renders from assets-ai-smooth: stair-stepped silhouettes evened out with the upscaled masks')
     parser.add_argument('--restore-only', action='store_true', help='Prepare textures without starting the local renderer')
     args = parser.parse_args()
     if Path(args.job_name).name != args.job_name or args.job_name in ('', '.', '..'):
@@ -126,9 +176,13 @@ def main():
         with zipfile.ZipFile(restored_zip) as archive:
             expected = {i['id'] + '/' + p.name for i in plan['items']
                         for p in (root / 'assets-pc' / i['id']).glob('*.png')}
-            if set(archive.namelist()) != expected:
+            names = set(archive.namelist())
+            masks = {n for n in names if n.startswith(smooth_edges.MASKS + '/')}
+            if names - masks != expected or not masks <= {smooth_edges.MASKS + '/' + n for n in expected}:
                 raise RuntimeError('Unexpected restored texture manifest')
-            archive.extractall(restored)
+            archive.extractall(restored, members=sorted(expected))
+            # Older restore jobs returned no masks; those lobbies can still export with original edges.
+            archive.extractall(root, members=sorted(masks))
         for item in plan['items']:
             dest = restored / item['id']
             for path in (root / 'assets-pc' / item['id']).iterdir():
@@ -140,6 +194,14 @@ def main():
     if args.restore_only:
         print('Restored textures verified; export remains pending', flush=True)
         return
+    textures = {}
+    for item in plan['items']:
+        if args.edges == 'smooth':
+            if not smooth_edges.has_masks(root, item['id']):
+                raise RuntimeError(f'No edge masks for {item["id"]}; export it with --edges original')
+            textures[item['id']] = smooth_edges.build(root, item['id']).relative_to(root).as_posix()
+        else:
+            textures[item['id']] = 'assets-ai-batch/' + item['id']
     class QuietHandler(SimpleHTTPRequestHandler):
         def log_message(self, *args): pass
     handler = partial(QuietHandler, directory=str(root))
@@ -166,18 +228,20 @@ def main():
             reused = temporary.exists()
             if not reused:
                 frame_args = [str(temporary), str(frames), '3840', '2160',
-                    'assets-ai-batch/' + item['id'], item['stem'], item['animation']]
+                    textures[item['id']], item['stem'], item['animation']]
                 use_frames = args.encoder == 'frames' or item['id'] in args.frame_asset
-                renderer = [str(root / 'render')] if use_frames else [sys.executable, str(Path(__file__).with_name('encode.py'))]
+                x265 = args.encoder == 'x265' and not use_frames
+                helper = 'encode_x265.py' if x265 else 'encode.py'
+                renderer = [str(root / 'render')] if use_frames else [sys.executable, str(Path(__file__).with_name(helper))]
                 state['current'] = {'asset': item['id'], 'title': title, 'stage': 'waiting-for-encoder'}; save(state_path, state)
-                with (root/'.media-encoder.lock').open('a') as encoder_lock:
-                    fcntl.flock(encoder_lock, fcntl.LOCK_EX)
+                with encoder_slot(root, x265) as slot:
                     state['current']['stage'] = 'encoding'; save(state_path, state)
                     try:
                         run(renderer + frame_args, job / (title + '.log'), root, 1900,
+                            progress=lambda done: f'Rendered {done} of {frames} frames',
                             env={**os.environ, 'IDLESSE_RENDER_PORT': str(server.server_port)})
                     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                        if use_frames: raise
+                        if use_frames or x265: raise
                         print('WebCodecs failed; using frame encoder once:', title, flush=True)
                         temporary.unlink(missing_ok=True)
                         Path(str(temporary) + '.json').unlink(missing_ok=True)
@@ -198,7 +262,7 @@ def main():
             shutil.move(temporary, final)
             receipt = {'title': title, 'path': str(final), 'sha256': digest(final), 'probe': result,
                 'attemptSeconds': round(time.monotonic() - start, 2), 'reusedEncodedVideo': reused, 'source': plan['source'],
-                'restoration': plan['model'], 'encoder': 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
+                'restoration': plan['model'] + ('; ' + smooth_edges.VERSION if args.edges == 'smooth' else ''), 'edges': args.edges, 'encoder': 'x265-main10' if args.encoder == 'x265' and item['id'] not in args.frame_asset else 'webcodecs' if 'encodeSeconds' in render_meta else 'frames', 'encoderSeconds': render_meta.get('encodeSeconds'), 'rendererSHA256': digest(root/'render.bundle.js'), 'asset': item['id'], 'animation': item['animation'], 'camera': render_meta.get('camera'),
                 'caveat': 'Upscaled texture detail; Spine-only rendering may omit Unity effects/physics. Visual QA required.'}
             save(final.with_suffix('.source.json'), receipt)
             state['items'][item['id']] = receipt; state.pop('current', None); save(state_path, state)

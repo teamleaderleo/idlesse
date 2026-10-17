@@ -12,10 +12,12 @@ struct LibraryReconciliationChecks {
         try largeCatalogPureDiff()
         try cancellationLeavesBytesUntouched()
         try staleReviewLeavesCurrentCatalogUntouched()
+        try diskStaleReviewRejectsConcurrentSourceMutation()
+        try unrelatedConcurrentStateSurvivesApply()
         try relinkAndReconcileStaySeparate()
         try digestBudgetSkipsLargeFiles()
         try digestSkipsEscapingSymlink()
-        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, package move identity, ambiguity, identity conflicts, 4k pure diff, cancellation, stale-review atomicity, relink separation, bounded hashing and symlink containment")
+        print("Library reconciliation checks passed: additions, missing tombstones, moves, replacements, digest/probable matching, package move identity, ambiguity, identity conflicts, 4k pure diff, cancellation, in-memory and disk stale-review atomicity, concurrent state survival, relink separation, bounded hashing and symlink containment")
     }
 
     private static func entry(_ id: String, path: String, catalogID: String? = nil,
@@ -211,6 +213,44 @@ struct LibraryReconciliationChecks {
         precondition(after == before)
     }
 
+    private static func diskStaleReviewRejectsConcurrentSourceMutation() throws {
+        let (reviewer, dir) = try seedStore(entries: [entry("a", path: "A.mp4", bytes: 1)])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let review = try reviewer.prepareReconciliation(sourceID: "source", scanned: [draft("A.mp4", title: "Reviewed A", bytes: 1)])
+        let writer = try SceneLibraryStore(file: reviewer.file)
+        _ = try writer.addSourceEntries("source", [draft("B.mp4", bytes: 2)])
+        let before = try Data(contentsOf: reviewer.file)
+        do {
+            try reviewer.applyReconciliation(review)
+            preconditionFailure("A review prepared before another process changed the Source was accepted")
+        } catch {}
+        let after = try Data(contentsOf: reviewer.file)
+        precondition(after == before, "Rejected stale review rewrote the Library index")
+        let disk = try SceneLibraryStore(file: reviewer.file)
+        precondition(disk.catalog.entries.contains { $0.relativeMediaPath == "B.mp4" })
+        precondition(disk.catalog.entries.first(where: { $0.id == "a" })?.title == "A")
+    }
+
+    private static func unrelatedConcurrentStateSurvivesApply() throws {
+        let (reviewer, dir) = try seedStore(entries: [entry("a", path: "A.mp4", bytes: 1)])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let review = try reviewer.prepareReconciliation(sourceID: "source", scanned: [draft("A.mp4", title: "Reviewed A", bytes: 1)])
+        let writer = try SceneLibraryStore(file: reviewer.file)
+        try writer.favorite("a") // seedStore starts with a favorited; the concurrent writer clears it.
+        try writer.used("a")
+        let concurrent = try writer.createCollection(name: "Concurrent Picks")
+        try writer.toggleMembership(sceneID: "a", collectionID: concurrent.id)
+
+        try reviewer.applyReconciliation(review)
+        let disk = try SceneLibraryStore(file: reviewer.file)
+        precondition(disk.catalog.entries.first(where: { $0.id == "a" })?.title == "Reviewed A")
+        precondition(!disk.catalog.favorites.contains("a"), "Reconciliation erased a concurrent favorite change")
+        precondition((disk.catalog.recent["a"] ?? .distantPast) > Date(timeIntervalSince1970: 1234),
+                     "Reconciliation erased a concurrent recent update")
+        precondition(disk.catalog.collections.first(where: { $0.id == concurrent.id })?.sceneIDs == ["a"],
+                     "Reconciliation erased a concurrent collection mutation")
+    }
+
     private static func relinkAndReconcileStaySeparate() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-relink-\(UUID().uuidString)")
         let oldRoot = dir.appendingPathComponent("old")
@@ -219,17 +259,32 @@ struct LibraryReconciliationChecks {
         try FileManager.default.createDirectory(at: newRoot, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("index.json")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = try SceneLibraryStore(file: file)
-        let source = try store.addSource(oldRoot, entries: [.init(relativeMediaPath: "A.mp4", title: "A", mediaType: "video")])
-        let entryID = store.catalog.entries.first!.id
-        let beforePath = store.catalog.entries.first!.relativeMediaPath
-        try store.relinkSource(source.id, to: newRoot)
-        precondition(store.catalog.entries.first!.id == entryID)
-        precondition(store.catalog.entries.first!.relativeMediaPath == beforePath)
-        precondition(store.catalog.entries.first!.availability == .present)
-        let diff = try store.prepareReconciliation(sourceID: source.id, scanned: [])
+        let owner = try SceneLibraryStore(file: file)
+        let source = try owner.addSource(oldRoot, entries: [.init(relativeMediaPath: "A.mp4", title: "A", mediaType: "video")])
+        let entryID = owner.catalog.entries.first!.id
+        let beforePath = owner.catalog.entries.first!.relativeMediaPath
+
+        let reviewer = try SceneLibraryStore(file: file)
+        let preRelinkReview = try reviewer.prepareReconciliation(sourceID: source.id,
+            scanned: [.init(relativeMediaPath: "A.mp4", title: "A", mediaType: "video")])
+        let relinker = try SceneLibraryStore(file: file)
+        try relinker.relinkSource(source.id, to: newRoot)
+        precondition(relinker.catalog.entries.first!.id == entryID)
+        precondition(relinker.catalog.entries.first!.relativeMediaPath == beforePath)
+        precondition(relinker.catalog.entries.first!.availability == .present)
+
+        let afterRelink = try Data(contentsOf: file)
+        do {
+            try reviewer.applyReconciliation(preRelinkReview)
+            preconditionFailure("A review prepared before Relink was accepted")
+        } catch {}
+        let afterRejectedReview = try Data(contentsOf: file)
+        precondition(afterRejectedReview == afterRelink, "Stale post-Relink review rewrote the catalog")
+
+        let fresh = try SceneLibraryStore(file: file)
+        let diff = try fresh.prepareReconciliation(sourceID: source.id, scanned: [])
         precondition(diff.missingEntryIDs == [entryID])
-        precondition(store.catalog.entries.first!.availability == .present)
+        precondition(fresh.catalog.entries.first!.availability == .present)
     }
 
     private static func digestBudgetSkipsLargeFiles() throws {

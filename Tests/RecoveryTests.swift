@@ -9,7 +9,8 @@ import AppKit
         var node = SceneNode(content: .gradient)
         node.transform = .init(x: 0.2, y: -0.3, scale: 0.7, rotation: 25)
         node.style.vignette = 0.4
-        original.scene = SceneDescriptor(title: "Recovered", nodes: [node], timeline: .init(duration: 8, mode: .loop))
+        original.scene = SceneDescriptor(title: "Recovered", nodes: [node], timeline: .init(duration: 8, mode: .loop),
+            focus: .init(x: 0.73, y: 0.21), bleed: .init(top: 0.01, left: 0.02, bottom: 0.03, right: 0.04))
         original.draft = true
         original.flushRecovery()
         let reopened = SceneDocument(recoveryDirectory: root)
@@ -18,6 +19,8 @@ import AppKit
         precondition(recovered.scene.nodes[0].transform.rotation == 25)
         precondition(recovered.scene.nodes[0].style.vignette == 0.4)
         precondition(recovered.scene.timeline?.duration == 8)
+        precondition(recovered.scene.focus == .init(x: 0.73, y: 0.21))
+        precondition(recovered.scene.bleed == .init(top: 0.01, left: 0.02, bottom: 0.03, right: 0.04))
         let presetID = UUID().uuidString
         let preset = try SceneComponent.capture(SceneNode(content: .text(.init(text: "Recovered preset"))), from: original.scene)
         original.scene.components = [presetID: preset]
@@ -32,6 +35,8 @@ import AppKit
         precondition(withPreset.scene.metadata?.previewTime == 5)
         precondition(withPreset.scene.variants.first?.id == variantID)
         precondition(withPreset.scene.variants.first?.values["strength"] == .number(0.2))
+        precondition(withPreset.scene.focus == .init(x: 0.73, y: 0.21))
+        precondition(withPreset.scene.bleed == .init(top: 0.01, left: 0.02, bottom: 0.03, right: 0.04))
         // A different document saving must not remove a deferred recovery.
         reopened.recoveryEnabled = true
         reopened.draft = false

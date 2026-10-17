@@ -1,12 +1,13 @@
 import Foundation
 
 @main struct AutomationCommandTests {
-    static func main() throws {
+    static func main() async throws {
         try urlCoverage()
         try cliCoverage()
         try validationCoverage()
         try codableCoverage()
-        print("Automation command/parser checks passed")
+        await executorCoverage()
+        print("Automation command/parser/executor checks passed")
     }
 
     static func expect(_ actual: AutomationCommand, _ expected: AutomationCommand, _ message: String) {
@@ -77,5 +78,69 @@ import Foundation
         let stateBytes = try JSONEncoder().encode(state)
         let decodedState = try JSONDecoder().decode(AutomationState.self, from: stateBytes)
         precondition(decodedState == state)
+    }
+
+    @MainActor
+    static func executorCoverage() async {
+        var calls: [String] = []
+        var state = AutomationState(appRunning: true, paused: false)
+        let dependencies = AutomationCommandExecutor.Dependencies(
+            applyScene: { calls.append("scene:\($0)"); state.sceneID = $0 },
+            applyCollection: { calls.append("collection:\($0)"); state.collectionID = $0 },
+            applyAmbientSet: { calls.append("ambient:\($0)"); state.ambientSetID = $0 },
+            setVariant: { variant, sceneID in calls.append("variant:\(variant):\(sceneID ?? "-")"); state.variantName = variant },
+            step: { calls.append("step:\($0)") },
+            setPaused: { paused in calls.append("paused:\(paused)"); state.paused = paused },
+            togglePause: { calls.append("toggle"); state.paused.toggle() },
+            pauseFor: { seconds in calls.append("pauseFor:\(seconds)"); state.pauseUntil = Date(timeIntervalSince1970: Double(seconds)) },
+            cleanDesktop: { calls.append("clean") },
+            currentState: { state },
+            setLoginItem: { enabled in calls.append("login:\(enabled)"); state.loginItemEnabled = enabled },
+            screenShareState: { .activeWindowStream })
+        let executor = AutomationCommandExecutor(dependencies: dependencies)
+
+        let fixedID = UUID(uuidString: "31E7AC1A-8EDC-4318-AE4B-A9CE372982BF")!
+        let scene = await executor.execute(.init(action: .applyScene, target: "scene-a"), requestID: fixedID)
+        precondition(scene.success && scene.id == fixedID && scene.state?.sceneID == "scene-a")
+        let collection = await executor.execute(.init(action: .applyCollection, target: "night"))
+        precondition(collection.success)
+        let ambient = await executor.execute(.init(action: .applyAmbientSet, target: "focus"))
+        precondition(ambient.success)
+        let variant = await executor.execute(.init(action: .setVariant, target: "Midnight", sceneID: "scene-a"))
+        precondition(variant.success)
+        let next = await executor.execute(.init(action: .next))
+        precondition(next.success)
+        let previous = await executor.execute(.init(action: .previous))
+        precondition(previous.success)
+        let paused = await executor.execute(.init(action: .pause))
+        precondition(paused.state?.paused == true)
+        let resumed = await executor.execute(.init(action: .resume))
+        precondition(resumed.state?.paused == false)
+        let toggled = await executor.execute(.init(action: .togglePause))
+        precondition(toggled.state?.paused == true)
+        let timed = await executor.execute(.init(action: .pauseFor, seconds: 60))
+        precondition(timed.state?.pauseUntil == Date(timeIntervalSince1970: 60))
+        let cleaned = await executor.execute(.init(action: .cleanDesktop))
+        precondition(cleaned.success)
+        let login = await executor.execute(.init(action: .setLoginItem, enabled: true))
+        precondition(login.state?.loginItemEnabled == true)
+        let share = await executor.execute(.init(action: .screenShareState))
+        precondition(share.success && share.state?.screenShare == .activeWindowStream)
+        let current = await executor.execute(.init(action: .state))
+        precondition(current.success && current.state?.sceneID == "scene-a")
+        precondition(calls == ["scene:scene-a", "collection:night", "ambient:focus", "variant:Midnight:scene-a",
+                               "step:1", "step:-1", "paused:true", "paused:false", "toggle", "pauseFor:60", "clean", "login:true"])
+
+        let invalid = await executor.execute(.init(action: .pauseFor, seconds: 0))
+        precondition(!invalid.success && invalid.state?.sceneID == "scene-a", "validation failure must return current state")
+
+        enum TestFailure: LocalizedError { case expected; var errorDescription: String? { "expected dependency failure" } }
+        let failing = AutomationCommandExecutor(dependencies: .init(
+            applyScene: { _ in throw TestFailure.expected },
+            applyCollection: { _ in }, applyAmbientSet: { _ in }, setVariant: { _, _ in }, step: { _ in },
+            setPaused: { _ in }, togglePause: {}, pauseFor: { _ in }, cleanDesktop: {}, currentState: { state },
+            setLoginItem: { _ in }, screenShareState: { .unknown }))
+        let failure = await failing.execute(.init(action: .applyScene, target: "scene-b"))
+        precondition(!failure.success && failure.message == "expected dependency failure" && failure.state?.sceneID == "scene-a")
     }
 }

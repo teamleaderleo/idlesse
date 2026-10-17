@@ -140,7 +140,7 @@ compile_app_full() {
   local f
   for f in "${APP_FRAMEWORKS[@]}"; do args+=( -framework "$f" ); done
   xcrun swiftc ${SWIFT_CACHE_ARGS[@]+"${SWIFT_CACHE_ARGS[@]}"} "${args[@]}" "${APP_SOURCES[@]}" \
-    -o "$APP/Contents/MacOS/Idlesse"
+    -lsqlite3 -o "$APP/Contents/MacOS/Idlesse"
 }
 
 # NOTE: per-file object caching via raw swiftc was tried here (output-file-map

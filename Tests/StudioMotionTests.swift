@@ -6,6 +6,7 @@ import Foundation
         try keyedEditUpsertsAndPreservesModifiers()
         try autoKeyOffBlocksBetweenKeys()
         try ownershipKeepsControlsAndDriversDistinct()
+        try ownershipClassifiesAllFourSources()
         try makeStaticBakesCurrentValue()
         try driverChangesPreserveMapping()
         try channelEditOnlyCreatesChangedTrack()
@@ -73,6 +74,25 @@ import Foundation
         precondition(StudioMotionAuthoring.ownership(of: y, in: scene) == .driven(.sine))
         precondition(StudioMotionAuthoring.writeDisposition(for: x, in: scene, time: 1, autoKey: true) == .controlled)
         precondition(StudioMotionAuthoring.writeDisposition(for: y, in: scene, time: 1, autoKey: true) == .driven)
+    }
+
+    private static func ownershipClassifiesAllFourSources() throws {
+        let layer = node()
+        let staticTarget = ScenePropertyAddress(nodeID: layer.id, property: .opacity)
+        let controlledTarget = ScenePropertyAddress(nodeID: layer.id, property: .x)
+        let drivenTarget = ScenePropertyAddress(nodeID: layer.id, property: .y)
+        let keyedTarget = ScenePropertyAddress(nodeID: layer.id, property: .scale)
+        let scene = SceneDescriptor(title: "Ownership matrix", nodes: [layer],
+            parameters: ["position": .init(name: "Position", value: 0.25, min: -1, max: 1)],
+            bindings: [
+                .init(target: controlledTarget, parameter: "position"),
+                .init(target: drivenTarget, signal: .sine),
+                .init(target: keyedTarget, keyframes: .init(keys: [.init(time: 0, value: 1), .init(time: 2, value: 1.5)]))
+            ])
+        precondition(StudioMotionAuthoring.ownership(of: staticTarget, in: scene) == .staticValue)
+        precondition(StudioMotionAuthoring.ownership(of: controlledTarget, in: scene) == .controlled("position"))
+        precondition(StudioMotionAuthoring.ownership(of: drivenTarget, in: scene) == .driven(.sine))
+        precondition(StudioMotionAuthoring.ownership(of: keyedTarget, in: scene) == .keyframed)
     }
 
     private static func makeStaticBakesCurrentValue() throws {

@@ -6,11 +6,35 @@ struct AmbientWallpaperTarget: Codable, Equatable, Hashable {
     enum Kind: String, Codable { case scene, collection }
     var kind: Kind
     var id: String
+    /// Requested named scene variant. Collections carry their own per-item selections.
+    var variantID: UUID? = nil
 
-    var isValid: Bool { !id.isEmpty && id.count <= Self.maxIdentifierLength }
+    var isValid: Bool {
+        !id.isEmpty && id.count <= Self.maxIdentifierLength && (kind == .scene || variantID == nil)
+    }
 
     static func scene(_ id: String) -> Self { .init(kind: .scene, id: id) }
+    static func scene(_ id: String, variantID: UUID?) -> Self {
+        .init(kind: .scene, id: id, variantID: variantID)
+    }
     static func collection(_ id: String) -> Self { .init(kind: .collection, id: id) }
+
+    enum CodingKeys: String, CodingKey { case kind, id, variantID }
+    init(kind: Kind, id: String, variantID: UUID? = nil) {
+        self.kind = kind; self.id = id; self.variantID = variantID
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        id = try values.decode(String.self, forKey: .id)
+        variantID = try values.decodeIfPresent(UUID.self, forKey: .variantID)
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(id, forKey: .id)
+        try values.encodeIfPresent(variantID, forKey: .variantID)
+    }
 }
 
 struct AmbientDimmingState: Codable, Equatable {

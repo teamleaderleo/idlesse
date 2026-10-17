@@ -17,10 +17,21 @@ AUDIO_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Runt
 needs_build build/tests/audio "${AUDIO_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AUDIO_SRCS[@]}" -framework CoreGraphics -o build/tests/audio & pids+=($!); }
 COMFORT_SRCS=(Sources/Wallpaper/DesktopComfortController.swift Tests/ComfortTests.swift)
 needs_build build/tests/comfort "${COMFORT_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${COMFORT_SRCS[@]}" -framework AppKit -o build/tests/comfort & pids+=($!); }
-LIBRARY_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Tests/LibraryTests.swift)
-needs_build build/tests/library "${LIBRARY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -o build/tests/library & pids+=($!); }
-LIBRARY_RECONCILE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Tests/LibraryReconciliationTests.swift)
-needs_build build/tests/library-reconcile "${LIBRARY_RECONCILE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_RECONCILE_SRCS[@]}" -o build/tests/library-reconcile & pids+=($!); }
+LIBRARY_CORE_SRCS=(Sources/Harness/SceneLibraryStore.swift Sources/Harness/SceneLibraryReconciliation.swift Sources/Harness/SceneLibrarySafety.swift Sources/Harness/SceneLibrarySQLiteStore.swift Sources/Harness/SceneLibraryStacks.swift)
+LIBRARY_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryTests.swift)
+needs_build build/tests/library "${LIBRARY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SRCS[@]}" -lsqlite3 -o build/tests/library & pids+=($!); }
+LIBRARY_RECONCILE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryReconciliationTests.swift)
+needs_build build/tests/library-reconcile "${LIBRARY_RECONCILE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_RECONCILE_SRCS[@]}" -lsqlite3 -o build/tests/library-reconcile & pids+=($!); }
+LIBRARY_SAFETY_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySafetyTests.swift)
+needs_build build/tests/library-safety "${LIBRARY_SAFETY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SAFETY_SRCS[@]}" -lsqlite3 -o build/tests/library-safety & pids+=($!); }
+LIBRARY_SQLITE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySQLiteTests.swift)
+needs_build build/tests/library-sqlite "${LIBRARY_SQLITE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite & pids+=($!); }
+LIBRARY_SQLITE_VALUE_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibrarySQLiteValueFidelityTests.swift)
+needs_build build/tests/library-sqlite-values "${LIBRARY_SQLITE_VALUE_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_SQLITE_VALUE_SRCS[@]}" -lsqlite3 -o build/tests/library-sqlite-values & pids+=($!); }
+LIBRARY_STACK_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryStackTests.swift)
+needs_build build/tests/library-stacks "${LIBRARY_STACK_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_STACK_SRCS[@]}" -lsqlite3 -o build/tests/library-stacks & pids+=($!); }
+LIBRARY_BENCH_SRCS=("${LIBRARY_CORE_SRCS[@]}" Tests/LibraryPersistenceBenchmark.swift)
+needs_build build/tests/library-benchmark "${LIBRARY_BENCH_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${LIBRARY_BENCH_SRCS[@]}" -lsqlite3 -o build/tests/library-benchmark & pids+=($!); }
 LIBRARY_GRID_SRCS=(Sources/Harness/LibraryGridView.swift Tests/LibraryGridVirtualizationTests.swift)
 needs_build build/tests/library-grid "${LIBRARY_GRID_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" -D LIBRARY_GRID_VIRTUALIZATION_TESTS "${LIBRARY_GRID_SRCS[@]}" -framework AppKit -o build/tests/library-grid & pids+=($!); }
 AMBIENT_SET_SRCS=(Sources/Wallpaper/AmbientSet.swift Sources/Wallpaper/AmbientSetStore.swift Sources/Wallpaper/AmbientLegacyAdapter.swift Tests/AmbientSetTests.swift)
@@ -31,7 +42,7 @@ QUICKLOOK_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/
 needs_build build/tests/quick-look "${QUICKLOOK_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${QUICKLOOK_SRCS[@]}" -framework CoreGraphics -o build/tests/quick-look & pids+=($!); }
 STUDIO_MOTION_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Harness/StudioMotionAuthoring.swift Tests/StudioMotionTests.swift)
 needs_build build/tests/studio-motion "${STUDIO_MOTION_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${STUDIO_MOTION_SRCS[@]}" -framework CoreGraphics -o build/tests/studio-motion & pids+=($!); }
-AUTOMATION_SRCS=(Sources/Automation/AutomationCommand.swift Tests/AutomationCommandTests.swift)
+AUTOMATION_SRCS=(Sources/Automation/AutomationCommand.swift Sources/Automation/AutomationExecutor.swift Tests/AutomationCommandTests.swift)
 needs_build build/tests/automation "${AUTOMATION_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AUTOMATION_SRCS[@]}" -o build/tests/automation & pids+=($!); }
 WALLPAPER_POLICY_SRCS=(Sources/Wallpaper/MirrorPresentationTiming.swift Sources/Wallpaper/CoverageRestPolicy.swift Sources/Wallpaper/CoverageMonitor.swift Sources/Wallpaper/DisplayAssignmentStore.swift Tests/WallpaperPolicyTests.swift)
 needs_build build/tests/wallpaper-policy "${WALLPAPER_POLICY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${WALLPAPER_POLICY_SRCS[@]}" -framework AppKit -o build/tests/wallpaper-policy & pids+=($!); }
@@ -43,8 +54,13 @@ build/tests/scenes
 build/tests/recovery
 build/tests/audio
 build/tests/comfort
-build/tests/library
+IDLESSE_LIBRARY_BACKEND=json build/tests/library
 build/tests/library-reconcile
+IDLESSE_LIBRARY_BACKEND=json build/tests/library-safety
+build/tests/library-sqlite
+build/tests/library-sqlite-values
+build/tests/library-stacks
+build/tests/library-benchmark
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants

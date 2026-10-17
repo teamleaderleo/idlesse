@@ -9,15 +9,22 @@ final class SceneLibraryStore {
     static let maxIndividualEntries = 4096
     static let maxSourceEntries = 4096
     static let maxSources = 32
-    /// JSON remains a bounded compatibility/migration source until the SQLite catalog lands.
+    /// JSON remains the bounded compatibility/migration source and recovery snapshot.
     static let maxIndexBytes = 16_777_216
     static let maxBookmarkBytes = 16_384
+
+    /// Foundation-only safety tests can pin the legacy JSON writer while production
+    /// and smoke processes exercise the automatic selector-aware backend.
+    static var forceJSONBackend: Bool {
+        ProcessInfo.processInfo.environment["IDLESSE_LIBRARY_BACKEND"]?.lowercased() == "json"
+    }
 
     struct Entry: Codable, Equatable, Sendable {
         var id: String
         var title: String
         var bookmark: Data?
         var catalogID: String?
+        var groupID: String?
         var sourceID: String?
         var relativeMediaPath: String?
         var relativePosterPath: String?
@@ -51,7 +58,7 @@ final class SceneLibraryStore {
         }
 
         init(id: String, title: String, bookmark: Data? = nil, catalogID: String? = nil,
-             sourceID: String? = nil, relativeMediaPath: String? = nil,
+             groupID: String? = nil, sourceID: String? = nil, relativeMediaPath: String? = nil,
              relativePosterPath: String? = nil, series: String? = nil,
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
@@ -63,6 +70,7 @@ final class SceneLibraryStore {
             self.title = title
             self.bookmark = bookmark
             self.catalogID = catalogID
+            self.groupID = groupID
             self.sourceID = sourceID
             self.relativeMediaPath = relativeMediaPath
             self.relativePosterPath = relativePosterPath
@@ -81,7 +89,7 @@ final class SceneLibraryStore {
         }
 
         enum CodingKeys: String, CodingKey {
-            case id, title, bookmark, catalogID, sourceID, relativeMediaPath, relativePosterPath
+            case id, title, bookmark, catalogID, groupID, sourceID, relativeMediaPath, relativePosterPath
             case series, character, variant, tags, mediaType, width, height, fps, duration, provenance
             case availability, observation
         }
@@ -91,6 +99,7 @@ final class SceneLibraryStore {
             title = try values.decode(String.self, forKey: .title)
             bookmark = try values.decodeIfPresent(Data.self, forKey: .bookmark)
             catalogID = try values.decodeIfPresent(String.self, forKey: .catalogID)
+            groupID = try values.decodeIfPresent(String.self, forKey: .groupID)
             sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
             relativeMediaPath = try values.decodeIfPresent(String.self, forKey: .relativeMediaPath)
             relativePosterPath = try values.decodeIfPresent(String.self, forKey: .relativePosterPath)
@@ -113,6 +122,7 @@ final class SceneLibraryStore {
             try values.encode(title, forKey: .title)
             try values.encodeIfPresent(bookmark, forKey: .bookmark)
             try values.encodeIfPresent(catalogID, forKey: .catalogID)
+            try values.encodeIfPresent(groupID, forKey: .groupID)
             try values.encodeIfPresent(sourceID, forKey: .sourceID)
             try values.encodeIfPresent(relativeMediaPath, forKey: .relativeMediaPath)
             try values.encodeIfPresent(relativePosterPath, forKey: .relativePosterPath)
@@ -151,6 +161,7 @@ final class SceneLibraryStore {
         var relativeMediaPath: String
         var title: String?
         var catalogID: String?
+        var groupID: String?
         var relativePosterPath: String?
         var series: String?
         var character: String?
@@ -165,7 +176,7 @@ final class SceneLibraryStore {
         var observation: ReconciliationObservation?
 
         init(relativeMediaPath: String, title: String? = nil, catalogID: String? = nil,
-             relativePosterPath: String? = nil, series: String? = nil,
+             groupID: String? = nil, relativePosterPath: String? = nil, series: String? = nil,
              character: String? = nil, variant: String? = nil, tags: [String] = [],
              mediaType: String? = nil, width: Int? = nil, height: Int? = nil,
              fps: Double? = nil, duration: Double? = nil,
@@ -174,6 +185,7 @@ final class SceneLibraryStore {
             self.relativeMediaPath = relativeMediaPath
             self.title = title
             self.catalogID = catalogID
+            self.groupID = groupID
             self.relativePosterPath = relativePosterPath
             self.series = series
             self.character = character
@@ -230,15 +242,22 @@ final class SceneLibraryStore {
         var sceneIDs: [String] = []
         var playback: Playback?
     }
+    struct UserStack: Codable, Equatable, Sendable {
+        var id: String = UUID().uuidString
+        var name: String
+        var sceneIDs: [String] = []
+        var representativeID: String?
+    }
     struct Catalog: Codable, Equatable {
         var version: Int = SceneLibraryStore.catalogVersion
         var entries: [Entry] = []
         var sources: [SourceRoot] = []
         var favorites: Set<String> = []
         var recent: [String: Date] = [:]
+        var stacks: [UserStack] = []
         var collections: [Collection] = []
         init() {}
-        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, collections }
+        enum CodingKeys: String, CodingKey { case version, entries, sources, favorites, recent, stacks, collections }
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
@@ -246,25 +265,50 @@ final class SceneLibraryStore {
             sources = try values.decodeIfPresent([SourceRoot].self, forKey: .sources) ?? []
             favorites = try values.decode(Set<String>.self, forKey: .favorites)
             recent = try values.decode([String: Date].self, forKey: .recent)
+            stacks = try values.decodeIfPresent([UserStack].self, forKey: .stacks) ?? []
             collections = try values.decodeIfPresent([Collection].self, forKey: .collections) ?? []
         }
     }
 
     private(set) var catalog = Catalog()
+    /// The catalog as this store last read or wrote it; a save replays only the change from here.
+    private var base = Catalog()
     let file: URL
 
-    init(file: URL) throws {
-        self.file = file
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
-        guard size <= Self.maxIndexBytes else { throw failure("The Library index is too large.") }
-        let decoded = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: file))
-        guard (1...Self.catalogVersion).contains(decoded.version) else {
-            throw failure("This Library index was written by a newer Idlesse version.")
+    var usesSQLiteCatalog: Bool {
+        guard !Self.forceJSONBackend else { return false }
+        return (try? SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)) == true
+    }
+    var sqliteDatabaseURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).database }
+    var backendSelectorURL: URL { SceneLibrarySQLiteCatalog.paths(for: file).selector }
+
+    init(file requestedFile: URL) throws {
+        self.file = Self.effectiveIndexURL(requestedFile)
+        let hasSelector: Bool
+        if Self.forceJSONBackend {
+            hasSelector = false
+        } else {
+            hasSelector = try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: self.file)
         }
+        guard hasSelector || FileManager.default.fileExists(atPath: self.file.path) else { return }
+        // A selected SQLite catalog may need an in-place schema upgrade. Initial
+        // open therefore takes the same cross-process lock as every other writer.
+        let (decoded, _) = try withIndexLock { try readIndex() }
         try validateCatalog(decoded)
         catalog = decoded
+        base = decoded
+    }
+
+    /// Picks up changes another process wrote, dropping nothing this store has not saved.
+    func reloadFromDisk() throws {
+        let (disk, _) = try withIndexLock { try readIndex() }
+        try validateCatalog(disk)
+        catalog = disk
+        base = disk
+    }
+
+    func debugExportData() throws -> Data {
+        try SceneLibrarySQLiteCatalog.deterministicDebugExport(catalog)
     }
 
     /// Compatibility resolver. Call `access(_:)` while reading source-backed media.
@@ -397,6 +441,7 @@ final class SceneLibraryStore {
         next.favorites.subtract(removed)
         for entryID in removed { next.recent.removeValue(forKey: entryID) }
         for index in next.collections.indices { next.collections[index].sceneIDs.removeAll { removed.contains($0) } }
+        Self.pruneStacks(&next.stacks, removing: removed)
         try save(next)
     }
 
@@ -419,6 +464,52 @@ final class SceneLibraryStore {
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
         for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
+        Self.pruneStacks(&next.stacks, removing: [id])
+        try save(next)
+    }
+    @discardableResult func createStack(name: String, sceneIDs: [String], representativeID: String? = nil) throws -> UserStack {
+        let stack = UserStack(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                              sceneIDs: sceneIDs, representativeID: representativeID)
+        var next = catalog
+        next.stacks.append(stack)
+        try save(next)
+        return stack
+    }
+    func renameStack(_ id: String, name: String) throws {
+        var next = catalog
+        guard let index = next.stacks.firstIndex(where: { $0.id == id }) else { throw failure("Stack no longer exists.") }
+        next.stacks[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        try save(next)
+    }
+    func removeStack(_ id: String) throws {
+        var next = catalog
+        next.stacks.removeAll { $0.id == id }
+        try save(next)
+    }
+    func setStackRepresentative(_ id: String, entryID: String?) throws {
+        var next = catalog
+        guard let index = next.stacks.firstIndex(where: { $0.id == id }) else { throw failure("Stack no longer exists.") }
+        next.stacks[index].representativeID = entryID
+        try save(next)
+    }
+    func moveStack(_ id: String, by offset: Int) throws {
+        var next = catalog
+        guard let index = next.stacks.firstIndex(where: { $0.id == id }), [-1, 1].contains(offset) else {
+            throw failure("Select a stack.")
+        }
+        let destination = index + offset
+        guard next.stacks.indices.contains(destination) else { return }
+        next.stacks.swapAt(index, destination)
+        try save(next)
+    }
+    func moveStackScene(_ sceneID: String, in stackID: String, by offset: Int) throws {
+        var next = catalog
+        guard let stack = next.stacks.firstIndex(where: { $0.id == stackID }),
+              let index = next.stacks[stack].sceneIDs.firstIndex(of: sceneID),
+              [-1, 1].contains(offset) else { throw failure("Select a stack item.") }
+        let destination = index + offset
+        guard next.stacks[stack].sceneIDs.indices.contains(destination) else { return }
+        next.stacks[stack].sceneIDs.swapAt(index, destination)
         try save(next)
     }
     @discardableResult func createCollection(name: String) throws -> Collection {
@@ -514,7 +605,7 @@ final class SceneLibraryStore {
             let fallback = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
             result.append(Entry(id: UUID().uuidString,
                 title: Self.bounded(draft.title ?? fallback, bytes: 1024),
-                catalogID: draft.catalogID, sourceID: sourceID, relativeMediaPath: path,
+                catalogID: draft.catalogID, groupID: draft.groupID, sourceID: sourceID, relativeMediaPath: path,
                 relativePosterPath: poster, series: draft.series, character: draft.character,
                 variant: draft.variant, tags: draft.tags, mediaType: draft.mediaType,
                 width: draft.width, height: draft.height, fps: draft.fps,
@@ -590,6 +681,7 @@ final class SceneLibraryStore {
             guard !entry.id.isEmpty, entry.id.utf8.count <= 128,
                   !entry.title.isEmpty, entry.title.utf8.count <= 1024,
                   entry.catalogID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
+                  entry.groupID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
                   entry.series.map({ $0.utf8.count <= 512 }) ?? true,
                   entry.character.map({ $0.utf8.count <= 512 }) ?? true,
                   entry.variant.map({ $0.utf8.count <= 512 }) ?? true,
@@ -604,7 +696,7 @@ final class SceneLibraryStore {
             if let bookmark = entry.bookmark {
                 guard entry.availability == .present, bookmark.count <= Self.maxBookmarkBytes,
                       entry.sourceID == nil, entry.relativeMediaPath == nil, entry.relativePosterPath == nil,
-                      entry.observation == nil else {
+                      entry.groupID == nil, entry.observation == nil else {
                     throw failure("A Library entry mixes individual and Source references.")
                 }
             } else {
@@ -620,7 +712,39 @@ final class SceneLibraryStore {
                 }
             }
         }
+        try validateStacks(value)
         try validateCollections(value)
+    }
+
+    private func validateStacks(_ value: Catalog) throws {
+        let entryIDs = Set(value.entries.map(\.id))
+        guard value.stacks.count <= 128,
+              Set(value.stacks.map(\.id)).count == value.stacks.count,
+              Set(value.stacks.map { $0.name.lowercased() }).count == value.stacks.count else {
+            throw failure("Use unique stack names, with at most 128 stacks.")
+        }
+        var claimed = Set<String>()
+        for stack in value.stacks {
+            guard !stack.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  stack.name.utf8.count <= 120, !stack.id.isEmpty, stack.id.utf8.count <= 128,
+                  (2...256).contains(stack.sceneIDs.count), Set(stack.sceneIDs).count == stack.sceneIDs.count,
+                  stack.sceneIDs.allSatisfy({ $0.utf8.count <= 128 && entryIDs.contains($0) }),
+                  stack.sceneIDs.allSatisfy({ claimed.insert($0).inserted }),
+                  stack.representativeID.map({ stack.sceneIDs.contains($0) }) ?? true else {
+                throw failure("Stacks need 2–256 unique Library items, exclusive membership, and an optional representative from the stack.")
+            }
+        }
+    }
+
+    static func pruneStacks(_ stacks: inout [UserStack], removing removed: Set<String>) {
+        guard !removed.isEmpty else { return }
+        for index in stacks.indices {
+            stacks[index].sceneIDs.removeAll { removed.contains($0) }
+            if let representative = stacks[index].representativeID, removed.contains(representative) {
+                stacks[index].representativeID = nil
+            }
+        }
+        stacks.removeAll { $0.sceneIDs.count < 2 }
     }
 
     private func validateCollections(_ value: Catalog) throws {
@@ -650,15 +774,71 @@ final class SceneLibraryStore {
     /// Internal transactional hook used by reconciliation and the durable backend.
     func commitCatalog(_ proposed: Catalog) throws { try save(proposed) }
 
-    private func save(_ proposed: Catalog) throws {
-        var next = proposed
-        next.version = Self.catalogVersion
-        try validateCatalog(next)
-        let data = try JSONEncoder().encode(next)
-        guard data.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
-        catalog = next
+    /// A reviewed operation can compare its basis against the current selected catalog
+    /// while holding the same exclusive lock that protects the eventual write.
+    func commitCatalog(_ proposed: Catalog, requiringCurrent condition: @escaping (Catalog) -> Bool,
+                       failureMessage: String) throws {
+        try save(proposed, requiringCurrent: condition, failureMessage: failureMessage)
+    }
+
+    private func save(_ proposed: Catalog, requiringCurrent condition: ((Catalog) -> Bool)? = nil,
+                      failureMessage: String = "The Library changed before this operation could be applied.") throws {
+        try withIndexLock {
+            let selectorActive: Bool
+            if Self.forceJSONBackend {
+                selectorActive = false
+            } else {
+                selectorActive = try SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)
+            }
+            let (disk, diskData) = try readIndex()
+            // Any selected backend must decode, version-check and semantically validate
+            // before this process is allowed to overwrite durable state.
+            try validateCatalog(disk)
+            if let condition, !condition(disk) { throw failure(failureMessage) }
+            var next = disk == base ? proposed : Self.rebase(proposed, from: base, onto: disk)
+            next.version = Self.catalogVersion
+            try validateCatalog(next)
+
+            let encodedNext = try JSONEncoder().encode(next)
+            let kept = Set(next.entries.map(\.id))
+            let removed = disk.entries.filter { !kept.contains($0.id) }
+            if !removed.isEmpty {
+                let evidence: Data
+                if let diskData {
+                    evidence = diskData
+                } else {
+                    evidence = try JSONEncoder().encode(disk)
+                }
+                try journalRemoval(removed, previous: disk, previousData: evidence)
+            }
+
+            if selectorActive {
+                try SceneLibrarySQLiteCatalog.applyCatalogDelta(current: disk, next: next, for: file)
+            } else if Self.forceJSONBackend {
+                guard encodedNext.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+                try writeIndexData(encodedNext)
+            } else {
+                // The first mutation activates SQLite. A brand-new Library gets an
+                // exact empty JSON recovery snapshot before candidate construction.
+                if diskData == nil {
+                    let snapshot = try JSONEncoder().encode(disk)
+                    guard snapshot.count <= Self.maxIndexBytes else { throw failure("The Library index is full.") }
+                    try writeIndexData(snapshot)
+                }
+                do {
+                    try SceneLibrarySQLiteCatalog.migrate(disk, fromJSON: file)
+                    try SceneLibrarySQLiteCatalog.applyCatalogDelta(current: disk, next: next, for: file)
+                } catch {
+                    // Until a selector exists JSON is still the sole authority, so a
+                    // failed candidate migration may safely defer without dual-writing.
+                    if (try? SceneLibrarySQLiteCatalog.hasSQLiteSelector(for: file)) == true { throw error }
+                    guard encodedNext.count <= Self.maxIndexBytes else { throw error }
+                    try writeIndexData(encodedNext)
+                }
+            }
+            catalog = next
+            base = next
+        }
     }
 
     private static func validMetadata(_ value: [String: String]?, maxPairs: Int) -> Bool {
