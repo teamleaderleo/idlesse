@@ -13,6 +13,13 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private weak var statusChooseItem: NSMenuItem?
     private weak var statusNextItem: NSMenuItem?
     private weak var statusPreviousItem: NSMenuItem?
+    private struct StatusSnapshot: Equatable {
+        let running: Bool
+        let paused: Bool
+        let canCycle: Bool
+        let title: String?
+    }
+    private var lastStatusSnapshot: StatusSnapshot?
     private var allowingWindowClose = false
     private let wallpaper = WallpaperController()
     private let comfort = DesktopComfortController()
@@ -342,15 +349,21 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
     private func refreshStatusItem() {
         let running = wallpaper.isRunning
-        statusPauseItem?.title = wallpaper.isPausedByUser ? "Resume Wallpaper" : "Pause Wallpaper"
-        statusPauseItem?.isEnabled = running
-        statusWallpaperItem?.title = running ? "Wallpaper: Running" : "Wallpaper: Stopped"
+        let snapshot = StatusSnapshot(running: running, paused: wallpaper.isPausedByUser,
+                                      canCycle: running && (library?.hasCycleCandidates == true),
+                                      title: wallpaper.currentTitle)
+        guard statusItem != nil, snapshot != lastStatusSnapshot else { return }
+        lastStatusSnapshot = snapshot
+        statusPauseItem?.title = snapshot.paused ? "Resume Wallpaper" : "Pause Wallpaper"
+        statusPauseItem?.isEnabled = snapshot.running
+        statusWallpaperItem?.title = snapshot.running
+            ? "Wallpaper: \(snapshot.title ?? "Running")" : "Wallpaper: Stopped"
         statusWallpaperItem?.isEnabled = false
         statusChooseItem?.isEnabled = true
-        let canCycle = running && (library?.hasCycleCandidates == true)
-        statusNextItem?.isEnabled = canCycle
-        statusPreviousItem?.isEnabled = canCycle
-        statusItem?.button?.toolTip = running ? "Idlesse — Wallpaper running" : "Idlesse — Ready"
+        statusNextItem?.isEnabled = snapshot.canCycle
+        statusPreviousItem?.isEnabled = snapshot.canCycle
+        statusItem?.button?.toolTip = snapshot.running
+            ? "Idlesse — \(snapshot.title ?? "Wallpaper running")" : "Idlesse — Ready"
     }
     @objc private func applyRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
