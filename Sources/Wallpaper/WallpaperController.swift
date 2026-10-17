@@ -52,6 +52,7 @@ final class WallpaperSurface {
     let usesSharedVideoHub: Bool
     let videoHub: SharedVideoHub?
     let sourceURL: URL?
+    let requestedVariantID: UUID?
     private(set) var sceneDescriptor: SceneDescriptor
     private let renderer: SceneRenderer
     private let securityScope: WallpaperScopeLease?
@@ -69,10 +70,12 @@ final class WallpaperSurface {
     }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, sharedHub: SharedVideoHub? = nil,
-         securityScope: WallpaperScopeLease? = nil, sourceURL: URL? = nil, onError: @escaping (String) -> Void) throws {
+         securityScope: WallpaperScopeLease? = nil, sourceURL: URL? = nil, requestedVariantID: UUID? = nil,
+         onError: @escaping (String) -> Void) throws {
         displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
         self.videoHub = sharedHub
         self.sourceURL = sourceURL?.standardizedFileURL
+        self.requestedVariantID = requestedVariantID
         self.sceneDescriptor = playable
         self.usesSharedVideoHub = sharedHub != nil
         self.securityScope = securityScope
@@ -244,7 +247,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private(set) var pausedByUser = false
     private var playable: SceneDescriptor?
     private var activeSharedVideoHub: SharedVideoHub?
+    private var auxiliarySharedVideoHubs: [SharedVideoHub] = []
     private var retiringSharedVideoHub: SharedVideoHub?
+    private var retiringAuxiliarySharedVideoHubs: [SharedVideoHub] = []
     // Only the interactive host persists state; smoke/qualification controllers stay isolated.
     var persistsSelection = false
     var resumeDefaults = UserDefaults.standard
@@ -392,22 +397,26 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         return
                     }
                     var replacement: WallpaperSurface?
+                    var replacementHub: SharedVideoHub?
                     var adopted = false
-                    defer { if !adopted { replacement?.close() } }
+                    defer { if !adopted { replacement?.close(); replacementHub?.close() } }
                     if self.selectedURL != nil, self.playable?.canvas != .desktopSpan, !self.suspended,
                        let screen = NSScreen.screens.first(where: {
                            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == displayID
                        }) {
                         var preparationError: String?
-                        let synchronizedSurface = variantID == nil ? self.surfaces.first {
-                            $0.sourceURL == scopedURL.standardizedFileURL && $0.videoHub != nil
-                        } : nil
+                        let synchronizedSurface = self.surfaces.first {
+                            $0.sourceURL == scopedURL.standardizedFileURL &&
+                                $0.requestedVariantID == variantID && $0.videoHub != nil
+                        }
                         let displayScene = synchronizedSurface?.sceneDescriptor ?? candidate
                         let hub = synchronizedSurface?.videoHub ?? (candidate.allNodes.contains { $0.kind == .video } ?
                             SharedVideoHub(scene: candidate, clock: self.clock) { [weak self] message in self?.showError(message) } : nil)
+                        replacementHub = synchronizedSurface == nil ? hub : nil
                         if synchronizedSurface == nil { hub?.setPaused(false) }
                         let surface = try WallpaperSurface(screen: screen, playable: displayScene, clock: self.clock,
-                            sharedHub: hub, securityScope: WallpaperScopeLease(scopedURL), sourceURL: scopedURL) { [weak self] message in
+                            sharedHub: hub, securityScope: WallpaperScopeLease(scopedURL), sourceURL: scopedURL,
+                            requestedVariantID: variantID) { [weak self] message in
                             guard let self, self.generation == assignmentGeneration,
                                   self.displayAssignmentRequests[displayID] == assignmentRequest else { return }
                             preparationError = message
@@ -454,13 +463,22 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                         self.surfaces.removeAll { $0.displayID == displayID }
                         self.surfaces.append(replacement)
                         adopted = true
+                        if let replacementHub, replacementHub !== self.activeSharedVideoHub,
+                           !self.auxiliarySharedVideoHubs.contains(where: { $0 === replacementHub }) {
+                            self.auxiliarySharedVideoHubs.append(replacementHub)
+                        }
                         replacement.setMuted(!self.soundEnabled)
                         replacement.setPaused(self.shouldPause)
                         if self.presentsWindows { replacement.show(paused: self.shouldPause) }
                         previous.forEach { $0.close() }
-                        if let active = self.activeSharedVideoHub, !self.surfaces.contains(where: { $0.videoHub === active }) {
-                            self.activeSharedVideoHub?.close()
-                            self.activeSharedVideoHub = nil
+                        let liveHubIDs = Set(self.surfaces.compactMap(\.videoHub).map(ObjectIdentifier.init))
+                        if let active = self.activeSharedVideoHub, !liveHubIDs.contains(ObjectIdentifier(active)) {
+                            active.close(); self.activeSharedVideoHub = nil
+                        }
+                        let oldAuxiliary = self.auxiliarySharedVideoHubs
+                        self.auxiliarySharedVideoHubs = oldAuxiliary.filter {
+                            if liveHubIDs.contains(ObjectIdentifier($0)) { return true }
+                            $0.close(); return false
                         }
                         if let scene = self.playable, let sourceURL = self.selectedURL {
                             self.syncSystemBackdrop(scene: scene, sourceURL: sourceURL,
@@ -1296,14 +1314,15 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     candidateClock.audioEnabled = reloading && self.clock.audioEnabled && playable.usesAudio
                 }
                 var preparationError: String?
-                let (replacement, newHub) = self.suspended ? ([], nil) :
-                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request, sourceURL: url, onError: { [weak self] message in
+                let (replacement, newHub, newAuxiliaryHubs) = self.suspended ? ([], nil, [SharedVideoHub]()) :
+                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request,
+                        sourceURL: url, canonical: authored, requestedVariantID: requestedVariant, onError: { [weak self] message in
                         if adopted { self?.stop(); self?.showError(message) }
                         else { preparationError = message }
                     })
                 let preparedGeneration = self.surfaceGeneration
                 defer {
-                    if !adopted { replacement.forEach { $0.close() }; newHub?.close() }
+                    if !adopted { replacement.forEach { $0.close() }; newHub?.close(); newAuxiliaryHubs.forEach { $0.close() } }
                 }
                 if self.presentsWindows && !replacement.isEmpty {
                     replacement.forEach { $0.videoHub?.setMuted(true); $0.videoHub?.setPaused(false) }
@@ -1327,9 +1346,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     self.retiring = self.surfaces
                     self.retiring.forEach { $0.setPaused(true) }
                     self.retiringSharedVideoHub = self.activeSharedVideoHub
+                    self.retiringAuxiliarySharedVideoHubs = self.auxiliarySharedVideoHubs
                     self.retiringURL = self.scopeStarted ? self.selectedURL : nil
                     self.surfaces = []
                     self.activeSharedVideoHub = nil
+                    self.auxiliarySharedVideoHubs = []
                 } else {
                     self.releaseSurfaces()
                     if self.scopeStarted { self.selectedURL?.stopAccessingSecurityScopedResource() }
@@ -1360,6 +1381,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.coverageMonitor.reset()
                 self.surfaces = replacement
                 self.activeSharedVideoHub = newHub
+                self.auxiliarySharedVideoHubs = newAuxiliaryHubs
                 self.applySharedHubPause()
                 replacement.forEach { $0.setPaused(self.shouldPause) }
                 self.surfaces.forEach { $0.videoHub?.setMuted(!self.soundEnabled) }
@@ -1411,70 +1433,81 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int, sourceURL: URL? = nil, onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
+    private struct DisplaySceneKey: Hashable {
+        var sourceURL: URL?
+        var variantID: UUID?
+    }
+
+    private struct DisplayScene {
+        var scene: SceneDescriptor
+        var key: DisplaySceneKey
+        var scope: WallpaperScopeLease?
+    }
+
+    /// Both live surfaces and native stills resolve against the same canonical
+    /// base. An explicit nil variant means Default, rather than inheriting the
+    /// effective variant currently playing on the main display.
+    private func resolveDisplayScene(for displayID: UInt32, playable: SceneDescriptor,
+                                     canonical: SceneDescriptor, sourceURL: URL?, variantID: UUID?) -> DisplayScene {
+        let base = DisplayScene(scene: playable,
+            key: .init(sourceURL: sourceURL?.standardizedFileURL, variantID: variantID))
+        guard !sameWallpaperOnAllDisplays, playable.canvas != .desktopSpan,
+              let overrideURL = explicitDisplayURL(for: displayID)?.standardizedFileURL else { return base }
+        let requested = explicitDisplayVariantID(for: displayID)
+        if overrideURL == base.key.sourceURL {
+            return DisplayScene(scene: canonical.applyingVariant(id: requested).scene,
+                key: .init(sourceURL: overrideURL, variantID: requested))
+        }
+        let lease = WallpaperScopeLease(overrideURL)
+        guard let authored = try? LocalSceneSource.read(overrideURL), authored.canvas != .desktopSpan else { return base }
+        return DisplayScene(scene: authored.applyingVariant(id: requested).scene,
+            key: .init(sourceURL: overrideURL, variantID: requested), scope: lease)
+    }
+
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int,
+                              sourceURL: URL? = nil, canonical: SceneDescriptor? = nil,
+                              requestedVariantID: UUID? = nil,
+                              onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?, auxiliaryHubs: [SharedVideoHub]) {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
-        let hasVideo = playable.allNodes.contains { $0.kind == .video }
-        let sharesSceneAcrossDisplays = sameWallpaperOnAllDisplays || playable.canvas == .desktopSpan
-        let needsMetal = WallpaperSurface.usesMetal(playable, menuAnimation: WallpaperSurface.liveMenuStripEnabled)
-        let sharedHub = (hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
+        let reportError: (String) -> Void = { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
             if let onError { onError(message); return }
             self.stop()
             self.showError(message)
-        } : nil
-        var overrideGroups: [String: (SceneDescriptor, SharedVideoHub?)] = [:]
-        let authoredBase = canonicalPlayable ?? playable
+        }
+        let baseURL = sourceURL ?? selectedURL
+        let baseKey = DisplaySceneKey(sourceURL: baseURL?.standardizedFileURL, variantID: requestedVariantID)
+        let authoredBase = canonical ?? canonicalPlayable ?? playable
+        var groups: [DisplaySceneKey: (scene: SceneDescriptor, hub: SharedVideoHub?)] = [:]
         do {
             for screen in NSScreen.screens {
-                var screenPlayable = playable
-                var screenSource = sourceURL ?? selectedURL
-                var screenHub = sharedHub
-                var screenScope: WallpaperScopeLease?
-                if !sharesSceneAcrossDisplays {
-                    let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
-                    let overrideVariantID = explicitDisplayVariantID(for: displayID)
-                    if let overrideURL = explicitDisplayURL(for: displayID), overrideURL != selectedURL {
-                        let lease = WallpaperScopeLease(overrideURL)
-                        if let resolved = try? LocalSceneSource.read(overrideURL) {
-                            if resolved.canvas == .desktopSpan {
-                                Self.appendLine("Idlesse-display display=\(Self.persistentDisplayIdentifier(displayID)) action=ignore-saved-desktop-span")
-                            } else {
-                                let key = overrideURL.standardizedFileURL.path + "#" + (overrideVariantID?.uuidString ?? "default")
-                                if let group = overrideGroups[key] {
-                                    screenPlayable = group.0
-                                    screenHub = group.1
-                                } else {
-                                    screenPlayable = resolved.applyingVariant(id: overrideVariantID).scene
-                                    screenHub = screenPlayable.allNodes.contains { $0.kind == .video } ? SharedVideoHub(scene: screenPlayable, clock: clock) { [weak self] message in self?.showError(message) } : nil
-                                    overrideGroups[key] = (screenPlayable, screenHub)
-                                }
-                                screenSource = overrideURL
-                                screenScope = lease
-                            }
-                        }
-                    } else if let overrideVariantID {
-                        screenPlayable = authoredBase.applyingVariant(id: overrideVariantID).scene
-                    }
+                let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+                let selection = resolveDisplayScene(for: displayID, playable: playable,
+                    canonical: authoredBase, sourceURL: baseURL, variantID: requestedVariantID)
+                let group: (scene: SceneDescriptor, hub: SharedVideoHub?)
+                if let existing = groups[selection.key] {
+                    group = existing
+                } else {
+                    let needsHub = selection.scene.allNodes.contains { $0.kind == .video } &&
+                        WallpaperSurface.usesMetal(selection.scene, menuAnimation: WallpaperSurface.liveMenuStripEnabled)
+                    group = (selection.scene, needsHub ? SharedVideoHub(scene: selection.scene, clock: clock, onError: reportError) : nil)
+                    groups[selection.key] = group
                 }
                 let surface = try autoreleasepool {
-                    try WallpaperSurface(screen: screen, playable: screenPlayable, clock: clock,
-                        sharedHub: screenHub, securityScope: screenScope, sourceURL: screenSource) { [weak self] message in
-                        guard let self, self.generation == request,
-                              self.surfaceGeneration == surfaceRequest else { return }
-                        if let onError { onError(message); return }
-                        self.stop()
-                        self.showError(message)
-                    }
+                    try WallpaperSurface(screen: screen, playable: group.scene, clock: clock,
+                        sharedHub: group.hub, securityScope: selection.scope, sourceURL: selection.key.sourceURL,
+                        requestedVariantID: selection.key.variantID, onError: reportError)
                 }
                 configureDesktopInteraction(surface)
                 result.append(surface)
             }
-            return (result, sharedHub)
+            let baseHub = groups[baseKey]?.hub
+            return (result, baseHub, groups.values.compactMap(\.hub).filter { $0 !== baseHub })
         } catch {
-            sharedHub?.close()
+            groups.values.forEach { $0.hub?.close() }
             result.forEach { $0.close() }
             throw error
         }
@@ -1513,6 +1546,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int, onlyDisplayID: UInt32? = nil) {
         guard persistsSelection && presentsWindows else { return }
         backdropTask?.cancel()
+        let canonical = canonicalPlayable ?? scene
+        let variantID = requestedVariantID
         backdropTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let scoped = sourceURL.startAccessingSecurityScopedResource()
@@ -1526,24 +1561,12 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 for screen in screens {
                     try Task.checkCancellation()
+                    guard self.generation == request else { return }
                     rememberOriginalBackdrop(for: screen)
                     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
-                    var backdropScene = scene
-                    let authoredBase = self.canonicalPlayable ?? scene
-                    var displayScope: WallpaperScopeLease?
-                    if !sameWallpaperOnAllDisplays, scene.canvas != .desktopSpan,
-                       let overrideURL = explicitDisplayURL(for: displayID) {
-                        let variantID = explicitDisplayVariantID(for: displayID)
-                        if overrideURL != sourceURL {
-                            let lease = WallpaperScopeLease(overrideURL)
-                            if let resolved = try? LocalSceneSource.read(overrideURL), resolved.canvas != .desktopSpan {
-                                backdropScene = resolved.applyingVariant(id: variantID).scene
-                                displayScope = lease
-                            }
-                        } else {
-                            backdropScene = authoredBase.applyingVariant(id: variantID).scene
-                        }
-                    }
+                    let selection = self.resolveDisplayScene(for: displayID, playable: scene,
+                        canonical: canonical, sourceURL: sourceURL, variantID: variantID)
+                    let backdropScene = selection.scene
                     // Native backing resolution (within probe limits) so the still
                     // stays sharp in Mission Control, lock screen and Spaces.
                     let scale = max(1, screen.backingScaleFactor)
@@ -1575,7 +1598,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                             provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent),
                           let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9])
                     else { throw SceneError.invalid("Could not prepare the system wallpaper still.") }
-                    withExtendedLifetime(displayScope) {}
+                    withExtendedLifetime(selection.scope) {}
                     let slotKey = "wallpaperBackdropSlot.\(displayID)"
                     let slot = 1 - min(1, max(0, UserDefaults.standard.integer(forKey: slotKey)))
                     let destination = root.appendingPathComponent("display-\(displayID)-\(slot).jpg")
@@ -1656,9 +1679,11 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         // Release first on display changes to avoid temporarily doubling players.
         releaseSurfaces()
         do {
-            let (newSurfaces, newHub) = try makeSurfaces(playable: playable, clock: clock, request: generation)
+            let (newSurfaces, newHub, newAuxiliaryHubs) = try makeSurfaces(playable: playable, clock: clock, request: generation,
+                canonical: canonicalPlayable, requestedVariantID: requestedVariantID)
             surfaces = newSurfaces
             activeSharedVideoHub = newHub
+            auxiliarySharedVideoHubs = newAuxiliaryHubs
             applySharedHubPause()
             surfaces.forEach { $0.setPaused(shouldPause) }
             surfaces.forEach { $0.videoHub?.setMuted(!soundEnabled) }
@@ -1732,6 +1757,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         clock.setPaused(true)
         activeSharedVideoHub?.close()
         activeSharedVideoHub = nil
+        auxiliarySharedVideoHubs.forEach { $0.close() }
+        auxiliarySharedVideoHubs.removeAll()
         generation += 1
         loadTask?.cancel()
         loadTask = nil
@@ -1763,6 +1790,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         coverageMonitor.reset()
         activeSharedVideoHub?.close()
         activeSharedVideoHub = nil
+        auxiliarySharedVideoHubs.forEach { $0.close() }
+        auxiliarySharedVideoHubs.removeAll()
     }
 
     static func smokeTargetedAssignment(imageURL: URL) throws {
@@ -1781,6 +1810,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let initial = try controller.makeSurfaces(playable: scene, clock: controller.clock, request: controller.generation)
         controller.surfaces = initial.surfaces
         controller.activeSharedVideoHub = initial.hub
+        controller.auxiliarySharedVideoHubs = initial.auxiliaryHubs
         defer { controller.releaseSurfaces() }
         guard let target = initial.surfaces.first, initial.surfaces.count > 1 else {
             throw SceneError.invalid("Targeted assignment check needs two connected displays")
@@ -1830,9 +1860,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         let scene = SceneDescriptor(title: "Transition", assetURL: imageURL, kind: .image)
         controller.retiring = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0).surfaces
         let old = controller.retiring
-        let (smokeSurfaces1, smokeHub1) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        let (smokeSurfaces1, smokeHub1, smokeAux1) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
         controller.surfaces = smokeSurfaces1
         controller.activeSharedVideoHub = smokeHub1
+        controller.auxiliarySharedVideoHubs = smokeAux1
         if let surface = controller.surfaces.first {
             let originalView = surface.window.contentView
             var clicks = 0
@@ -1866,9 +1897,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         for style in TransitionStyle.allCases {
             controller.transitionStyle = style
             controller.retiring = controller.surfaces
-            let (styledSurfaces, styledHub) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+            let (styledSurfaces, styledHub, styledAux) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
             controller.surfaces = styledSurfaces
             controller.activeSharedVideoHub = styledHub
+            controller.auxiliarySharedVideoHubs = styledAux
             controller.surfaces.forEach { $0.window.alphaValue = 0 }
             controller.beginTransition()
             let styleDeadline = Date(timeIntervalSinceNow: 2)
@@ -1882,9 +1914,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         controller.retiring = controller.surfaces
         let interrupted = controller.retiring
-        let (smokeSurfaces2, smokeHub2) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
+        let (smokeSurfaces2, smokeHub2, smokeAux2) = try controller.makeSurfaces(playable: scene, clock: SceneClock(), request: 0)
         controller.surfaces = smokeSurfaces2
         controller.activeSharedVideoHub = smokeHub2
+        controller.auxiliarySharedVideoHubs = smokeAux2
         controller.beginTransition()
         controller.setDimmedForBedtime(true)
         precondition(controller.transitionTimer == nil && controller.retiring.isEmpty)
@@ -1970,6 +2003,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
         retiring.forEach { $0.close() }; retiring.removeAll()
         retiringSharedVideoHub?.close(); retiringSharedVideoHub = nil
+        retiringAuxiliarySharedVideoHubs.forEach { $0.close() }
+        retiringAuxiliarySharedVideoHubs.removeAll()
         retiringURL?.stopAccessingSecurityScopedResource(); retiringURL = nil
     }
 
