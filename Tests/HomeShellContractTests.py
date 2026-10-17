@@ -28,7 +28,6 @@ for token in [
     "NSApp.unhide(nil)",
     'NSStatusItem.variableLength',
     'button.title = " Idlesse"',
-    'Choose Wallpaper…',
     'statusNextItem',
     'statusPreviousItem',
     'statusRestoreItem',
@@ -36,6 +35,10 @@ for token in [
     'guard statusItem != nil, snapshot != lastStatusSnapshot else { return }',
 ]:
     assert token in main, token
+assert 'wallpaper.ownsStatusItem = false' in main
+assert 'wallpaper.onShowPreview' not in main
+assert 'private func showPreview()' not in main
+assert 'Choose Wallpaper…' not in main
 assert 'wallpaperMenu.addItem(withTitle: "Library…", action: #selector(openLibraryFromStatusItem)' in main
 
 assert "import ServiceManagement" in settings
@@ -45,6 +48,9 @@ assert "SMAppService.mainApp.unregister()" in settings
 assert "Approval required in System Settings" in settings
 wallpaper = (root / "Sources/Wallpaper/WallpaperController.swift").read_text()
 assert "currentTitle: String?" in wallpaper
+assert "var ownsStatusItem = false" in wallpaper
+assert "var onShowPreview" not in wallpaper
+assert "private func showPreview()" not in wallpaper
 
 library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
 assert "panel.canChooseDirectories = true" in library
