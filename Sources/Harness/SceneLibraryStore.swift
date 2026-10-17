@@ -7,7 +7,7 @@ final class SceneLibraryStore {
         let catalogID: String
     }
 
-    static let catalogVersion = 2
+    static let catalogVersion = 3
     static let maxEntries = maxIndividualEntries // Compatibility alias: individually bookmarked entries.
     /// Matches the Source bound. A bookmark is under a kilobyte in practice, so
     /// the index-size cap below, not this count, is what bounds memory.
