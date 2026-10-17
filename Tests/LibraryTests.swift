@@ -43,6 +43,28 @@ import Foundation
         precondition(shuffled.next(["only"], shuffle: true) == "only")
         precondition(shuffled.next(["only"], shuffle: true) == "only")
 
+        let selections: [SceneLibraryStore.SceneSelection] = [
+            .init(sceneID: "same-scene", variantID: UUID()),
+            .init(sceneID: "same-scene"),
+            .init(sceneID: "same-scene", variantID: UUID())
+        ]
+        var selectionOrder = SceneSelectionRotationQueue()
+        let orderedSelections = (0..<7).compactMap { _ in selectionOrder.next(selections, shuffle: false) }
+        precondition(orderedSelections == selections + selections + [selections[0]],
+                     "Ordered rotation must distinguish variants of one scene")
+        var selectionShuffle = SceneSelectionRotationQueue()
+        var previousSelection: SceneLibraryStore.SceneSelection?
+        for _ in 0..<100 {
+            let cycle = (0..<3).compactMap { _ in selectionShuffle.next(selections, shuffle: true) }
+            precondition(Set(cycle) == Set(selections), "Shuffle must exhaust every full selection")
+            precondition(cycle.first != previousSelection, "Shuffle must avoid repeating the last full selection")
+            previousSelection = cycle.last
+        }
+        let replacement = SceneLibraryStore.SceneSelection(sceneID: "same-scene", variantID: UUID())
+        precondition(selectionOrder.next([replacement], shuffle: false) == replacement,
+                     "A variant-only edit must discard the previous rotation bag")
+        precondition(selectionOrder.next([], shuffle: false) == nil)
+
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("idlesse-library-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
