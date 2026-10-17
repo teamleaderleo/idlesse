@@ -31,6 +31,8 @@ for token in [
     'Choose Wallpaper…',
     'statusNextItem',
     'statusPreviousItem',
+    'private struct StatusSnapshot: Equatable',
+    'guard statusItem != nil, snapshot != lastStatusSnapshot else { return }',
 ]:
     assert token in main, token
 assert 'wallpaperMenu.addItem(withTitle: "Library…", action: #selector(openLibraryFromStatusItem)' in main
@@ -40,6 +42,8 @@ assert "Start Idlesse at login" in settings
 assert "SMAppService.mainApp.register()" in settings
 assert "SMAppService.mainApp.unregister()" in settings
 assert "Approval required in System Settings" in settings
+wallpaper = (root / "Sources/Wallpaper/WallpaperController.swift").read_text()
+assert "currentTitle: String?" in wallpaper
 
 library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
 assert "panel.canChooseDirectories = true" in library

@@ -764,6 +764,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
     var isRunning: Bool { selectedURL != nil }
     var isPausedByUser: Bool { pausedByUser }
+    var currentTitle: String? {
+        playable?.title ?? selectedURL?.deletingPathExtension().lastPathComponent
+    }
     private var suspended: Bool { asleep || systemAsleep || sessionInactive }
     /// Set by AmbientModesController while a scheduled scene is showing so the
     /// bedtime shade doesn't pause the night scene it just switched to.
