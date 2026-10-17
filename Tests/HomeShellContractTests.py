@@ -18,6 +18,11 @@ main = (root / "Sources/Harness/main.swift").read_text()
 assert "library.hostWindow = appSettings.window" not in main
 assert "library.hostWindow = library.window" in main
 
+library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
+assert "panel.canChooseDirectories = true" in library
+assert "Folders become rescan-able Library Sources" in library
+assert "self.importSource(directory)" in library
+
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [
     "NSSplitViewController()",

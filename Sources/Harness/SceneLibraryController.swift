@@ -1556,11 +1556,28 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.item]
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.message = "Add references to scenes or media. Originals stay in their current folder."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.message = "Choose media files or one wallpaper folder. Folders become rescan-able Library Sources; originals stay where they are."
         panel.beginSheetModal(for: presentationWindow!) { [weak self] response in
             guard let self, response == .OK else { return }
-            self.importScenes(panel.urls)
+            let directories = panel.urls.filter { url in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            }
+            let files = panel.urls.filter { !directories.contains($0) }
+            guard directories.count <= 1 else {
+                self.reportTask("Choose one wallpaper folder at a time, or select media files together.")
+                return
+            }
+            if let directory = directories.first {
+                self.importSource(directory)
+                if !files.isEmpty {
+                    self.reportTask("Folder import started; select additional files after it finishes.")
+                }
+            } else {
+                self.importScenes(files)
+            }
         }
     }
     private static func supportedImport(_ url: URL) -> Bool { url.isFileURL && MediaImport.supports(url) }
