@@ -34,6 +34,14 @@ assert "func sourceSummary(_ sourceID: String)" in library
 assert "updateMediaFilterTitles" in library
 assert "Videos (\\(counts.videos))" in library
 assert "let sourceName = selected.entry?.sourceID" in library
+assert "Search wallpapers, sources, or tags" in library
+assert '"Best Match", "Name A–Z"' in library
+assert '"Media Type", "Source A–Z", "Largest First"' in library
+assert "searchableText(for item: Item)" in library
+assert "entry.relativeMediaPath" in library
+assert "poster.setAccessibilityLabel(\"Preview of" in library
+assert "Preparing preview…" in library
+assert "durationSeconds" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [
