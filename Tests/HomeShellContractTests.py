@@ -35,7 +35,7 @@ assert "updateMediaFilterTitles" in library
 assert "Videos (\\(counts.videos))" in library
 assert "let sourceName = selected.entry?.sourceID" in library
 assert "Search wallpapers, sources, or tags" in library
-assert '"Best Match", "Name A–Z"' in library
+assert '"Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened", "Best Match"' in library
 assert '"Media Type", "Source A–Z", "Largest First"' in library
 assert "searchableText(for item: Item)" in library
 assert "entry.relativeMediaPath" in library

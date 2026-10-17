@@ -415,7 +415,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         search.sendsWholeSearchString = true
         filter.addItems(withTitles: ["All Wallpapers", "Included", "Imported", "Favorites", "Videos", "Interactive Scenes", "Static Images"])
         filter.target = self; filter.action = #selector(filterChanged)
-        sort.addItems(withTitles: ["Best Match", "Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened",
+        sort.addItems(withTitles: ["Name A–Z", "Recently Opened", "Name Z–A", "Oldest Opened", "Best Match",
                                    "Media Type", "Source A–Z", "Largest First"])
         sort.target = self; sort.action = #selector(filterChanged)
         sort.selectItem(at: min(Self.restoredSortMode(), sort.numberOfItems - 1))
@@ -788,15 +788,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
 
     private static func restoredSortMode() -> Int {
         guard let stored = UserDefaults.standard.object(forKey: "Idlesse.library.sortMode") as? Int else { return 0 }
-        // The first four modes predate Best Match. Preserve existing users'
-        // choices while leaving a missing preference on the relevance default.
-        switch stored {
-        case 0: return 1
-        case 1: return 2
-        case 2: return 3
-        case 3: return 4
-        default: return min(stored, 7)
-        }
+        // The first four modes are persisted by older builds. Keep their
+        // positions stable while allowing newer modes to append safely.
+        return min(max(0, stored), 7)
     }
 
     private static func mediaSortRank(_ type: String) -> Int {
@@ -1023,24 +1017,25 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
             switch sort.indexOfSelectedItem {
             case 0:
+                let order = $0.title.localizedStandardCompare($1.title)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+            case 1:
+                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                if a != b { return a > b }
+            case 2:
+                let order = $0.title.localizedStandardCompare($1.title)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedDescending
+            case 3:
+                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
+                if a != b { return a < b }
+            case 4:
                 if !query.isEmpty {
                     let a = scores[$0.id] ?? .infinity
                     let b = scores[$1.id] ?? .infinity
                     if a != b { return a < b }
                 }
-                fallthrough
-            case 1:
                 let order = $0.title.localizedStandardCompare($1.title)
                 return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
-            case 2:
-                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
-                if a != b { return a > b }
-            case 3:
-                let order = $0.title.localizedStandardCompare($1.title)
-                return order == .orderedSame ? $0.id < $1.id : order == .orderedDescending
-            case 4:
-                let a = store.catalog.recent[$0.id] ?? .distantPast, b = store.catalog.recent[$1.id] ?? .distantPast
-                if a != b { return a < b }
             case 5:
                 let a = Self.mediaSortRank(self.mediaType(for: $0)), b = Self.mediaSortRank(self.mediaType(for: $1))
                 if a != b { return a < b }
