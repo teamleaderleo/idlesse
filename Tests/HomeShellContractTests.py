@@ -17,6 +17,15 @@ assert "guard home == nil else { return }" not in install
 main = (root / "Sources/Harness/main.swift").read_text()
 assert "library.hostWindow = appSettings.window" not in main
 assert "library.hostWindow = library.window" in main
+for token in [
+    "NSStatusBar.system.statusItem",
+    "Idlesse Wallpaper",
+    "applicationShouldTerminateAfterLastWindowClosed",
+    "windowShouldClose",
+    "Show / Restore Windows",
+    "Quit Idlesse",
+]:
+    assert token in main, token
 
 library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
 assert "panel.canChooseDirectories = true" in library
