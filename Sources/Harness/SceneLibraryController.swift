@@ -105,7 +105,6 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sourceFilterID = sourceID
         setScope(.library)
     }
-
     func sourceSummary(_ sourceID: String) -> String? {
         let entries = store.catalog.entries.filter { $0.sourceID == sourceID && $0.availability == .present }
         guard !entries.isEmpty else { return nil }
