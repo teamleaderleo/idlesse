@@ -13,6 +13,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private weak var statusChooseItem: NSMenuItem?
     private weak var statusNextItem: NSMenuItem?
     private weak var statusPreviousItem: NSMenuItem?
+    private weak var statusRestoreItem: NSMenuItem?
     private struct StatusSnapshot: Equatable {
         let running: Bool
         let paused: Bool
@@ -357,13 +358,16 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         statusPauseItem?.title = snapshot.paused ? "Resume Wallpaper" : "Pause Wallpaper"
         statusPauseItem?.isEnabled = snapshot.running
         statusWallpaperItem?.title = snapshot.running
-            ? "Wallpaper: \(snapshot.title ?? "Running")" : "Wallpaper: Stopped"
+            ? "Wallpaper: \(snapshot.paused ? "Paused" : "Playing") · \(snapshot.title ?? "Wallpaper")"
+            : "Wallpaper: Stopped"
         statusWallpaperItem?.isEnabled = false
         statusChooseItem?.isEnabled = true
         statusNextItem?.isEnabled = snapshot.canCycle
         statusPreviousItem?.isEnabled = snapshot.canCycle
+        statusRestoreItem?.isEnabled = snapshot.running
         statusItem?.button?.toolTip = snapshot.running
-            ? "Idlesse — \(snapshot.title ?? "Wallpaper running")" : "Idlesse — Ready"
+            ? "Idlesse — \(snapshot.paused ? "Paused · " : "Playing · ")\(snapshot.title ?? "Wallpaper")"
+            : "Idlesse — Ready"
     }
     @objc private func applyRecent(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
@@ -636,6 +640,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         statusPreviousItem = previous
         let restore = menu.addItem(withTitle: "Show / Restore Windows", action: #selector(WallpaperController.revealDesktop), keyEquivalent: "")
         restore.target = wallpaper
+        statusRestoreItem = restore
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "Quit Idlesse", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
