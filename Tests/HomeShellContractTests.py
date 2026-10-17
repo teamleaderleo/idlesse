@@ -31,6 +31,7 @@ for token in [
     'Choose Wallpaper…',
     'statusNextItem',
     'statusPreviousItem',
+    'statusRestoreItem',
     'private struct StatusSnapshot: Equatable',
     'guard statusItem != nil, snapshot != lastStatusSnapshot else { return }',
 ]:
