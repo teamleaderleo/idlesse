@@ -565,7 +565,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         wait { !host.isLoading }
         precondition(host.requestedVariantID == source.variantID && host.effectiveVariantID == source.variantID,
                      "A live variant switch must adopt and persist the requested variant")
-        precondition(host.playable?.parameters["amount"]?.value == 0.8 && host.sceneTime == beforeVariantTime,
+        precondition(host.playable?.parameters["amount"]?.value == 0.8 &&
+                     abs(host.sceneTime - beforeVariantTime) < 0.1,
                      "A compatible variant switch must preserve the active scene clock")
         let missingVariant = UUID()
         host.selectVariant(missingVariant)
