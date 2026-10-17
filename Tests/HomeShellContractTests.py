@@ -31,6 +31,9 @@ assert "case .source(let id, _): showSource(id)" in home
 assert "sourceSummaries" in home
 assert "requestSourceThumbnail(sourceID)" in home
 assert "func sourceSummary(_ sourceID: String)" in library
+assert "updateMediaFilterTitles" in library
+assert "Videos (\\(counts.videos))" in library
+assert "let sourceName = selected.entry?.sourceID" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [

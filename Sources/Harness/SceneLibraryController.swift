@@ -118,6 +118,34 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         return parts.joined(separator: " · ")
     }
 
+    private func sourceMediaCounts(_ sourceID: String) -> (videos: Int, scenes: Int, images: Int)? {
+        let entries = store.catalog.entries.filter { $0.sourceID == sourceID && $0.availability == .present }
+        guard !entries.isEmpty else { return nil }
+        return (
+            entries.filter { $0.inferredMediaType == "video" }.count,
+            entries.filter { $0.inferredMediaType == "scene" }.count,
+            entries.filter { $0.inferredMediaType == "image" }.count
+        )
+    }
+
+    private func updateMediaFilterTitles() {
+        let selected = max(0, mediaFilter.indexOfSelectedItem)
+        let titles: [String]
+        if let sourceFilterID, let counts = sourceMediaCounts(sourceFilterID) {
+            titles = [
+                "All Media (\(counts.videos + counts.scenes + counts.images))",
+                "Videos (\(counts.videos))",
+                "Scenes (\(counts.scenes))",
+                "Images (\(counts.images))",
+            ]
+        } else {
+            titles = ["All Media", "Videos", "Scenes", "Images"]
+        }
+        mediaFilter.removeAllItems()
+        mediaFilter.addItems(withTitles: titles)
+        mediaFilter.selectItem(at: min(selected, titles.count - 1))
+    }
+
     func showSourceSummary(_ summary: String) {
         reportTask(summary)
     }
@@ -884,6 +912,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
         }
         let activeCollection = store.catalog.collections.first { $0.id == (filter.selectedItem?.representedObject as? String) }
+        updateMediaFilterTitles()
         let oldIDs = items.map(\.id)
         let catalog = allItems()
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1318,7 +1347,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
                 let image: NSImage
                 let previewTime = scene.metadata?.previewTime ?? 2
                 let sourceDetails = try await Self.sourceDetails(url)
-                let note = sourceDetails.isEmpty ? (scene.animated ? "Animated scene" : "Scene") : String(sourceDetails.dropFirst(3))
+                let sourceName = selected.entry?.sourceID.flatMap { id in self.store.catalog.sources.first(where: { $0.id == id })?.name }
+                let mediaNote = sourceDetails.isEmpty ? (scene.animated ? "Animated scene" : "Scene") : String(sourceDetails.dropFirst(3))
+                let note = [sourceName, mediaNote].compactMap { $0 }.joined(separator: " · ")
                 let clock = SceneClock(now: { 0 })
                 try clock.configure(timeline: scene.timeline)
                 try clock.seek(to: previewTime)
