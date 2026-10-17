@@ -32,6 +32,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("Photos"),
                 .linkedFramework("ScreenSaver"),
+                .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("Carbon"),
