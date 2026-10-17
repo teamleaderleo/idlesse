@@ -742,7 +742,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onStop: (() -> Void)?
     var onShowSettings: (() -> Void)?
     var onShowLibrary: (() -> Void)?
-    var onShowPreview: (() -> Void)?
+    /// The host app owns the resident menu-bar control. Standalone hosts can
+    /// opt into the controller menu, but Idlesse's normal app shell does not.
+    var ownsStatusItem = false
     private lazy var displayAssignmentController = DisplayAssignmentController(wallpaper: self)
     /// Menu items contributed by the host (next/previous, recents). Rebuilt on every menu open.
     var extraMenuItemsProvider: (() -> [NSMenuItem])?
@@ -1907,7 +1909,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     private func ensureStatusItem() {
-        guard presentsWindows, statusItem == nil else { return }
+        guard ownsStatusItem, presentsWindows, statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "cat", accessibilityDescription: "Idlesse")
         item.button?.toolTip = "Idlesse Wallpaper"
@@ -1915,6 +1917,10 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     private func updateMenu() {
+        guard ownsStatusItem else {
+            onStateChange?()
+            return
+        }
         let menu = NSMenu()
         let state = isLoading ? "Opening wallpaper…" : selectedURL == nil ? "Wallpaper stopped" :
             (suspended ? "Waiting for your display" : (shouldPause && selectedIsAnimated ? "Scene paused" : "Wallpaper running"))
@@ -2000,7 +2006,6 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         return true
     }
 
-    @objc private func showPreview() { onShowPreview?() }
     @objc private func toggleAudio() {
         guard let playable, playable.usesAudio, !isLoading else { return }
         clock.audioEnabled.toggle()

@@ -10,7 +10,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var statusItem: NSStatusItem?
     private weak var statusPauseItem: NSMenuItem?
     private weak var statusWallpaperItem: NSMenuItem?
-    private weak var statusChooseItem: NSMenuItem?
     private weak var statusNextItem: NSMenuItem?
     private weak var statusPreviousItem: NSMenuItem?
     private weak var statusRestoreItem: NSMenuItem?
@@ -173,7 +172,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             self?.showLibrary()
             self?.refreshStatusItem()
         }
-        wallpaper.onShowPreview = { [weak self] in self?.showPreview() }
+        // The app delegate owns the single resident menu-bar control.
+        wallpaper.ownsStatusItem = false
+        wallpaper.onStateChange = { [weak self] in self?.refreshStatusItem() }
         wallpaper.presentingWindow = { [weak self] in self?.appSettings.window }
         wallpaper.extraMenuItemsProvider = { [weak self] in self?.menuExtras() ?? [] }
         wallpaper.onSelectionCommitted = { [weak self] url in
@@ -205,7 +206,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             defer: false
         )
         window.delegate = self
-        window.title = "Screen Saver Preview"
+        window.title = "Idlesse Home"
         window.center()
 
         guard let contentView = window.contentView else { return }
@@ -361,7 +362,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             ? "Wallpaper: \(snapshot.paused ? "Paused" : "Playing") · \(snapshot.title ?? "Wallpaper")"
             : "Wallpaper: Stopped"
         statusWallpaperItem?.isEnabled = false
-        statusChooseItem?.isEnabled = true
         statusNextItem?.isEnabled = snapshot.canCycle
         statusPreviousItem?.isEnabled = snapshot.canCycle
         statusRestoreItem?.isEnabled = snapshot.running
@@ -420,12 +420,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     func applicationDidUnhide(_ notification: Notification) {
         scenePreview.applicationVisibilityChanged()
         if window.isVisible && !window.isMiniaturized { saverView?.startAnimation() }
-    }
-
-    @objc private func showPreview() {
-        window.makeKeyAndOrderFront(nil)
-        saverView.startAnimation()
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func togglePause() {
@@ -568,7 +562,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         wallpaperItem.submenu = wallpaperMenu
         mainMenu.addItem(wallpaperItem)
         for (title, action) in [
-            ("Choose Wallpaper…", #selector(WallpaperController.chooseWallpaper)),
             ("Pause / Resume Video", #selector(WallpaperController.togglePause)),
             ("Stop Wallpaper", #selector(WallpaperController.stop)),
             ("Show / Restore Windows", #selector(WallpaperController.revealDesktop))
@@ -629,9 +622,6 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let pause = menu.addItem(withTitle: "Pause Wallpaper", action: #selector(toggleWallpaperPause), keyEquivalent: "")
         pause.target = self
         statusPauseItem = pause
-        let choose = menu.addItem(withTitle: "Choose Wallpaper…", action: #selector(WallpaperController.chooseWallpaper), keyEquivalent: "")
-        choose.target = wallpaper
-        statusChooseItem = choose
         let next = menu.addItem(withTitle: "Next Wallpaper", action: #selector(nextWallpaper), keyEquivalent: "")
         next.target = self
         statusNextItem = next
