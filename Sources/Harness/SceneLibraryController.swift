@@ -105,6 +105,30 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         sourceFilterID = sourceID
         setScope(.library)
     }
+    func sourceSummary(_ sourceID: String) -> String? {
+        let entries = store.catalog.entries.filter { $0.sourceID == sourceID && $0.availability == .present }
+        guard !entries.isEmpty else { return nil }
+        let videos = entries.filter { $0.inferredMediaType == "video" }.count
+        let scenes = entries.filter { $0.inferredMediaType == "scene" }.count
+        let images = entries.filter { $0.inferredMediaType == "image" }.count
+        var parts = ["\(entries.count) wallpapers"]
+        if videos > 0 { parts.append("\(videos) video") }
+        if images > 0 { parts.append("\(images) still") }
+        if scenes > 0 { parts.append("\(scenes) scene") }
+        return parts.joined(separator: " · ")
+    }
+
+    func showSourceSummary(_ summary: String) {
+        reportTask(summary)
+    }
+
+    func requestSourceThumbnail(_ sourceID: String, completion: @escaping (NSImage?) -> Void) {
+        guard let entry = store.catalog.entries.first(where: {
+            $0.sourceID == sourceID && $0.availability == .present
+        }) else { completion(nil); return }
+        let item = Item(id: entry.id, title: Self.displayTitle(entry.title), builtin: nil, entry: entry)
+        requestThumbnail(for: item, completion: completion)
+    }
     private let inspectorButton = LibraryHoverButton(frame: .zero)
     private let libraryActions = NSPopUpButton(frame: .zero, pullsDown: true)
     private let browserSplit = NSSplitViewController()
