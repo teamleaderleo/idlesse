@@ -926,11 +926,11 @@ final class SceneLibraryStore {
 }
 
 /// Session-only rotation. A shuffle bag exhausts every member before repeating.
-struct SceneRotationQueue {
-    private var remaining: [String] = []
-    private var members: [String] = []
-    private var last: String?
-    mutating func next(_ ids: [String], shuffle: Bool) -> String? {
+struct SceneItemRotationQueue<Item: Equatable> {
+    private var remaining: [Item] = []
+    private var members: [Item] = []
+    private var last: Item?
+    mutating func next(_ ids: [Item], shuffle: Bool) -> Item? {
         if ids != members { members = ids; remaining = [] }
         guard !ids.isEmpty else { return nil }
         if remaining.isEmpty {
@@ -944,3 +944,6 @@ struct SceneRotationQueue {
         return result
     }
 }
+
+typealias SceneRotationQueue = SceneItemRotationQueue<String>
+typealias SceneSelectionRotationQueue = SceneItemRotationQueue<SceneLibraryStore.SceneSelection>

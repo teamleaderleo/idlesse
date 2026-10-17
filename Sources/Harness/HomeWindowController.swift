@@ -1040,7 +1040,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let index = folder.appendingPathComponent("index.json")
-        let library = try SceneLibraryController(indexURL: index, onUse: { _ in }, onEdit: { _, _ in })
+        let library = try SceneLibraryController(indexURL: index, onUse: { _, _ in }, onEdit: { _, _ in })
         for content in [SceneNode.Content.image(URL(fileURLWithPath: "/image.png")),
                         .video(URL(fileURLWithPath: "/video.mp4"))] {
             let plain = SceneDescriptor(title: "Plain", nodes: [SceneNode(content: content)])

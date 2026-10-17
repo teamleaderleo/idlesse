@@ -298,7 +298,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var generation = 0
     private var rotationTimer: Timer?
     private var rotationCollectionID: String?
-    private var rotationQueue = SceneRotationQueue()
+    private var rotationQueue = SceneSelectionRotationQueue()
     private var rotationShuffle = false
     private var rotationMinutes = 30
     private var scheduleTimer: Timer?
@@ -330,7 +330,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         rotationCollectionID = collection.id
         rotationShuffle = shuffle
         rotationMinutes = collection.playback?.minutes ?? 30
-        rotationQueue = SceneRotationQueue()
+        rotationQueue = SceneSelectionRotationQueue()
         advanceRotation()
         if rotationCollectionID != nil { armRotationTimer() }
     }
@@ -359,23 +359,24 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             stopRotation(manual: false); return
         }
         let available = allItems()
-        let ids = collection.sceneIDs.filter { id in available.contains { $0.id == id } }
-        guard let next = rotationQueue.next(ids, shuffle: rotationShuffle),
-              let item = available.first(where: { $0.id == next }) else { stopRotation(manual: false); return }
+        let availableIDs = Set(available.map(\.id))
+        let selections = collection.items.filter { availableIDs.contains($0.sceneID) }
+        guard let next = rotationQueue.next(selections, shuffle: rotationShuffle),
+              let item = available.first(where: { $0.id == next.sceneID }) else { stopRotation(manual: false); return }
         do {
             let opened = try open(item)
             try store.used(item.id)
             retainUseAccess(opened.access)
-            onUse(opened.url)
+            onUse(opened.url, next.variantID)
         } catch { reportTask("Rotation: " + error.localizedDescription) }
     }
-    private var onUse: (URL) -> Void
+    private var onUse: (URL, UUID?) -> Void
     /// Opens the framing editor for an imported picture or video, handing over
     /// the access that keeps its folder readable and writable while it is open.
     var onFrame: ((URL, AnyObject?) -> Void)?
     private var onEdit: (URL, Bool) -> Void
 
-    init(indexURL: URL? = nil, onUse: @escaping (URL) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
+    init(indexURL: URL? = nil, onUse: @escaping (URL, UUID?) -> Void, onEdit: @escaping (URL, Bool) -> Void) throws {
         self.onUse = onUse
         self.onEdit = onEdit
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -2132,7 +2133,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             } else {
                 stopRotation()
                 retainUseAccess(opened.access)
-                onUse(opened.url)
+                onUse(opened.url, nil)
                 if !embedded { window?.orderOut(nil) }
             }
         } catch { reportTask(error.localizedDescription) }
@@ -2213,8 +2214,10 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(untouched === original, "Image thumbnails must match the video-only tone policy")
         var copied = false
         var applied = false
+        var appliedVariants: [UUID?] = []
         let controller = try SceneLibraryController(indexURL: folder.appendingPathComponent("index.json"),
-            onUse: { _ in applied = true }, onEdit: { _, asCopy in copied = asCopy })
+            onUse: { _, variantID in applied = true; appliedVariants.append(variantID) },
+            onEdit: { _, asCopy in copied = asCopy })
         let originalSort = controller.sort.indexOfSelectedItem
         controller.useHomeNavigation()
         controller.setScope(.recent)
@@ -2404,6 +2407,27 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(applied, "Rotation timer must apply the next scene")
         controller.stopRotation()
         precondition(controller.rotationTimer == nil && controller.rotationCollectionID == nil)
+        // Several authored looks of the same scene must reach the host as
+        // distinct selections. Default is explicit, including after a manual use.
+        let night = UUID(), day = UUID()
+        var variantCatalog = controller.store.catalog
+        let collectionIndex = variantCatalog.collections.firstIndex { $0.id == collection.id }!
+        variantCatalog.collections[collectionIndex].items = [
+            .init(sceneID: controller.selected!.id, variantID: night),
+            .init(sceneID: controller.selected!.id),
+            .init(sceneID: controller.selected!.id, variantID: day)
+        ]
+        try controller.store.commitCatalog(variantCatalog)
+        appliedVariants.removeAll()
+        controller.beginRotation(controller.store.catalog.collections[collectionIndex], shuffle: false)
+        controller.rotationTimer?.fire()
+        controller.rotationTimer?.fire()
+        controller.rotationTimer?.fire()
+        precondition(appliedVariants == [night, nil, day, night],
+                     "Rotation must forward every selection's variant, including Default and repeats")
+        controller.act(editing: false)
+        precondition(appliedVariants.last == .some(nil) && controller.rotationTimer == nil,
+                     "Manual use must stop rotation and explicitly select Default")
         try controller.store.setPlayback(collection.id, .init(startMinute: 0, endMinute: 720))
         let today = Calendar.current.startOfDay(for: Date())
         let morning = Calendar.current.date(byAdding: .hour, value: 1, to: today)!
