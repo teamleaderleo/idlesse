@@ -676,22 +676,28 @@ import Foundation
         try JSONSerialization.data(withJSONObject: shaderManifest).write(to: shaderManifestURL)
         do { _ = try await source.resolve(shaderPackage); fatalError("Accepted shader content before revision 21") } catch is SceneError {}
         let focus = SceneFocus(x: 0.2, y: 0.7)
-        let focused = SceneDescriptor(title: "Focus", nodes: [SceneNode(content: .gradient)], focus: focus)
+        let bleed = SceneBleed(top: 0.01, left: 0.02, bottom: 0.03, right: 0.04)
+        let focused = SceneDescriptor(title: "Focus", nodes: [SceneNode(content: .gradient)], focus: focus, bleed: bleed)
         let focusPackage = root.appendingPathComponent("Focus.idlesse")
         try ScenePackageWriter.write(focused, to: focusPackage)
         let focusRead = try await source.resolve(focusPackage)
         precondition(focusRead.focus == focus)
+        precondition(focusRead.bleed == bleed)
         let focusEvaluated = try focusRead.evaluated()
         precondition(focusEvaluated.focus == focus && focusRead.replacingNodes(focusRead.nodes).focus == focus)
         let focusManifestURL = focusPackage.appendingPathComponent("manifest.json")
         var focusManifest = try JSONSerialization.jsonObject(with: Data(contentsOf: focusManifestURL)) as! [String: Any]
         precondition((focusManifest["features"] as? [String])?.contains("focus") == true)
-        focusManifest["features"] = [] as [String]
+        precondition((focusManifest["features"] as? [String])?.contains("bleed") == true)
+        let focusScene = try JSONSerialization.jsonObject(with: Data(contentsOf: focusPackage.appendingPathComponent("scene.json"))) as! [String: Any]
+        precondition(focusScene["bleed"] != nil, "ScenePackageWriter must persist bleed in scene.json")
+        focusManifest["features"] = ["focus"] as [String]
         try JSONSerialization.data(withJSONObject: focusManifest).write(to: focusManifestURL)
-        do { _ = try await source.resolve(focusPackage); fatalError("Accepted undeclared focus") } catch is SceneError {}
+        let historicalBleed = try await source.resolve(focusPackage)
+        precondition(historicalBleed.bleed == bleed, "Revision-21 packages with the historical missing bleed feature must remain readable")
         focusManifest["version"] = 20
         try JSONSerialization.data(withJSONObject: focusManifest).write(to: focusManifestURL)
-        do { _ = try await source.resolve(focusPackage); fatalError("Accepted legacy focus") } catch is SceneError {}
+        do { _ = try await source.resolve(focusPackage); fatalError("Accepted bleed before revision 21") } catch is SceneError {}
         var invalidFocus = focused
         invalidFocus.focus = SceneFocus(x: .nan, y: 0)
         do { _ = try invalidFocus.evaluated(); fatalError("Accepted nonfinite focus") } catch is SceneError {}
