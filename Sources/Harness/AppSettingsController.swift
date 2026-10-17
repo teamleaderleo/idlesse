@@ -1,5 +1,6 @@
 import AppKit
 import UniformTypeIdentifiers
+import ServiceManagement
 
 /// Session frame restore that refuses garbage: a saved frame from a different
 /// screen layout (or a runaway resize) that dwarfs the default size is
@@ -60,6 +61,8 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
     private let liveMenu = NSButton(checkboxWithTitle: "Animate menu bar", target: nil, action: nil)
     private let batteryThrottle = NSButton(checkboxWithTitle: "Cap to 30 fps on battery", target: nil, action: nil)
     private let coveragePause = NSButton(checkboxWithTitle: "Rest fully covered displays", target: nil, action: nil)
+    private let launchAtLogin = NSButton(checkboxWithTitle: "Start Idlesse at login", target: nil, action: nil)
+    private let launchAtLoginStatus = NSTextField(labelWithString: "")
     private let rate = NSPopUpButton()
     private let transition = NSPopUpButton()
     private let transitionStyle = NSPopUpButton()
@@ -235,12 +238,20 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         coveragePause.target = self
         coveragePause.action = #selector(changeCoveragePause)
         coveragePause.toolTip = "Pause a renderer after its display stays fully covered."
+        launchAtLogin.target = self
+        launchAtLogin.action = #selector(changeLaunchAtLogin)
+        launchAtLogin.toolTip = "Keep Idlesse available after you restart or sign in."
+        launchAtLoginStatus.textColor = .secondaryLabelColor
+        launchAtLoginStatus.font = .systemFont(ofSize: 11)
+        let launchRow = NSStackView(views: [launchAtLogin, launchAtLoginStatus])
+        launchRow.spacing = 8
         addTab("Playback", rows: [
             [label("Frame rate"), rate],
             [label("Transition"), transitionRow],
             [NSView(), liveMenu],
             [NSView(), batteryThrottle],
             [NSView(), coveragePause],
+            [NSView(), launchRow],
         ])
 
         schedule.target = self
@@ -368,6 +379,28 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     func updateStatus() {
         liveMenu.state = UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip") ? .on : .off
+        updateLaunchAtLoginStatus()
+    }
+
+    private func updateLaunchAtLoginStatus() {
+        let status = SMAppService.mainApp.status
+        switch status {
+        case .enabled:
+            launchAtLogin.state = .on
+            launchAtLoginStatus.stringValue = "Enabled"
+        case .requiresApproval:
+            launchAtLogin.state = .on
+            launchAtLoginStatus.stringValue = "Approval required in System Settings → General → Login Items"
+        case .notRegistered:
+            launchAtLogin.state = .off
+            launchAtLoginStatus.stringValue = "Off"
+        case .notFound:
+            launchAtLogin.state = .off
+            launchAtLoginStatus.stringValue = "Unavailable for this app build"
+        @unknown default:
+            launchAtLogin.state = .off
+            launchAtLoginStatus.stringValue = "Unavailable"
+        }
     }
 
     private func reload() {
@@ -422,6 +455,21 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
 
     @objc private func changeCoveragePause() {
         wallpaper.coveragePauseEnabled = coveragePause.state == .on
+    }
+
+    @objc private func changeLaunchAtLogin() {
+        do {
+            if launchAtLogin.state == .on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            updateLaunchAtLoginStatus()
+        } catch {
+            NSSound.beep()
+            updateLaunchAtLoginStatus()
+            launchAtLoginStatus.stringValue = "Couldn’t update: \(error.localizedDescription)"
+        }
     }
 
     private func modeSlotTitle(_ slot: String, fallback: String) -> String {

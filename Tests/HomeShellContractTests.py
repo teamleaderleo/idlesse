@@ -24,8 +24,16 @@ for token in [
     "windowShouldClose",
     "Show / Restore Windows",
     "Quit Idlesse",
+    "openLibraryFromStatusItem",
+    "NSApp.unhide(nil)",
 ]:
     assert token in main, token
+
+assert "import ServiceManagement" in settings
+assert "Start Idlesse at login" in settings
+assert "SMAppService.mainApp.register()" in settings
+assert "SMAppService.mainApp.unregister()" in settings
+assert "Approval required in System Settings" in settings
 
 library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
 assert "panel.canChooseDirectories = true" in library
