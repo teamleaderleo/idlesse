@@ -553,7 +553,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let scenePreviewItem = NSMenuItem(title: "Studio…", action: #selector(showScenePreview), keyEquivalent: "o")
         scenePreviewItem.target = self
         wallpaperMenu.addItem(scenePreviewItem)
-        let libraryItem = wallpaperMenu.addItem(withTitle: "Library…", action: #selector(showLibrary), keyEquivalent: "l")
+        let libraryItem = wallpaperMenu.addItem(withTitle: "Library…", action: #selector(openLibraryFromStatusItem), keyEquivalent: "l")
         libraryItem.target = self
         let framingItem = wallpaperMenu.addItem(withTitle: "Adjust Framing of a File…", action: #selector(openFramingFile), keyEquivalent: "")
         framingItem.target = self

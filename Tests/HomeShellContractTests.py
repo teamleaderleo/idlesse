@@ -28,6 +28,7 @@ for token in [
     "NSApp.unhide(nil)",
 ]:
     assert token in main, token
+assert 'wallpaperMenu.addItem(withTitle: "Library…", action: #selector(openLibraryFromStatusItem)' in main
 
 assert "import ServiceManagement" in settings
 assert "Start Idlesse at login" in settings
