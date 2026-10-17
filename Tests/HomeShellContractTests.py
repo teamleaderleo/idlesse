@@ -12,12 +12,22 @@ assert "item.view = view" not in install
 assert "tabs.addTabViewItem" not in install
 assert "HomeWindowController(library:" in install
 assert "library.hostWindow = library.window" in install
+assert "guard home == nil else { return }" not in install
+
+main = (root / "Sources/Harness/main.swift").read_text()
+assert "library.hostWindow = appSettings.window" not in main
+assert "library.hostWindow = library.window" in main
+
+library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
+assert "panel.canChooseDirectories = true" in library
+assert "Folders become rescan-able Library Sources" in library
+assert "self.importSource(directory)" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [
     "NSSplitViewController()",
-    ".group(\"Idlesse\"), .library, .displays",
-    ".group(\"Library\"), .favorites, .recent",
+    ".library, .favorites, .recent, .displays",
+    ".group(\"Collections\")",
     "NSToolbar(identifier:",
     "Previous wallpaper",
     "Pause wallpaper",

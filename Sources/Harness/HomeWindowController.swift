@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import AVFoundation
 
 /// Primary Idlesse window. Library keeps ownership of its original NSWindow;
 /// Home wraps Library content inside that same window and never reparents it
@@ -16,7 +17,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         var title: String {
             switch self {
             case .group(let title): return title
-            case .library: return "Library"
+            case .library: return "All Wallpapers"
             case .displays: return "Displays"
             case .favorites: return "Favorites"
             case .recent: return "Recent"
@@ -52,20 +53,27 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
     private let contentHost = NSView(frame: .zero)
     private let displaysView = NSView(frame: .zero)
     private let displaySummary = NSTextField(wrappingLabelWithString: "")
-    private let filesButton = NSButton(checkboxWithTitle: "Files", target: nil, action: nil)
-    private let widgetsButton = NSButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
-    private let sameDisplaysButton = NSButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
+    private let filesButton = LibraryHoverButton(checkboxWithTitle: "Files", target: nil, action: nil)
+    private let widgetsButton = LibraryHoverButton(checkboxWithTitle: "Widgets", target: nil, action: nil)
+    private let sameDisplaysButton = LibraryHoverButton(checkboxWithTitle: "Same wallpaper on all displays", target: nil, action: nil)
     private var rows: [SidebarRow] = []
     private var currentRow: SidebarRow = .library
     private var sidebarItem: NSSplitViewItem?
+    private weak var navigationSplit: NSSplitView?
     private var refreshTimer: Timer?
 
-    private let nowPlayingButton = NSButton(title: "No Wallpaper", target: nil, action: nil)
+    private let nowPlayingTitle = NSTextField(labelWithString: "No Wallpaper")
     private let destinationLabel = NSTextField(labelWithString: "")
-    private let previousButton = NSButton(frame: .zero)
-    private let pauseButton = NSButton(frame: .zero)
-    private let nextButton = NSButton(frame: .zero)
+    private let previousButton = LibraryHoverButton(frame: .zero)
+    private let playerBackdrop = WallpaperHeaderArtwork()
+    private let playerHeader = NSView()
+    private var audioProbe: Task<Void, Never>?
+    private let playerArtwork = NSImageView()
+    private let playerSound = LibraryHoverButton(frame: .zero)
+    private let pauseButton = LibraryHoverButton(frame: .zero)
+    private let nextButton = LibraryHoverButton(frame: .zero)
     private var nowPlayingPopover: NSPopover?
+    private var aboutPopover: NSPopover?
     private var refreshPlaybackPopover: (() -> Void)?
     private var cachedThumbnailURL: URL?
     private var cachedThumbnail: NSImage?
@@ -79,8 +87,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         self.wallpaper = wallpaper
         self.comfort = comfort
         self.libraryView = library.window!.contentView!
-        self.displaysDestinationController = displaysDestinationController
-        self.activateDisplaysDestination = activateDisplaysDestination
+        let destination = displaysDestinationController ?? DisplayAssignmentViewController(wallpaper: wallpaper)
+        self.displaysDestinationController = destination
+        self.activateDisplaysDestination = activateDisplaysDestination ?? { [weak destination] in
+            (destination as? DisplayAssignmentViewController)?.activate()
+        }
         if let indexURL {
             self.indexURL = indexURL
         } else {
@@ -90,6 +101,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         super.init()
         // main.swift installs the legacy Settings owner before AppSettings is
         // created. Home becomes the sheet/panel owner as soon as it exists.
+        library.installDisplayCanvas(wallpaper: wallpaper)
+        if let displays = self.displaysDestinationController as? DisplayAssignmentViewController {
+            displays.requestArtwork = { [weak library] url, done in library?.requestPlaybackArtwork(url, completion: done) }
+        }
         wallpaper.presentingWindow = { [weak library] in library?.window }
         library.onScopeChange = { [weak self] scope in
             guard let self else { return }
@@ -152,11 +167,15 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
         let sidebarScroll = NSScrollView(frame: .zero)
         sidebarScroll.hasVerticalScroller = true
+        sidebarScroll.autohidesScrollers = true
         sidebarScroll.drawsBackground = false
         sidebarScroll.documentView = sidebar
-        sidebar.style = .sourceList
+        sidebar.style = .plain
+        sidebar.backgroundColor = .clear
+        sidebar.selectionHighlightStyle = .regular
         sidebar.headerView = nil
         sidebar.rowHeight = 28
+        sidebar.intercellSpacing = NSSize(width: 0, height: 0)
         sidebar.allowsEmptySelection = false
         sidebar.delegate = self
         sidebar.dataSource = self
@@ -166,11 +185,77 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         sidebar.setAccessibilityLabel("Idlesse destinations")
 
         let sidebarController = NSViewController()
-        sidebarController.view = sidebarScroll
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
+        let sidebarRoot = NSView()
+        sidebarController.view = sidebarRoot
+        sidebarRoot.wantsLayer = true
+        sidebarRoot.layer?.backgroundColor = LibrarySurfaceColors.sidebar.cgColor
+        let settings = LibraryHoverButton(title: "", target: self, action: #selector(openPreferences))
+        settings.bezelStyle = .regularSquare
+        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        settings.imagePosition = .imageOnly
+        settings.isBordered = false
+        settings.toolTip = "Settings (⌘,)"
+        settings.setAccessibilityLabel("Settings")
+        settings.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        settings.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        settings.contentTintColor = .secondaryLabelColor
+        let footerLine = NSView()
+        footerLine.wantsLayer = true
+        footerLine.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.07).cgColor
+        let about = LibraryHoverButton(title: "", target: self, action: #selector(openAbout(_:)))
+        about.isBordered = false
+        about.bezelStyle = .regularSquare
+        // A dedicated small-size mark keeps the cat legible in the footer.
+        let footerIcon = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { rect in
+            NSColor(white: 0.055, alpha: 1).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+            if let cat = NSImage(systemSymbolName: "cat.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 17, weight: .regular))?
+                .withSymbolConfiguration(.init(paletteColors: [.white])) {
+                cat.draw(in: NSRect(x: 3, y: 3, width: 18, height: 18))
+            }
+            return true
+        }
+        about.image = footerIcon
+        about.imagePosition = .imageOnly
+        about.imageScaling = .scaleProportionallyDown
+        about.setAccessibilityLabel("About Idlesse")
+        let addWallpaper = LibraryHoverButton(title: "Add wallpapers", target: self, action: #selector(addWallpaperFromSidebar))
+        addWallpaper.isBordered = false
+        addWallpaper.bezelStyle = .regularSquare
+        addWallpaper.font = .systemFont(ofSize: 13)
+        addWallpaper.alignment = .left
+        addWallpaper.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil)
+        addWallpaper.imagePosition = .imageLeading
+        for view in [sidebarScroll, footerLine, about, settings, addWallpaper] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            sidebarRoot.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            addWallpaper.topAnchor.constraint(equalTo: sidebarRoot.safeAreaLayoutGuide.topAnchor, constant: 12),
+            addWallpaper.leadingAnchor.constraint(equalTo: sidebarRoot.leadingAnchor, constant: 14),
+            addWallpaper.trailingAnchor.constraint(equalTo: sidebarRoot.trailingAnchor, constant: -8),
+            addWallpaper.heightAnchor.constraint(equalToConstant: 30),
+            sidebarScroll.topAnchor.constraint(equalTo: addWallpaper.bottomAnchor, constant: 10),
+            sidebarScroll.leadingAnchor.constraint(equalTo: sidebarRoot.leadingAnchor),
+            sidebarScroll.trailingAnchor.constraint(equalTo: sidebarRoot.trailingAnchor),
+            sidebarScroll.bottomAnchor.constraint(equalTo: footerLine.topAnchor),
+            footerLine.leadingAnchor.constraint(equalTo: sidebarRoot.leadingAnchor),
+            footerLine.trailingAnchor.constraint(equalTo: sidebarRoot.trailingAnchor),
+            footerLine.heightAnchor.constraint(equalToConstant: 0.5),
+            footerLine.bottomAnchor.constraint(equalTo: settings.topAnchor, constant: -10),
+            about.leadingAnchor.constraint(equalTo: sidebarRoot.leadingAnchor, constant: 12),
+            about.centerYAnchor.constraint(equalTo: settings.centerYAnchor),
+            about.heightAnchor.constraint(equalToConstant: 28),
+            about.widthAnchor.constraint(equalToConstant: 28),
+            settings.trailingAnchor.constraint(equalTo: sidebarRoot.trailingAnchor, constant: -8),
+            settings.bottomAnchor.constraint(equalTo: sidebarRoot.bottomAnchor, constant: -12),
+        ])
+        let sidebarItem = NSSplitViewItem(viewController: sidebarController)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 260
         sidebarItem.canCollapse = true
+        sidebarItem.allowsFullHeightLayout = true
         self.sidebarItem = sidebarItem
         sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: "Idlesse.home.sidebarHidden")
 
@@ -180,6 +265,9 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         contentItem.minimumThickness = 700
 
         let split = NSSplitViewController()
+        split.splitView = LibrarySplitView()
+        split.splitView.isVertical = true
+        navigationSplit = split.splitView
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(contentItem)
         split.splitView.dividerStyle = .thin
@@ -197,10 +285,12 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         ])
     }
 
+    @objc private func newCollection() { library.createCollection() }
+
     private func refreshSidebar() {
         var next: [SidebarRow] = [
-            .group("Idlesse"), .library, .displays,
-            .group("Library"), .favorites, .recent,
+            .library, .favorites, .recent, .displays,
+            .group("Collections"),
         ]
         if let store = try? SceneLibraryStore(file: indexURL) {
             next.append(contentsOf: store.catalog.collections.map { .collection(id: $0.id, name: $0.name) })
@@ -217,6 +307,17 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = LibraryNavigationRow()
+        view.acceptsHover = rows[row].selectable
+        return view
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if case .group = rows[row] { return 44 }
+        return 28
+    }
+
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
         if case .group = rows[row] { return true }
@@ -231,10 +332,33 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         guard rows.indices.contains(row) else { return nil }
         let entry = rows[row]
         let text = NSTextField(labelWithString: entry.title)
+        text.font = .systemFont(ofSize: 13)
         text.lineBreakMode = .byTruncatingTail
         if case .group = entry {
-            text.font = .systemFont(ofSize: 11, weight: .semibold)
+            text.font = .systemFont(ofSize: 13, weight: .regular)
             text.textColor = .secondaryLabelColor
+            if entry == .group("Collections") {
+                let add = LibraryHoverButton(image: NSImage(systemSymbolName: "plus", accessibilityDescription: "New Collection")!, target: self, action: #selector(newCollection))
+                add.isBordered = false
+                add.widthAnchor.constraint(equalToConstant: 24).isActive = true
+                add.heightAnchor.constraint(equalToConstant: 24).isActive = true
+                add.toolTip = "New Collection"
+                let spacer = NSView()
+                spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                let row = NSStackView(views: [text, spacer, add])
+                row.alignment = .centerY
+                row.spacing = 4
+                let container = NSView()
+                row.translatesAutoresizingMaskIntoConstraints = false
+                container.addSubview(row)
+                NSLayoutConstraint.activate([
+                    row.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+                    row.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+                    row.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
+                    row.heightAnchor.constraint(equalToConstant: 26),
+                ])
+                return container
+            }
             return text
         }
         let cell = NSTableCellView(frame: .zero)
@@ -248,11 +372,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         cell.textField = text
         cell.imageView = image
         NSLayoutConstraint.activate([
-            image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+            image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 14),
             image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             image.widthAnchor.constraint(equalToConstant: 16),
             image.heightAnchor.constraint(equalToConstant: 16),
-            text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 8),
+            text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
             text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
             text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
@@ -353,7 +477,7 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             NSLayoutConstraint.activate([
                 destination.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor),
                 destination.trailingAnchor.constraint(equalTo: displaysView.trailingAnchor),
-                destination.topAnchor.constraint(equalTo: displaysView.topAnchor),
+                destination.topAnchor.constraint(equalTo: displaysView.safeAreaLayoutGuide.topAnchor),
                 destination.bottomAnchor.constraint(equalTo: separator.topAnchor),
                 separator.leadingAnchor.constraint(equalTo: displaysView.leadingAnchor),
                 separator.trailingAnchor.constraint(equalTo: displaysView.trailingAnchor),
@@ -410,6 +534,8 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     // MARK: - Now Playing
 
+    private static let columnDividerItem = NSToolbarItem.Identifier("Idlesse.Home.ColumnDivider")
+    private static let sidebarToggleItem = NSToolbarItem.Identifier("Idlesse.Home.Sidebar")
     private static let searchItem = NSToolbarItem.Identifier("Idlesse.Home.Search")
     private static let importItem = NSToolbarItem.Identifier("Idlesse.Home.Import")
     private static let transportItem = NSToolbarItem.Identifier("Idlesse.Home.Transport")
@@ -423,29 +549,42 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         toolbar.allowsUserCustomization = false
         toolbar.autosavesConfiguration = false
         window.toolbar = toolbar
-        window.toolbarStyle = .unified
-        window.titleVisibility = .visible
+        window.toolbarStyle = .unifiedCompact
+        window.titlebarSeparatorStyle = .none
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = LibrarySurfaceColors.content
+        window.titleVisibility = .hidden
+        window.styleMask.insert(.fullSizeContentView)
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
+        [Self.sidebarToggleItem, Self.columnDividerItem, Self.nowPlayingItem, Self.searchItem, .flexibleSpace]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, Self.transportItem, Self.nowPlayingItem, .flexibleSpace, Self.searchItem, Self.importItem, Self.settingsItem]
+        [Self.sidebarToggleItem, Self.columnDividerItem, Self.nowPlayingItem, Self.searchItem, .flexibleSpace]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.columnDividerItem, let navigationSplit {
+            return NSTrackingSeparatorToolbarItem(identifier: itemIdentifier, splitView: navigationSplit, dividerIndex: 0)
+        }
         if itemIdentifier == Self.searchItem {
             return library.makeSearchToolbarItem(identifier: itemIdentifier)
         }
         if itemIdentifier == Self.importItem {
             return library.makeImportToolbarItem(identifier: itemIdentifier)
         }
-        if itemIdentifier == .toggleSidebar {
+        if itemIdentifier == Self.sidebarToggleItem {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
+            let button = LibraryHoverButton(image: NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")!, target: self, action: #selector(toggleSidebar))
+            button.isBordered = false
+            button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            button.toolTip = "Show or hide sidebar"
+            item.isBordered = false
+            item.view = button
             item.label = "Sidebar"
             item.target = self
             item.action = #selector(toggleSidebar)
@@ -464,7 +603,11 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             configureTransport(previousButton, symbol: "backward.end.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
             configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
             configureTransport(nextButton, symbol: "forward.end.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
-            let transport = NSStackView(views: [previousButton, pauseButton, nextButton])
+            pauseButton.wantsLayer = true
+        pauseButton.layer?.cornerRadius = 8
+        pauseButton.layer?.backgroundColor = NSColor.clear.cgColor
+        for button in [previousButton, pauseButton, nextButton] { button.contentTintColor = .white }
+        let transport = NSStackView(views: [previousButton, pauseButton, nextButton])
             transport.spacing = 4
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.view = transport
@@ -472,28 +615,80 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
             return item
         }
         guard itemIdentifier == Self.nowPlayingItem else { return nil }
-        nowPlayingButton.isBordered = false
-        nowPlayingButton.target = self
-        nowPlayingButton.action = #selector(showNowPlaying)
-        nowPlayingButton.imagePosition = .imageLeading
-        nowPlayingButton.alignment = .left
-        nowPlayingButton.toolTip = "Current wallpaper and playback options"
-        nowPlayingButton.font = .systemFont(ofSize: 13, weight: .medium)
-        (nowPlayingButton.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingTail
-        destinationLabel.font = .systemFont(ofSize: 11)
-        destinationLabel.textColor = .secondaryLabelColor
-        destinationLabel.lineBreakMode = .byTruncatingTail
+        return makePlayerItem(itemIdentifier)
+    }
 
-        let labels = NSStackView(views: [nowPlayingButton, destinationLabel])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 0
-        labels.widthAnchor.constraint(equalToConstant: 240).isActive = true
-        let controls = NSStackView(views: [labels])
-        controls.spacing = 7
+    private func makePlayerItem(_ itemIdentifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        nowPlayingTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        nowPlayingTitle.textColor = .white
+        nowPlayingTitle.lineBreakMode = .byTruncatingTail
+        nowPlayingTitle.maximumNumberOfLines = 1
+        nowPlayingTitle.setAccessibilityLabel("Current wallpaper")
+        nowPlayingTitle.translatesAutoresizingMaskIntoConstraints = false
+        let labels = NSView()
+        labels.addSubview(nowPlayingTitle)
+        NSLayoutConstraint.activate([
+            labels.widthAnchor.constraint(equalToConstant: 156),
+            labels.heightAnchor.constraint(equalToConstant: 32),
+            nowPlayingTitle.leadingAnchor.constraint(equalTo: labels.leadingAnchor, constant: 4),
+            nowPlayingTitle.trailingAnchor.constraint(equalTo: labels.trailingAnchor, constant: -4),
+            nowPlayingTitle.centerYAnchor.constraint(equalTo: labels.centerYAnchor),
+        ])
+        configureTransport(previousButton, symbol: "backward.end.fill", label: "Previous wallpaper", action: #selector(previousWallpaper))
+        configureTransport(pauseButton, symbol: "pause.fill", label: "Pause wallpaper", action: #selector(togglePause))
+        configureTransport(nextButton, symbol: "forward.end.fill", label: "Next wallpaper", action: #selector(nextWallpaper))
+        configureTransport(playerSound, symbol: "speaker.slash", label: "Wallpaper sound", action: #selector(togglePlayerSound))
+        playerArtwork.imageScaling = .scaleProportionallyUpOrDown
+        playerArtwork.wantsLayer = true
+        playerArtwork.layer?.cornerRadius = 6
+        playerArtwork.layer?.masksToBounds = true
+        playerArtwork.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        playerArtwork.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        pauseButton.wantsLayer = true
+        pauseButton.layer?.cornerRadius = 8
+        pauseButton.layer?.backgroundColor = NSColor.clear.cgColor
+        for button in [previousButton, pauseButton, nextButton] { button.contentTintColor = .white }
+        let transport = NSStackView(views: [previousButton, pauseButton, nextButton])
+        transport.spacing = 0
+        let divider = NSBox()
+        divider.boxType = .separator
+        divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        divider.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let controls = NSStackView(views: [labels, transport, playerSound])
+        controls.spacing = 10
         controls.alignment = .centerY
+        controls.edgeInsets = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 8)
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.view = controls
+        item.isBordered = false
+        let surface = NSView()
+        surface.wantsLayer = true
+        surface.layer?.cornerRadius = 10
+        surface.layer?.masksToBounds = true
+        surface.layer?.borderWidth = 0.5
+        surface.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
+        playerBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        surface.addSubview(playerBackdrop)
+        let glass = NSVisualEffectView()
+        glass.material = .hudWindow
+        glass.blendingMode = .withinWindow
+        glass.state = .active
+        glass.alphaValue = 0.30
+        glass.frame = surface.bounds
+        glass.autoresizingMask = [.width, .height]
+        surface.addSubview(glass)
+        surface.addSubview(controls)
+        NSLayoutConstraint.activate([
+            playerBackdrop.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+            playerBackdrop.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            playerBackdrop.topAnchor.constraint(equalTo: surface.topAnchor),
+            playerBackdrop.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
+            controls.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 4),
+            controls.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -6),
+            controls.topAnchor.constraint(equalTo: surface.topAnchor),
+            controls.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
+        ])
+        item.view = surface
         item.label = "Now Playing"
         item.paletteLabel = "Now Playing"
         return item
@@ -507,11 +702,89 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         button.setAccessibilityLabel(label)
         button.target = self
         button.action = action
-        button.toolTip = label
+        button.toolTip = nil
+    }
+
+    @objc private func togglePlayerSound() {
+        wallpaper.soundEnabled.toggle()
+        refreshState()
     }
 
     @objc private func previousWallpaper() { library.cycle(delta: -1, from: wallpaper.selectedURL); refreshState() }
     @objc private func nextWallpaper() { library.cycle(delta: 1, from: wallpaper.selectedURL); refreshState() }
+    @objc private func openAbout(_ sender: NSButton) {
+        if aboutPopover?.isShown == true { aboutPopover?.close(); return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let controller = NSViewController()
+        let content = NSView()
+        controller.view = content
+        let icon = NSImageView()
+        icon.image = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        icon.imageScaling = .scaleProportionallyDown
+        icon.widthAnchor.constraint(equalToConstant: 40).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        let name = NSTextField(labelWithString: "Idlesse")
+        name.font = .systemFont(ofSize: 16, weight: .semibold)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        let versionLabel = NSTextField(labelWithString: "Version \(version) (\(build))")
+        versionLabel.font = .systemFont(ofSize: 12)
+        versionLabel.textColor = .secondaryLabelColor
+        let identity = NSStackView(views: [name, versionLabel])
+        identity.orientation = .vertical
+        identity.alignment = .leading
+        identity.spacing = 3
+        let header = NSStackView(views: [icon, identity])
+        header.spacing = 10
+        header.alignment = .centerY
+        let description = NSTextField(wrappingLabelWithString: "A little life for your desktop. Made by Leo.")
+        description.font = .systemFont(ofSize: 12)
+        description.textColor = .secondaryLabelColor
+        let releases = LibraryHoverButton(title: "Releases & updates", target: self, action: #selector(openAppReleases))
+        let repository = LibraryHoverButton(title: "Source code on GitHub", target: self, action: #selector(openAppRepository))
+        for button in [releases, repository] {
+            button.isBordered = false
+            button.bezelStyle = .regularSquare
+            button.font = .systemFont(ofSize: 13)
+            button.alignment = .left
+            button.image = NSImage(systemSymbolName: "arrow.up.right", accessibilityDescription: nil)
+            button.imagePosition = .imageTrailing
+            button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        }
+        let stack = NSStackView(views: [header, description, releases, repository])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            description.widthAnchor.constraint(equalToConstant: 236),
+            releases.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            repository.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        popover.contentViewController = controller
+        popover.contentSize = NSSize(width: 268, height: 204)
+        aboutPopover = popover
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+    }
+
+    @objc private func openAppReleases() {
+        aboutPopover?.close()
+        NSWorkspace.shared.open(URL(string: "https://github.com/teamleaderleo/idlesse/releases")!)
+    }
+
+    @objc private func openAppRepository() {
+        aboutPopover?.close()
+        NSWorkspace.shared.open(URL(string: "https://github.com/teamleaderleo/idlesse")!)
+    }
+
+    @objc private func addWallpaperFromSidebar() { library.importWallpapers() }
+
     @objc private func openPreferences() { wallpaper.onShowSettings?() }
 
     @objc private func togglePause() { wallpaper.togglePause(); refreshState() }
@@ -520,51 +793,82 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         nowPlayingPopover?.close()
         let popover = NSPopover()
         let controller = NSViewController()
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: wallpaper.hasSceneControls ? 180 : 142))
-        let title = NSTextField(labelWithString: nowPlayingButton.title)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: wallpaper.hasSceneControls ? 350 : 320))
+        let artwork = NSImageView()
+        artwork.imageScaling = .scaleProportionallyUpOrDown
+        artwork.wantsLayer = true
+        artwork.layer?.cornerRadius = 10
+        artwork.layer?.masksToBounds = true
+        artwork.image = cachedThumbnail
+        var artworkURL = wallpaper.selectedURL
+        if let artworkURL {
+            library.requestPlaybackArtwork(artworkURL) { [weak self, weak artwork] image in
+                guard self?.wallpaper.selectedURL == artworkURL else { return }
+                artwork?.image = image
+            }
+        }
+        let title = NSTextField(labelWithString: nowPlayingTitle.stringValue)
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         let destination = NSTextField(labelWithString: destinationLabel.stringValue)
         destination.textColor = .secondaryLabelColor
-        let stop = NSButton(title: "Stop", target: self, action: #selector(stopWallpaper))
+        destination.isHidden = destination.stringValue.isEmpty
+        let stop = LibraryHoverButton(title: "Stop", target: self, action: #selector(stopWallpaper))
         stop.bezelStyle = .rounded
         stop.isEnabled = wallpaper.selectedURL != nil
-        let pause = NSButton(title: wallpaper.pausedByUser ? "Resume" : "Pause", target: self, action: #selector(togglePopoverPause))
+        let pause = LibraryHoverButton(title: wallpaper.pausedByUser ? "Resume" : "Pause", target: self, action: #selector(togglePopoverPause))
         pause.isEnabled = wallpaper.canPausePlayback
-        let sound = NSButton(checkboxWithTitle: "Wallpaper Sound", target: self, action: #selector(togglePopoverSound))
+        let sound = LibraryHoverButton(checkboxWithTitle: "Wallpaper Sound", target: self, action: #selector(togglePopoverSound))
         sound.state = wallpaper.soundEnabled ? .on : .off
         sound.isEnabled = wallpaper.hasVideoContent
-        let controls = NSButton(title: "Scene Controls…", target: self, action: #selector(openSceneControls))
+        let controls = LibraryHoverButton(title: "Scene Controls…", target: self, action: #selector(openSceneControls))
         controls.isHidden = !wallpaper.hasSceneControls
-        let playback = NSStackView(views: [pause, stop])
+        pause.isBordered = false
+        stop.isBordered = false
+        let previous = LibraryHoverButton(image: NSImage(systemSymbolName: "backward.end.fill", accessibilityDescription: "Previous wallpaper")!, target: self, action: #selector(previousWallpaper))
+        let next = LibraryHoverButton(image: NSImage(systemSymbolName: "forward.end.fill", accessibilityDescription: "Next wallpaper")!, target: self, action: #selector(nextWallpaper))
+        previous.isBordered = false
+        next.isBordered = false
+        let playback = NSStackView(views: [previous, pause, next, NSView(), stop])
         playback.spacing = 8
-        let stack = NSStackView(views: [title, destination, playback, sound, controls])
+        let stack = NSStackView(views: [artwork, title, destination, playback, sound, controls])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            artwork.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            artwork.heightAnchor.constraint(equalToConstant: 184),
+            playback.widthAnchor.constraint(equalTo: stack.widthAnchor),
             stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
         ])
         controller.view = container
         popover.contentViewController = controller
         popover.behavior = .transient
         nowPlayingPopover = popover
-        refreshPlaybackPopover = { [weak self, weak popover, weak title, weak destination, weak pause, weak stop, weak sound, weak controls] in
+        refreshPlaybackPopover = { [weak self, weak popover, weak title, weak destination, weak pause, weak stop, weak sound, weak controls, weak artwork] in
             guard let self, let popover, popover.isShown else { return }
-            title?.stringValue = self.nowPlayingButton.title
+            title?.stringValue = self.nowPlayingTitle.stringValue
+            if self.wallpaper.selectedURL != artworkURL, let url = self.wallpaper.selectedURL {
+                artworkURL = url
+                self.library.requestPlaybackArtwork(url) { [weak self, weak artwork] image in
+                    guard self?.wallpaper.selectedURL == url else { return }
+                    artwork?.image = image
+                }
+            }
             destination?.stringValue = self.destinationLabel.stringValue
+            destination?.isHidden = self.destinationLabel.stringValue.isEmpty
             pause?.title = self.wallpaper.pausedByUser ? "Resume" : "Pause"
             pause?.isEnabled = self.wallpaper.canPausePlayback
             stop?.isEnabled = self.wallpaper.selectedURL != nil
             sound?.state = self.wallpaper.soundEnabled ? .on : .off
             sound?.isEnabled = self.wallpaper.hasVideoContent
             controls?.isHidden = !self.wallpaper.hasSceneControls
-            popover.contentSize = NSSize(width: 320, height: self.wallpaper.hasSceneControls ? 180 : 142)
+            popover.contentSize = NSSize(width: 360, height: self.wallpaper.hasSceneControls ? 350 : 320)
         }
-        popover.show(relativeTo: nowPlayingButton.bounds, of: nowPlayingButton, preferredEdge: .maxY)
+        popover.show(relativeTo: nowPlayingTitle.bounds, of: nowPlayingTitle, preferredEdge: .maxY)
     }
 
     @objc private func togglePopoverPause(_ sender: NSButton) {
@@ -588,29 +892,75 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     private func refreshState() {
         let url = wallpaper.selectedURL
-        library.updatePlayingURL(url)
+        let displayURLs = NSScreen.screens.map { screen in
+            wallpaper.displayURL(for: screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0)?.standardizedFileURL
+        }
+        let commonURL = displayURLs.first ?? nil
+        library.updatePlayingURL(displayURLs.allSatisfy { $0 == commonURL } ? commonURL : nil)
         let title = wallpaper.currentSceneTitle ?? url.map { SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent) } ?? "No Wallpaper"
-        nowPlayingButton.title = title
+        let screens = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
+        let assignments = screens.map { screen -> String in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+            return wallpaper.displayURL(for: id).map {
+                SceneLibraryController.displayTitle($0.deletingPathExtension().lastPathComponent)
+            } ?? "None"
+        }
+        let distinctTitles = assignments.reduce(into: [String]()) { values, value in
+            if !values.contains(value) { values.append(value) }
+        }
+        let displayedTitle = wallpaper.sameWallpaperOnAllDisplays ? title : distinctTitles.joined(separator: " · ")
+        if nowPlayingTitle.stringValue != displayedTitle { nowPlayingTitle.stringValue = displayedTitle }
+        nowPlayingTitle.toolTip = wallpaper.sameWallpaperOnAllDisplays ? title : zip(screens, assignments).map { "\($0.0.localizedName): \($0.1)" }.joined(separator: "\n")
         let standardized = url?.standardizedFileURL
         if standardized != cachedThumbnailURL {
             cachedThumbnailURL = standardized
+            audioProbe?.cancel()
+            playerSound.isHidden = true
+            playerBackdrop.image = nil
+            if let url {
+                audioProbe = Task { @MainActor [weak self] in
+                    let tracks = try? await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+                    guard !Task.isCancelled, self?.cachedThumbnailURL == url.standardizedFileURL else { return }
+                    self?.playerSound.isHidden = tracks?.isEmpty != false
+                }
+            }
             cachedThumbnail = thumbnail(for: url)
+            if let url {
+                library.requestPlaybackArtwork(url) { [weak self] image in
+                    guard let self, self.cachedThumbnailURL == url.standardizedFileURL else { return }
+                    let artwork = NSImage(size: NSSize(width: 60, height: 34))
+                    artwork.lockFocus()
+                    image.draw(in: NSRect(x: 0, y: 0, width: 60, height: 34))
+                    artwork.unlockFocus()
+                    self.cachedThumbnail = artwork
+                    self.playerArtwork.image = artwork
+                    self.playerBackdrop.image = image
+                }
+            }
         }
-        nowPlayingButton.image = cachedThumbnail ?? NSImage(systemSymbolName: "photo", accessibilityDescription: title)
+        playerArtwork.image = cachedThumbnail
         pauseButton.image = NSImage(systemSymbolName: wallpaper.pausedByUser ? "play.fill" : "pause.fill",
             accessibilityDescription: wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
-        pauseButton.toolTip = wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper"
+        pauseButton.toolTip = nil
+        pauseButton.setAccessibilityLabel(wallpaper.pausedByUser ? "Resume wallpaper" : "Pause wallpaper")
         pauseButton.setAccessibilityLabel(pauseButton.toolTip)
         pauseButton.isEnabled = wallpaper.canPausePlayback
         previousButton.isEnabled = library.hasCycleCandidates
         nextButton.isEnabled = library.hasCycleCandidates
-        previousButton.toolTip = library.hasCycleCandidates ? "Previous wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
-        nextButton.toolTip = library.hasCycleCandidates ? "Next wallpaper in the current Library view" : "Open a Library view with at least two wallpapers"
-        let count = NSScreen.screens.count
-        var parts = [wallpaper.sameWallpaperOnAllDisplays ? "All Displays" : "\(count) display\(count == 1 ? "" : "s") · Per Display"]
+        previousButton.toolTip = nil
+        nextButton.toolTip = nil
+        var parts: [String] = []
         if wallpaper.isLoading { parts.insert("Loading…", at: 0) }
         if let rotation = rotationSummary() { parts.append(rotation) }
         destinationLabel.stringValue = parts.joined(separator: " · ")
+        if parts.isEmpty {
+            destinationLabel.stringValue = url == nil ? "Choose a wallpaper" : (wallpaper.pausedByUser ? "Paused" : "")
+        }
+        destinationLabel.isHidden = destinationLabel.stringValue.isEmpty
+        playerSound.image = NSImage(systemSymbolName: wallpaper.soundEnabled ? "speaker.wave.2" : "speaker.slash", accessibilityDescription: "Wallpaper sound")
+        playerSound.isEnabled = wallpaper.hasVideoContent
+        playerSound.toolTip = wallpaper.soundEnabled ? "Mute wallpaper" : "Unmute wallpaper"
+        playerSound.setAccessibilityLabel(playerSound.toolTip)
         refreshPlaybackPopover?()
         refreshDisplaysSummary()
     }
@@ -670,10 +1020,10 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         precondition(home.rows.contains(.library) && home.rows.contains(.displays))
         precondition(home.rows.contains(.favorites) && home.rows.contains(.recent))
         precondition(home.window.toolbar != nil)
-        precondition(home.window.toolbar!.items.map(\.itemIdentifier).contains(Self.settingsItem))
+        precondition(!home.window.toolbar!.items.map(\.itemIdentifier).contains(Self.settingsItem))
         let searchItem = home.window.toolbar!.items.first { $0.itemIdentifier == Self.searchItem }
-        precondition(searchItem is NSSearchToolbarItem)
-        precondition(home.window.toolbar!.items.contains { $0.itemIdentifier == Self.importItem })
+        precondition(searchItem != nil, "Search belongs beside the player in the toolbar")
+        precondition(!home.window.toolbar!.items.contains { $0.itemIdentifier == Self.importItem })
         var openedSettings = false
         wallpaper.onShowSettings = { openedSettings = true }
         home.openPreferences()
@@ -687,5 +1037,139 @@ final class HomeWindowController: NSObject, NSTableViewDataSource, NSTableViewDe
         precondition(home.currentRow == .displays && !home.displaysView.isHidden && home.libraryView.isHidden)
         home.showLibraryScope(.library)
         precondition(home.currentRow == .library && !home.libraryView.isHidden)
+    }
+}
+
+/// Neutral selection keeps navigation subordinate to the artwork.
+private final class LibraryNavigationRow: NSTableRowView {
+    var acceptsHover = true
+    private var hoverTracking: NSTrackingArea?
+    private var hovered = false { didSet { needsDisplay = true } }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(tracking)
+        hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = acceptsHover }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard hovered, !isSelected else { return }
+        NSColor.labelColor.withAlphaComponent(0.07).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 2), xRadius: 6, yRadius: 6).fill()
+    }
+
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard isSelected else { return }
+        NSColor.labelColor.withAlphaComponent(isEmphasized ? 0.14 : 0.09).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 2), xRadius: 6, yRadius: 6).fill()
+    }
+}
+
+/// A panoramic crop with a readable leading edge, independent of desktop playback.
+private final class WallpaperHeaderArtwork: NSView {
+    var image: NSImage? { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        NSBezierPath(rect: bounds).addClip()
+        NSColor.windowBackgroundColor.setFill()
+        bounds.fill()
+        guard let image, image.size.width > 0, image.size.height > 0 else { return }
+        let scale = max(bounds.width / image.size.width, bounds.height / image.size.height)
+        let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+        image.draw(in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                             width: size.width, height: size.height))
+        NSGradient(colors: [NSColor.windowBackgroundColor.withAlphaComponent(0.78),
+                            NSColor.windowBackgroundColor.withAlphaComponent(0.62),
+                            NSColor.windowBackgroundColor.withAlphaComponent(0.40)])?.draw(in: bounds, angle: 0)
+    }
+}
+
+/// The navigation and content surfaces have distinct luminance, without black seams.
+enum LibrarySurfaceColors {
+    static let sidebar = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.15, alpha: 1) : NSColor(white: 0.94, alpha: 1)
+    }
+    static let content = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.085, alpha: 1) : NSColor(white: 1, alpha: 1)
+    }
+}
+final class LibrarySplitView: NSSplitView {
+    override var dividerColor: NSColor { .clear }
+    override func drawDivider(in rect: NSRect) {}
+}
+
+/// A shared, quiet hover treatment for library actions.
+class LibraryHoverButton: NSButton {
+    private var hoverTracking: NSTrackingArea?
+    private var hovering = false
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(tracking)
+        hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering && isEnabled {
+            NSColor.labelColor.withAlphaComponent(0.10).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
+        }
+        super.draw(dirtyRect)
+    }
+}
+
+/// Selection semantics with a menu that opens below the control.
+final class LibraryFilterButton: NSPopUpButton {
+    private var hoverTracking: NSTrackingArea?
+    private var hovering = false
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 18
+        return size
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(tracking)
+        hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering && isEnabled {
+            NSColor.labelColor.withAlphaComponent(0.10).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
+        super.draw(dirtyRect)
+        let arrow = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        arrow?.draw(in: NSRect(x: bounds.maxX - 13, y: bounds.midY - 4, width: 9, height: 8), from: .zero, operation: .sourceOver, fraction: isEnabled ? 0.8 : 0.3)
+    }
+    override func performClick(_ sender: Any?) { showChoices() }
+
+    override func mouseDown(with event: NSEvent) { showChoices() }
+    private func showChoices() {
+        guard isEnabled else { return }
+        let choices = NSMenu()
+        for (index, source) in itemArray.enumerated() {
+            let item = NSMenuItem(title: source.title, action: #selector(choose(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.state = index == indexOfSelectedItem ? .on : .off
+            choices.addItem(item)
+        }
+        choices.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.maxY : bounds.minY), in: self)
+    }
+    @objc private func choose(_ sender: NSMenuItem) {
+        selectItem(at: sender.tag)
+        if let action { NSApp.sendAction(action, to: target, from: self) }
     }
 }

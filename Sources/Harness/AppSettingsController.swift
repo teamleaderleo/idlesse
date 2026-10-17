@@ -44,6 +44,7 @@ extension NSWindow {
 /// display targeting and desktop visibility; this controller keeps preferences
 /// for playback, automation and the screen saver.
 final class AppSettingsController: NSWindowController, NSWindowDelegate {
+    private var outsideClickMonitor: Any?
     private let comfort: DesktopComfortController
     private let wallpaper: WallpaperController
     private let showSaver: () -> Void
@@ -92,6 +93,14 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
+        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if let window = self?.window, window.isVisible, window.attachedSheet == nil,
+               let clickedWindow = event.window, clickedWindow !== window,
+               clickedWindow.parent !== window {
+                window.orderOut(nil)
+            }
+            return event
+        }
         window.restoreManagedFrame(name: "IdlessePreferences", defaultSize: NSSize(width: 760, height: 580))
         installContent(in: window)
         retargetSettingsCommand()
@@ -102,17 +111,20 @@ final class AppSettingsController: NSWindowController, NSWindowDelegate {
         reload()
     }
 
+    deinit { if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) } }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// Compatibility seam for old showLibrary(): recover the controller that
     /// owns the supplied view and wrap it in Home inside its existing window.
     /// The view never becomes a child of Settings.
     func installLibrary(_ view: NSView) {
-        guard home == nil else { return }
         libraryWindow = view.window
         guard let library = view.window?.windowController as? SceneLibraryController else { return }
         library.hostWindow = library.window
-        home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort)
+        if home == nil {
+            home = HomeWindowController(library: library, wallpaper: wallpaper, comfort: comfort)
+        }
     }
 
     func present(tab: Int? = nil) {

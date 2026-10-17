@@ -17,7 +17,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     private var library: SceneLibraryController?
     private func prepareLibrary() throws {
         if library == nil {
-        library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.select(url, automatic: true) },
+        library = try SceneLibraryController(onUse: { [weak self] url in self?.wallpaper.assignLibraryWallpaper(url, to: nil) },
             onEdit: { [weak self] url, asCopy in
                 guard let self else { return }
                 self.scenePreview.onClose = { [weak self] in
@@ -105,7 +105,9 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             window?.orderOut(nil)
             if let library, let content = library.window?.contentView {
                 library.embedded = true
-                library.hostWindow = appSettings.window
+                // Library remains the owner of its own window. Settings only
+                // provides the compatibility installer for the Home shell.
+                library.hostWindow = library.window
                 appSettings.installLibrary(content)
                 appSettings.onLibraryVisible = { [weak library] in library?.refreshEmbedded() }
                 appSettings.onClose = { [weak library] in library?.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
@@ -686,6 +688,17 @@ if let index = CommandLine.arguments.firstIndex(of: "--smoke-resume"), CommandLi
         exit(EXIT_SUCCESS)
     } catch {
         fputs("Resume checks failed: \(error)\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--smoke-targeted-assignment"),
+   CommandLine.arguments.count > index + 1 {
+    do {
+        try WallpaperController.smokeTargetedAssignment(imageURL: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        exit(EXIT_SUCCESS)
+    } catch {
+        fputs("Targeted assignment check failed: \(error)\n", stderr)
         exit(EXIT_FAILURE)
     }
 }

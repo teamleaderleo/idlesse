@@ -3,6 +3,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import UniformTypeIdentifiers
+import ScreenCaptureKit
 
 private final class DesktopWindow: NSPanel {
     override var canBecomeKey: Bool { false }
@@ -43,11 +44,15 @@ final class WallpaperSurface {
             UserDefaults.standard.bool(forKey: "comfort.liveMenuStrip")
     }
     static func usesMetal(_ scene: SceneDescriptor, menuAnimation: Bool) -> Bool {
-        menuAnimation || scene.canvas == .desktopSpan || scene.requiresMetal ||
+        menuAnimation || scene.canvas == .desktopSpan || scene.requiresMetal || scene.allNodes.contains { $0.kind == .video } ||
             ProcessInfo.processInfo.environment["IDLESSE_METAL_COMPOSITOR"] == "1"
     }
     let window: NSWindow
     let displayID: UInt32
+    let usesSharedVideoHub: Bool
+    let videoHub: SharedVideoHub?
+    let sourceURL: URL?
+    private(set) var sceneDescriptor: SceneDescriptor
     private let renderer: SceneRenderer
     private let securityScope: WallpaperScopeLease?
     private var menuStrip: MenuBarStrip?
@@ -57,11 +62,19 @@ final class WallpaperSurface {
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
     var menuStripTiming: String { menuStrip?.timing.summary ?? "disabled" }
     var menuStripWindowNumber: Int? { menuStrip?.window.windowNumber }
-    func updateScene(_ scene: SceneDescriptor) -> Bool { renderer.updateScene(scene) }
+    func updateScene(_ scene: SceneDescriptor) -> Bool {
+        guard renderer.updateScene(scene) else { return false }
+        sceneDescriptor = scene
+        return true
+    }
 
     init(screen: NSScreen, playable: SceneDescriptor, clock: SceneClock, sharedHub: SharedVideoHub? = nil,
-         securityScope: WallpaperScopeLease? = nil, onError: @escaping (String) -> Void) throws {
+         securityScope: WallpaperScopeLease? = nil, sourceURL: URL? = nil, onError: @escaping (String) -> Void) throws {
         displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
+        self.videoHub = sharedHub
+        self.sourceURL = sourceURL?.standardizedFileURL
+        self.sceneDescriptor = playable
+        self.usesSharedVideoHub = sharedHub != nil
         self.securityScope = securityScope
         window = DesktopWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
@@ -147,8 +160,16 @@ final class WallpaperSurface {
 
     func show(paused: Bool) {
         window.orderBack(nil)
-        menuStrip?.window.orderFront(nil)
         setPaused(paused)
+    }
+
+    /// Show Desktop swaps the native menu bar on the Dock's display for an
+    /// opaque, frozen snapshot. The strip then covers it with live frames and
+    /// captured native titles and status items. Nil hides the strip: outside a
+    /// reveal the native bar is transparent over the wallpaper anyway, and an
+    /// elevated strip would leak over fullscreen apps.
+    func setRevealOverlay(_ overlay: (titles: CGImage, status: CGImage?)?, fade: TimeInterval = 0) {
+        menuStrip?.present(overlay: overlay, fade: fade)
     }
 
     private(set) var pausedState = false
@@ -287,7 +308,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
 
     func displayURL(for displayID: UInt32) -> URL? {
-        explicitDisplayURL(for: displayID) ?? selectedURL
+        if sameWallpaperOnAllDisplays || desktopSpanActive { return selectedURL }
+        return explicitDisplayURL(for: displayID) ?? selectedURL
     }
 
     /// Whether any display is playing `media`, directly or as a display override.
@@ -329,7 +351,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// `retainedAccess` keeps a source-root grant alive while we mint a scoped
     /// bookmark for the chosen Library item. A desktop-span scene is always
     /// global; ordinary scenes can become stable per-display overrides.
-    func assignLibraryWallpaper(_ url: URL, to displayID: UInt32?, retaining retainedAccess: AnyObject? = nil) {
+    func assignLibraryWallpaper(_ url: URL, to displayID: UInt32?, retaining retainedAccess: AnyObject? = nil, allowsDesktopSpan: Bool = true) {
         do {
             let data = try bookmarkData(for: url)
             var stale = false
@@ -342,6 +364,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 select(scopedURL, automatic: true)
                 return
             }
+            let assignmentRequest = UUID()
+            displayAssignmentRequests[displayID] = assignmentRequest
+            let assignmentGeneration = generation
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let access = scopedURL.startAccessingSecurityScopedResource()
@@ -349,9 +374,62 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 do {
                     let candidate = try await self.source.resolve(scopedURL)
                     if candidate.canvas == .desktopSpan {
+                        guard allowsDesktopSpan else {
+                            self.showError("This wallpaper spans all displays. Use Set Wallpaper to apply it across the desktop.")
+                            return
+                        }
                         Self.appendLine("Idlesse-display target=\(Self.persistentDisplayIdentifier(displayID)) action=desktop-span-all-displays")
                         self.select(scopedURL, automatic: true)
                         return
+                    }
+                    var replacement: WallpaperSurface?
+                    var adopted = false
+                    defer { if !adopted { replacement?.close() } }
+                    if self.selectedURL != nil, self.playable?.canvas != .desktopSpan, !self.suspended,
+                       let screen = NSScreen.screens.first(where: {
+                           ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == displayID
+                       }) {
+                        var preparationError: String?
+                        let synchronizedSurface = self.surfaces.first { $0.sourceURL == scopedURL.standardizedFileURL && $0.videoHub != nil }
+                        let displayScene = synchronizedSurface?.sceneDescriptor ?? candidate
+                        let hub = synchronizedSurface?.videoHub ?? (candidate.allNodes.contains { $0.kind == .video } ?
+                            SharedVideoHub(scene: candidate, clock: self.clock) { [weak self] message in self?.showError(message) } : nil)
+                        if synchronizedSurface == nil { hub?.setPaused(false) }
+                        let surface = try WallpaperSurface(screen: screen, playable: displayScene, clock: self.clock,
+                            sharedHub: hub, securityScope: WallpaperScopeLease(scopedURL), sourceURL: scopedURL) { [weak self] message in
+                            guard let self, self.generation == assignmentGeneration,
+                                  self.displayAssignmentRequests[displayID] == assignmentRequest else { return }
+                            preparationError = message
+                            if adopted { self.showError(message) }
+                        }
+                        replacement = surface
+                        self.configureDesktopInteraction(surface)
+                        if self.presentsWindows {
+                            surface.prepareForDisplay()
+                            let deadline = ProcessInfo.processInfo.systemUptime + 10
+                            while !surface.isReadyForDisplay {
+                                guard self.generation == assignmentGeneration,
+                                      self.displayAssignmentRequests[displayID] == assignmentRequest,
+                                      !self.suspended else { throw CancellationError() }
+                                if let preparationError { throw SceneError.invalid(preparationError) }
+                                guard ProcessInfo.processInfo.systemUptime < deadline else { throw WallpaperError.preparationTimeout }
+                                try await Task.sleep(nanoseconds: 30_000_000)
+                                surface.refreshPreparation()
+                            }
+                        }
+                    }
+                    guard self.generation == assignmentGeneration,
+                          self.displayAssignmentRequests[displayID] == assignmentRequest else { throw CancellationError() }
+                    // Keep every other connected screen on its visible shared wallpaper
+                    // when a targeted assignment changes the mode to per-display.
+                    if self.sameWallpaperOnAllDisplays, let current = self.selectedURL {
+                        let sharedData = try self.bookmarkData(for: current)
+                        for screen in NSScreen.screens {
+                            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32,
+                                  id != displayID else { continue }
+                            self.displayAssignmentStore.setBookmarkData(sharedData,
+                                persistentID: Self.persistentDisplayIdentifier(id))
+                        }
                     }
                     self.displayAssignmentStore.setBookmarkData(data,
                         persistentID: Self.persistentDisplayIdentifier(displayID))
@@ -359,9 +437,32 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     Self.appendLine("Idlesse-display target=\(Self.persistentDisplayIdentifier(displayID)) action=library-assignment")
                     if self.selectedURL == nil || self.playable?.canvas == .desktopSpan {
                         self.select(scopedURL, automatic: true)
+                    } else if let replacement {
+                        let previous = self.surfaces.filter { $0.displayID == displayID }
+                        self.surfaces.removeAll { $0.displayID == displayID }
+                        self.surfaces.append(replacement)
+                        adopted = true
+                        replacement.setMuted(!self.soundEnabled)
+                        replacement.setPaused(self.shouldPause)
+                        if self.presentsWindows { replacement.show(paused: self.shouldPause) }
+                        previous.forEach { $0.close() }
+                        if let active = self.activeSharedVideoHub, !self.surfaces.contains(where: { $0.videoHub === active }) {
+                            self.activeSharedVideoHub?.close()
+                            self.activeSharedVideoHub = nil
+                        }
+                        if let scene = self.playable, let sourceURL = self.selectedURL {
+                            self.syncSystemBackdrop(scene: scene, sourceURL: sourceURL,
+                                request: self.generation, onlyDisplayID: displayID)
+                        }
+                        self.applySharedHubPause()
+                        self.surfaces.forEach { $0.videoHub?.setMuted(!self.soundEnabled) }
+                        self.updateMenu()
+                        NotificationCenter.default.post(name: .idlesseDisplayAssignmentsChanged, object: self)
                     } else {
                         self.refreshDisplayAssignments()
                     }
+                } catch is CancellationError {
+                    return
                 } catch {
                     self.showError("The Library wallpaper could not be assigned: " + error.localizedDescription)
                 }
@@ -628,6 +729,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     var onError: ((String) -> Void)?
     private var sessionInactive = false
     private var generation = 0
+    private var displayAssignmentRequests: [UInt32: UUID] = [:]
     private var surfaceGeneration = 0
     private(set) var isLoading = false
     private var loadTask: Task<Void, Never>?
@@ -701,6 +803,265 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         coverage.tolerance = 1
         RunLoop.main.add(coverage, forMode: .common)
         coverageTimer = coverage
+        let reveal = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMenuStripWatch() }
+        reveal.tolerance = 0.2
+        RunLoop.main.add(reveal, forMode: .common)
+        revealTimer = reveal
+        refreshMenuStripWatch()
+    }
+
+    private var revealTimer: Timer?
+    private var revealedMenuStrips = false
+    /// Native menu titles per menu bar owner, captured while the bar is still
+    /// transparent, so they can be drawn over live frames during Show Desktop.
+    private var menuTitleImages: [pid_t: (image: CGImage, time: TimeInterval)] = [:]
+    private var statusItemsImage: (display: UInt32, image: CGImage, time: TimeInterval)?
+    private var menuCaptureInFlight = false
+
+    private struct RevealState: Equatable { var revealed = false; var dock = false }
+    /// Watching runs off the main thread: one window list costs a millisecond or
+    /// two, occasionally fifty, which must never land on the render path.
+    private let revealQueue = DispatchQueue(label: "Idlesse.MenuStrip.Reveal", qos: .userInitiated)
+    private let revealTargetsLock = NSLock()
+    private var revealTargets: [UInt32: CGRect] = [:]        // guarded by revealTargetsLock
+    private var revealWatch: DispatchSourceTimer?
+    private var revealDelivered: [UInt32: RevealState] = [:] // revealQueue only
+    private var revealedDisplays: Set<UInt32> = []
+    private var dockDisplays: Set<UInt32> = []
+    private var revealStarted: [UInt32: TimeInterval] = [:]
+    /// Displays whose strip is held up through the restore animation, by deadline.
+    private var revealExitHold: [UInt32: TimeInterval] = [:]
+    /// Measured on macOS 26 over three runs: the Dock drops its reveal window
+    /// 1.01–1.09 s before the native bar stops being a frozen snapshot. Hiding
+    /// the strip any earlier shows that still frame for the rest of the restore.
+    private static let menuBarThawDelay: TimeInterval = 1
+    private static let menuBarThawFade: TimeInterval = 0.25
+
+    /// Show Desktop is detected the way Dock presents it on macOS 26: a Dock
+    /// window at layer 18 covering the display. That covers hot corners and
+    /// gestures too, not only Idlesse's own button.
+    ///
+    /// Only the Dock's display freezes its menu bar into an opaque snapshot;
+    /// the others stay transparent over the live wallpaper and need nothing.
+    /// On the Dock's display the strip covers the whole bar with live frames
+    /// and redraws the native titles and status items from captures. Without
+    /// Screen Recording, or before the current app's titles have been seen, it
+    /// stays hidden and the native snapshot shows as before.
+    ///
+    /// Nothing in the reveal path runs on the main thread except the state
+    /// changes themselves, and the ~100 ms captures only run while the desktop
+    /// is at rest, so neither animation has to share time with this.
+    private func refreshMenuStripWatch() {
+        var targets: [UInt32: CGRect] = [:]
+        if WallpaperSurface.liveMenuStripEnabled, presentsWindows {
+            for surface in surfaces where surface.menuStripWindowNumber != nil {
+                targets[surface.displayID] = CGDisplayBounds(surface.displayID)
+            }
+        }
+        revealTargetsLock.lock(); revealTargets = targets; revealTargetsLock.unlock()
+        guard !targets.isEmpty else {
+            stopRevealWatch()
+            if revealedMenuStrips { surfaces.forEach { $0.setRevealOverlay(nil) }; revealedMenuStrips = false }
+            revealedDisplays.removeAll(); revealExitHold.removeAll(); dockDisplays.removeAll()
+            return
+        }
+        startRevealWatch()
+        guard CGPreflightScreenCaptureAccess() else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        for displayID in targets.keys where dockDisplays.contains(displayID) {
+            // Never while a reveal or restore animation is on screen.
+            guard revealExitHold[displayID] == nil,
+                  now - (revealStarted[displayID] ?? 0) > 0.5 else { continue }
+            if revealedDisplays.contains(displayID) {
+                if statusItemsImage?.display != displayID || now - (statusItemsImage?.time ?? 0) > 1 {
+                    captureMenuBar(display: displayID, titlesFor: nil)
+                }
+                continue
+            }
+            // Keep the owner's titles, and a clock no more than a few seconds
+            // stale, ready for the next reveal; both capture cleanly at rest.
+            if let owner = NSWorkspace.shared.menuBarOwningApplication?.processIdentifier,
+               now - (menuTitleImages[owner]?.time ?? 0) > 15 {
+                captureMenuBar(display: displayID, titlesFor: owner)
+            } else if statusItemsImage?.display != displayID || now - (statusItemsImage?.time ?? 0) > 10 {
+                captureMenuBar(display: displayID, titlesFor: nil)
+            }
+        }
+    }
+
+    private func startRevealWatch() {
+        guard revealWatch == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: revealQueue)
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05, leeway: .milliseconds(10))
+        timer.setEventHandler { [weak self] in self?.tickRevealWatch() }
+        timer.resume()
+        revealWatch = timer
+    }
+
+    private func stopRevealWatch() {
+        revealWatch?.cancel()
+        revealWatch = nil
+        revealQueue.async { [weak self] in self?.revealDelivered = [:] }
+    }
+
+    /// Runs on `revealQueue`; reports only changes to the main thread.
+    private func tickRevealWatch() {
+        revealTargetsLock.lock(); let targets = revealTargets; revealTargetsLock.unlock()
+        guard !targets.isEmpty else { return }
+        let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
+        var fresh: [UInt32: RevealState] = [:]
+        for (displayID, bounds) in targets {
+            var state = RevealState()
+            for window in windows {
+                guard window[kCGWindowOwnerName as String] as? String == "Dock",
+                      let layer = window[kCGWindowLayer as String] as? Int,
+                      layer == 18 || layer == dockLayer,
+                      let dict = window[kCGWindowBounds as String] as? NSDictionary,
+                      let frame = CGRect(dictionaryRepresentation: dict),
+                      abs(frame.minX - bounds.minX) < 1, abs(frame.minY - bounds.minY) < 1,
+                      abs(frame.width - bounds.width) < 1, abs(frame.height - bounds.height) < 1
+                else { continue }
+                if layer == 18 { state.revealed = true } else { state.dock = true }
+            }
+            fresh[displayID] = state
+        }
+        guard fresh != revealDelivered else { return }
+        revealDelivered = fresh
+        DispatchQueue.main.async { [weak self] in self?.applyRevealState(fresh) }
+    }
+
+    private func applyRevealState(_ fresh: [UInt32: RevealState]) {
+        let owner = NSWorkspace.shared.menuBarOwningApplication?.processIdentifier
+        let access = CGPreflightScreenCaptureAccess()
+        let now = ProcessInfo.processInfo.systemUptime
+        var revealedAny = false
+        for surface in surfaces {
+            guard let state = fresh[surface.displayID] else { continue }
+            if state.dock { dockDisplays.insert(surface.displayID) } else { dockDisplays.remove(surface.displayID) }
+            traceMenuStrip("display=\(surface.displayID) dock=\(state.dock) revealed=\(state.revealed) access=\(access) owner=\(owner ?? -1) titles=\(owner.map { menuTitleImages[$0] != nil } ?? false) status=\(statusItemsImage != nil)")
+            guard state.dock, access else {
+                surface.setRevealOverlay(nil)
+                revealedDisplays.remove(surface.displayID)
+                revealExitHold[surface.displayID] = nil
+                continue
+            }
+            if state.revealed {
+                revealExitHold[surface.displayID] = nil
+                if revealedDisplays.insert(surface.displayID).inserted { revealStarted[surface.displayID] = now }
+                guard let owner, let titles = menuTitleImages[owner]?.image else { surface.setRevealOverlay(nil); continue }
+                let status = statusItemsImage?.display == surface.displayID ? statusItemsImage?.image : nil
+                surface.setRevealOverlay((titles, status))
+                revealedAny = true
+            } else if revealedDisplays.remove(surface.displayID) != nil {
+                // Restore has started. The strip keeps playing over the frozen
+                // native bar, untouched, until one scheduled fade takes it down
+                // across the moment the real bar comes back.
+                let deadline = now + Self.menuBarThawDelay
+                revealExitHold[surface.displayID] = deadline
+                let displayID = surface.displayID
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.menuBarThawDelay) { [weak self] in
+                    self?.finishRevealExit(display: displayID, deadline: deadline)
+                }
+                revealedAny = true
+            } else if revealExitHold[surface.displayID] != nil {
+                revealedAny = true
+            }
+        }
+        revealedMenuStrips = revealedAny
+        if menuTitleImages.count > 16, let oldest = menuTitleImages.min(by: { $0.value.time < $1.value.time })?.key {
+            menuTitleImages.removeValue(forKey: oldest)
+        }
+    }
+
+    private func finishRevealExit(display displayID: UInt32, deadline: TimeInterval) {
+        guard revealExitHold[displayID] == deadline else { return }
+        revealExitHold[displayID] = nil
+        // Hold captures off for a moment longer: the fade is still running.
+        revealStarted[displayID] = ProcessInfo.processInfo.systemUptime
+        surfaces.first { $0.displayID == displayID }?.setRevealOverlay(nil, fade: Self.menuBarThawFade)
+    }
+
+    /// Captures the display's native `Menubar` window (titles only, when `titlesFor`
+    /// is set) or its status items, with transparency. At most one at a time.
+    private func captureMenuBar(display displayID: UInt32, titlesFor owner: pid_t?) {
+        guard !menuCaptureInFlight, #available(macOS 14, *) else { return }
+        menuCaptureInFlight = true
+        let scale = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == displayID
+        }?.backingScaleFactor ?? 2
+        Task { @MainActor [weak self] in
+            defer { self?.menuCaptureInFlight = false }
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return }
+                let bounds = CGDisplayBounds(displayID)
+                let configuration = SCStreamConfiguration()
+                configuration.showsCursor = false
+                configuration.backgroundColor = .clear
+                if let owner {
+                    guard let bar = content.windows.first(where: {
+                        $0.title == "Menubar" && abs($0.frame.minX - bounds.minX) < 1 && abs($0.frame.minY - bounds.minY) < 1
+                    }) else { return }
+                    configuration.width = Int(bar.frame.width * scale)
+                    configuration.height = Int(bar.frame.height * scale)
+                    configuration.ignoreShadowsSingleWindow = true
+                    let image = try await SCScreenshotManager.captureImage(
+                        contentFilter: SCContentFilter(desktopIndependentWindow: bar), configuration: configuration)
+                    // A bar that already went opaque would bake a still wallpaper into the titles.
+                    let transparent = Self.isMostlyTransparent(image)
+                    guard transparent,
+                          NSWorkspace.shared.menuBarOwningApplication?.processIdentifier == owner
+                    else { self?.traceMenuStrip("titles rejected for \(owner) transparent=\(transparent)"); return }
+                    self?.menuTitleImages[owner] = (image, ProcessInfo.processInfo.systemUptime)
+                } else {
+                    let height = CGFloat(NSStatusBar.system.thickness)
+                    let items = content.windows.filter {
+                        $0.windowLayer == Int(CGWindowLevelForKey(.statusWindow))
+                            && $0.owningApplication?.processID != getpid()
+                            && abs($0.frame.minY - bounds.minY) < 1 && $0.frame.height < 60
+                            && $0.frame.minX >= bounds.minX && $0.frame.maxX <= bounds.maxX + 1
+                    }
+                    let barHeight = items.map(\.frame.height).max() ?? height
+                    configuration.sourceRect = CGRect(x: 0, y: 0, width: bounds.width, height: barHeight)
+                    configuration.width = Int(bounds.width * scale)
+                    configuration.height = Int(barHeight * scale)
+                    let image = try await SCScreenshotManager.captureImage(
+                        contentFilter: SCContentFilter(display: display, including: items), configuration: configuration)
+                    self?.statusItemsImage = (displayID, image, ProcessInfo.processInfo.systemUptime)
+                }
+            } catch {
+                NSLog("Idlesse menu bar capture failed: %@", error.localizedDescription)
+                self?.traceMenuStrip("capture failed titles=\(owner != nil): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private var lastMenuStripTrace: [String] = []
+    /// State changes only, to ~/Library/Logs/Idlesse-menu-strip.log.
+    private func traceMenuStrip(_ line: String) {
+        guard !lastMenuStripTrace.contains(line) else { return }
+        lastMenuStripTrace = Array((lastMenuStripTrace + [line]).suffix(4))
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Idlesse-menu-strip.log")
+        let entry = "\(Date()) \(line)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile(); handle.write(Data(entry.utf8)); try? handle.close()
+        } else {
+            try? Data(entry.utf8).write(to: url)
+        }
+    }
+
+    private static func isMostlyTransparent(_ image: CGImage) -> Bool {
+        let width = 64, height = 4
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let clear = stride(from: 3, to: bytes.count, by: 4).filter { bytes[$0] < 8 }.count
+        return clear * 2 > width * height
     }
 
     private var coverageTimer: Timer?
@@ -721,9 +1082,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
     private func applySharedHubPause() {
-        let resting = coveragePauseEnabled ? surfaces.map(\.isCovered) : []
-        activeSharedVideoHub?.setPaused(CoverageRestPolicy.shouldRestSharedPlayback(
-            globalPause: shouldPause, displayResting: resting))
+        var visited: Set<ObjectIdentifier> = []
+        for surface in surfaces {
+            guard let hub = surface.videoHub, visited.insert(ObjectIdentifier(hub)).inserted else { continue }
+            let group = surfaces.filter { $0.videoHub === hub }
+            let resting = coveragePauseEnabled ? group.map(\.isCovered) : []
+            hub.setPaused(CoverageRestPolicy.shouldRestSharedPlayback(globalPause: shouldPause, displayResting: resting))
+        }
     }
     private var desktopReveal = DesktopRevealPolicy()
 
@@ -817,7 +1182,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
     private func applyMute() {
-        activeSharedVideoHub?.setMuted(!soundEnabled)
+        surfaces.forEach { $0.videoHub?.setMuted(!soundEnabled) }
         surfaces.forEach { $0.setMuted(!soundEnabled) }
     }
 
@@ -869,7 +1234,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 var preparationError: String?
                 let (replacement, newHub) = self.suspended ? ([], nil) :
-                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request, onError: { [weak self] message in
+                    try self.makeSurfaces(playable: playable, clock: candidateClock, request: request, sourceURL: url, onError: { [weak self] message in
                         if adopted { self?.stop(); self?.showError(message) }
                         else { preparationError = message }
                     })
@@ -878,8 +1243,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                     if !adopted { replacement.forEach { $0.close() }; newHub?.close() }
                 }
                 if self.presentsWindows && !replacement.isEmpty {
-                    newHub?.setMuted(true)
-                    newHub?.setPaused(false)
+                    replacement.forEach { $0.videoHub?.setMuted(true); $0.videoHub?.setPaused(false) }
                     replacement.forEach { $0.prepareForDisplay() }
                     let deadline = ProcessInfo.processInfo.systemUptime + 10
                     while !replacement.allSatisfy({ $0.isReadyForDisplay }) {
@@ -931,7 +1295,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 self.activeSharedVideoHub = newHub
                 self.applySharedHubPause()
                 replacement.forEach { $0.setPaused(self.shouldPause) }
-                self.activeSharedVideoHub?.setMuted(!self.soundEnabled)
+                self.surfaces.forEach { $0.videoHub?.setMuted(!self.soundEnabled) }
                 replacement.forEach { $0.setMuted(!self.soundEnabled) }
                 if self.suspended { self.releaseSurfaces() }
                 else if self.presentsWindows {
@@ -980,24 +1344,26 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         }
     }
 
-    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int, onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
+    private func makeSurfaces(playable: SceneDescriptor, clock: SceneClock, request: Int, sourceURL: URL? = nil, onError: ((String) -> Void)? = nil) throws -> (surfaces: [WallpaperSurface], hub: SharedVideoHub?) {
         surfaceGeneration += 1
         let surfaceRequest = surfaceGeneration
         var result: [WallpaperSurface] = []
         let hasVideo = playable.allNodes.contains { $0.kind == .video }
         let sharesSceneAcrossDisplays = sameWallpaperOnAllDisplays || playable.canvas == .desktopSpan
         let needsMetal = WallpaperSurface.usesMetal(playable, menuAnimation: WallpaperSurface.liveMenuStripEnabled)
-        let sharedHub = (sharesSceneAcrossDisplays && hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
+        let sharedHub = (hasVideo && needsMetal) ? SharedVideoHub(scene: playable, clock: clock) { [weak self] message in
             guard let self, self.generation == request,
                   self.surfaceGeneration == surfaceRequest else { return }
             if let onError { onError(message); return }
             self.stop()
             self.showError(message)
         } : nil
+        var overrideGroups: [URL: (SceneDescriptor, SharedVideoHub?)] = [:]
         do {
             for screen in NSScreen.screens {
                 var screenPlayable = playable
-                var screenHub = sharesSceneAcrossDisplays ? sharedHub : nil
+                var screenSource = sourceURL ?? selectedURL
+                var screenHub = sharedHub
                 var screenScope: WallpaperScopeLease?
                 if !sharesSceneAcrossDisplays {
                     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 ?? 0
@@ -1007,8 +1373,16 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                             if resolved.canvas == .desktopSpan {
                                 Self.appendLine("Idlesse-display display=\(Self.persistentDisplayIdentifier(displayID)) action=ignore-saved-desktop-span")
                             } else {
-                                screenPlayable = resolved
-                                screenHub = nil
+                                let key = overrideURL.standardizedFileURL
+                                if let group = overrideGroups[key] {
+                                    screenPlayable = group.0
+                                    screenHub = group.1
+                                } else {
+                                    screenPlayable = resolved
+                                    screenHub = resolved.allNodes.contains { $0.kind == .video } ? SharedVideoHub(scene: resolved, clock: clock) { [weak self] message in self?.showError(message) } : nil
+                                    overrideGroups[key] = (screenPlayable, screenHub)
+                                }
+                                screenSource = overrideURL
                                 screenScope = lease
                             }
                         }
@@ -1016,7 +1390,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 }
                 let surface = try autoreleasepool {
                     try WallpaperSurface(screen: screen, playable: screenPlayable, clock: clock,
-                        sharedHub: screenHub, securityScope: screenScope) { [weak self] message in
+                        sharedHub: screenHub, securityScope: screenScope, sourceURL: screenSource) { [weak self] message in
                         guard let self, self.generation == request,
                               self.surfaceGeneration == surfaceRequest else { return }
                         if let onError { onError(message); return }
@@ -1065,7 +1439,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     /// A full-resolution SDR still gives macOS matching material for menu-bar/Show Desktop
     /// regions it composites from the system wallpaper rather than our window.
-    private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int) {
+    private func syncSystemBackdrop(scene: SceneDescriptor, sourceURL: URL, request: Int, onlyDisplayID: UInt32? = nil) {
         guard persistsSelection && presentsWindows else { return }
         backdropTask?.cancel()
         backdropTask = Task { @MainActor [weak self] in
@@ -1076,7 +1450,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
                 let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                     appropriateFor: nil, create: true).appendingPathComponent("Idlesse/Desktop Backdrops")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-                let screens = NSScreen.screens
+                let screens = NSScreen.screens.filter { screen in
+                    onlyDisplayID == nil || (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == onlyDisplayID
+                }
                 for screen in screens {
                     try Task.checkCancellation()
                     rememberOriginalBackdrop(for: screen)
@@ -1208,7 +1584,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             activeSharedVideoHub = newHub
             applySharedHubPause()
             surfaces.forEach { $0.setPaused(shouldPause) }
-            activeSharedVideoHub?.setMuted(!soundEnabled)
+            surfaces.forEach { $0.videoHub?.setMuted(!soundEnabled) }
             surfaces.forEach { $0.setMuted(!soundEnabled) }
             if presentsWindows { surfaces.forEach { $0.show(paused: shouldPause) } }
         } catch {
@@ -1305,6 +1681,55 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         coverageMonitor.reset()
         activeSharedVideoHub?.close()
         activeSharedVideoHub = nil
+    }
+
+    static func smokeTargetedAssignment(imageURL: URL) throws {
+        let suite = "Idlesse.TargetedAssignment." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = WallpaperController()
+        controller.resumeDefaults = defaults
+        controller.presentsWindows = false
+        controller.persistsSelection = false
+        var errors: [String] = []
+        controller.onError = { errors.append($0) }
+        let scene = try LocalSceneSource.read(imageURL)
+        controller.selectedURL = imageURL
+        controller.playable = scene
+        let initial = try controller.makeSurfaces(playable: scene, clock: controller.clock, request: controller.generation)
+        controller.surfaces = initial.surfaces
+        controller.activeSharedVideoHub = initial.hub
+        defer { controller.releaseSurfaces() }
+        guard let target = initial.surfaces.first, initial.surfaces.count > 1 else {
+            throw SceneError.invalid("Targeted assignment check needs two connected displays")
+        }
+        let untouched = initial.surfaces.filter { $0 !== target }
+        controller.assignLibraryWallpaper(imageURL, to: target.displayID)
+        let deadline = Date().addingTimeInterval(10)
+        while controller.surfaces.contains(where: { $0 === target }) && errors.isEmpty && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        precondition(errors.isEmpty, "Targeted assignment failed: \(errors)")
+        precondition(!controller.surfaces.contains(where: { $0 === target }), "Target surface must be replaced")
+        precondition(controller.surfaces.count == initial.surfaces.count)
+        for surface in untouched {
+            precondition(controller.surfaces.contains(where: { $0 === surface }), "Other displays must keep their renderer and playback state")
+        }
+        precondition(!controller.sameWallpaperOnAllDisplays)
+        if let hub = initial.hub {
+            precondition(controller.surfaces.allSatisfy { $0.videoHub === hub }, "Identical videos must join the existing decoder")
+            precondition(controller.activeSharedVideoHub === hub, "Joining a synchronized group must retain its transport")
+        }
+        let sharedSelection = imageURL.deletingLastPathComponent().appendingPathComponent("shared-selection-check.mp4")
+        controller.selectedURL = sharedSelection
+        defaults.set(true, forKey: Self.sameDisplaysKey)
+        precondition(controller.displayURL(for: target.displayID) == sharedSelection,
+                     "Shared mode must report the active wallpaper, not a saved per-display override")
+        defaults.set(false, forKey: Self.sameDisplaysKey)
+        precondition(controller.displayURL(for: target.displayID)?.standardizedFileURL == imageURL.standardizedFileURL,
+                     "Per-display mode must preserve the saved assignment")
+        controller.selectedURL = imageURL
+        print("Targeted assignment passed: one surface replaced; \(untouched.count) unchanged display renderer(s) retained")
     }
 
     static func smokeTransitions(imageURL: URL) throws {
@@ -1622,6 +2047,8 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     deinit {
         coverageTimer?.invalidate()
+        revealTimer?.invalidate()
+        revealWatch?.cancel()
         backdropTask?.cancel()
         loadTask?.cancel()
         screenRefresh?.cancel()
@@ -1676,13 +2103,16 @@ private final class MenuBarStrip {
         window = MenuStripPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         window.setFrame(frame, display: false)
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
+        // Status level: the frozen reveal snapshot is the Menubar window itself,
+        // and nothing below it is ever seen. `present(gap:)` keeps it hidden
+        // except during Show Desktop, and masked away from native labels.
+        window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.ignoresMouseEvents = true
         window.hasShadow = false
         window.hidesOnDeactivate = false
         window.isFloatingPanel = false
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
+        window.level = .statusBar
         window.setFrame(frame, display: false)
         window.isReleasedWhenClosed = false
         window.title = "Idlesse Menu Strip Experiment"
@@ -1699,9 +2129,60 @@ private final class MenuBarStrip {
         // acquisition without ever blocking the main wallpaper renderer.
         layer.maximumDrawableCount = 3
         layer.allowsNextDrawableTimeout = true
-        view.layer = layer
+        let root = CALayer()
+        root.frame = view.bounds
+        layer.frame = view.bounds
+        root.addSublayer(layer)
+        for overlay in [titlesLayer, statusLayer] {
+            overlay.frame = view.bounds
+            overlay.contentsGravity = .resize
+            root.addSublayer(overlay)
+        }
+        view.layer = root
         window.contentView = view
     }
+
+    private let titlesLayer = CALayer()
+    private let statusLayer = CALayer()
+    private var fadeGeneration = 0
+    /// Nil hides the strip, over `fade` seconds when given: the native bar thaws
+    /// somewhere inside that window, so neither handover direction shows a cut.
+    /// Otherwise the strip covers the whole bar with live frames and draws the
+    /// captured native titles and status items above them.
+    func present(overlay: (titles: CGImage, status: CGImage?)?, fade: TimeInterval = 0) {
+        guard let overlay else {
+            guard window.isVisible else { return }
+            fadeGeneration += 1
+            guard fade > 0 else { window.alphaValue = 1; window.orderOut(nil); return }
+            let generation = fadeGeneration
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = fade
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                window.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self, self.fadeGeneration == generation else { return }
+                self.window.orderOut(nil)
+                self.window.alphaValue = 1
+            })
+            return
+        }
+        if window.alphaValue != 1 {
+            fadeGeneration += 1   // cancels a fade that is still running
+            window.alphaValue = 1
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if titlesLayer.contents as! CGImage? !== overlay.titles { titlesLayer.contents = overlay.titles }
+        if statusLayer.contents as! CGImage? !== overlay.status { statusLayer.contents = overlay.status }
+        CATransaction.commit()
+        if !window.isVisible {
+            layer.opacity = 0   // shown again by the next completed copy
+            window.orderFrontRegardless()
+            recovery.missedCopy()
+            requestDrawable()
+        }
+    }
+
     func copy(command: MTLCommandBuffer, source: CAMetalDrawable) {
         guard window.isVisible else { return }
         let texture = source.texture
