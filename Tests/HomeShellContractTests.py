@@ -26,6 +26,11 @@ for token in [
     "Quit Idlesse",
     "openLibraryFromStatusItem",
     "NSApp.unhide(nil)",
+    'NSStatusItem.variableLength',
+    'button.title = " Idlesse"',
+    'Choose Wallpaper…',
+    'statusNextItem',
+    'statusPreviousItem',
 ]:
     assert token in main, token
 assert 'wallpaperMenu.addItem(withTitle: "Library…", action: #selector(openLibraryFromStatusItem)' in main
