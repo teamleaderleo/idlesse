@@ -16,6 +16,7 @@ struct LibrarySQLiteChecks {
         try corruptSelectedDatabaseFailsClosed()
         try failedCandidateLeavesJSONUntouched()
         try variantAwareCollectionItemsRoundTrip()
+        try collectionEditsPreserveVariantSelections()
         try jsonOverrideCannotBypassSelectedSQLite()
         try unknownSelectorFailsClosed()
         print("Library SQLite checks passed: verified migration, schema/indexes, deterministic export, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, variant-aware collection persistence, candidate safety, backend authority and selector versioning")
@@ -381,6 +382,73 @@ struct LibrarySQLiteChecks {
         precondition(merged.collections[0].items.contains(where: { $0.variantID == variantID }) &&
                      merged.collections[0].items.contains(where: { $0.variantID?.uuidString == "22222222-2222-2222-2222-222222222222" }),
                      "Concurrent collection variant selections were not preserved during rebase")
+    }
+
+    private static func collectionEditsPreserveVariantSelections() throws {
+        // Exercise production operations through both writers, reopening after
+        // each mutation so an in-memory-only fix cannot conceal durable loss.
+        for backend in ["sqlite", "json"] {
+            if backend == "json" { setenv("IDLESSE_LIBRARY_BACKEND", "json", 1) }
+            defer { unsetenv("IDLESSE_LIBRARY_BACKEND") }
+            let dir = try folder("variant-edits-\(backend)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let file = dir.appendingPathComponent("index.json")
+            var catalog = sampleCatalog()
+            catalog.version = 3
+            let first = SceneLibraryStore.SceneSelection(sceneID: "present", variantID: UUID())
+            let second = SceneLibraryStore.SceneSelection(sceneID: "present", variantID: UUID())
+            let other = SceneLibraryStore.SceneSelection(sceneID: "missing", variantID: UUID())
+            catalog.collections[0].items = [first, second, other]
+            _ = try writeJSON(catalog, to: file)
+            let store = try SceneLibraryStore(file: file)
+            func check(_ expected: [SceneLibraryStore.SceneSelection]) throws {
+                let reopened = try SceneLibraryStore(file: file)
+                precondition(reopened.catalog.collections[0].items == expected,
+                             "\(backend) collection edit changed unrelated variants or ordering")
+                precondition(reopened.usesSQLiteCatalog == (backend == "sqlite"))
+                precondition(reopened.catalog.version == SceneLibraryStore.catalogVersion,
+                             "The mutation did not upgrade the catalog to fence older lossy writers")
+            }
+
+            try store.moveScene("missing", in: "collection-a", by: -1)
+            try check([first, other, second])
+            try store.toggleMembership(sceneID: "builtin.Undertow", collectionID: "collection-a")
+            try check([first, other, second, .init(sceneID: "builtin.Undertow")])
+            try store.toggleMembership(sceneID: "builtin.Undertow", collectionID: "collection-a")
+            try check([first, other, second])
+
+            let stale = try SceneLibraryStore(file: file)
+            var concurrent = store.catalog
+            let added = SceneLibraryStore.SceneSelection(sceneID: "individual", variantID: UUID())
+            concurrent.collections[0].items.append(added)
+            try store.commitCatalog(concurrent)
+            try stale.moveScene("missing", in: "collection-a", by: -1)
+            try check([other, first, second, added])
+            try store.reloadFromDisk()
+            try store.remove("missing")
+            try check([first, second, added])
+            _ = try store.restoreRemoved("missing")
+            try check([first, second, added, other])
+
+            try store.remove("present")
+            try check([added, other])
+            _ = try store.restoreRemoved("present")
+            try check([added, other, first, second])
+
+            // Scene-only membership removal intentionally removes every variant
+            // of that scene, while all other selections stay unchanged.
+            try store.toggleMembership(sceneID: "present", collectionID: "collection-a")
+            try check([added, other])
+
+            try store.remove("missing")
+            try check([added])
+            // Recovery ledgers from older versions only remember collection IDs.
+            var records = try JSONSerialization.jsonObject(with: Data(contentsOf: store.removedFile)) as! [[String: Any]]
+            for index in records.indices { records[index].removeValue(forKey: "collectionSelections") }
+            try JSONSerialization.data(withJSONObject: records).write(to: store.removedFile, options: .atomic)
+            _ = try store.restoreRemoved("missing")
+            try check([added, .init(sceneID: "missing")])
+        }
     }
 
     private static func jsonOverrideCannotBypassSelectedSQLite() throws {

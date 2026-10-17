@@ -7,7 +7,8 @@ final class SceneLibraryStore {
         let catalogID: String
     }
 
-    static let catalogVersion = 3
+    // Older writers mutate collections through sceneIDs and can drop variants.
+    static let catalogVersion = 4
     static let maxEntries = maxIndividualEntries // Compatibility alias: individually bookmarked entries.
     /// Matches the Source bound. A bookmark is under a kilobyte in practice, so
     /// the index-size cap below, not this count, is what bounds memory.
@@ -256,13 +257,8 @@ final class SceneLibraryStore {
         var items: [SceneSelection] = []
         var playback: Playback?
 
-        /// Compatibility view for callers that only understand the original
-        /// scene-only collection model. Assigning it deliberately resets those
-        /// selections to the default variant.
-        var sceneIDs: [String] {
-            get { items.map(\.sceneID) }
-            set { items = newValue.map { SceneSelection(sceneID: $0) } }
-        }
+        /// Read-only compatibility view. Mutations must preserve whole selections.
+        var sceneIDs: [String] { items.map(\.sceneID) }
 
         init(id: String = UUID().uuidString, name: String, sceneIDs: [String] = [], playback: Playback? = nil) {
             self.id = id
@@ -593,9 +589,9 @@ final class SceneLibraryStore {
     func toggleMembership(sceneID: String, collectionID: String) throws {
         var next = catalog
         guard let index = next.collections.firstIndex(where: { $0.id == collectionID }) else { throw failure("Collection no longer exists.") }
-        if next.collections[index].sceneIDs.contains(sceneID) {
-            next.collections[index].sceneIDs.removeAll { $0 == sceneID }
-        } else { next.collections[index].sceneIDs.append(sceneID) }
+        if next.collections[index].items.contains(where: { $0.sceneID == sceneID }) {
+            next.collections[index].items.removeAll { $0.sceneID == sceneID }
+        } else { next.collections[index].items.append(.init(sceneID: sceneID)) }
         try save(next)
     }
     func moveCollection(_ id: String, by offset: Int) throws {
@@ -610,11 +606,11 @@ final class SceneLibraryStore {
     func moveScene(_ sceneID: String, in collectionID: String, by offset: Int) throws {
         var next = catalog
         guard let collection = next.collections.firstIndex(where: { $0.id == collectionID }),
-              let index = next.collections[collection].sceneIDs.firstIndex(of: sceneID),
+              let index = next.collections[collection].items.firstIndex(where: { $0.sceneID == sceneID }),
               [-1, 1].contains(offset) else { throw failure("Select a scene in a collection.") }
         let destination = index + offset
-        guard next.collections[collection].sceneIDs.indices.contains(destination) else { return }
-        next.collections[collection].sceneIDs.swapAt(index, destination)
+        guard next.collections[collection].items.indices.contains(destination) else { return }
+        next.collections[collection].items.swapAt(index, destination)
         try save(next)
     }
     func setPlayback(_ id: String, _ playback: Playback) throws {
