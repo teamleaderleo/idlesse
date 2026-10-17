@@ -219,6 +219,14 @@ enum WallpaperSmoke {
         controller.resumeDefaults = UserDefaults(suiteName: assignmentSuite)!
         defer { controller.resumeDefaults.removePersistentDomain(forName: assignmentSuite) }
         controller.presentsWindows = false
+        precondition(controller.preservesNativeWallpaper, "Native wallpaper preservation should default on")
+        controller.preservesNativeWallpaper = false
+        precondition(!controller.preservesNativeWallpaper &&
+                     controller.resumeDefaults.bool(forKey: "wallpaperPreserveNativeWallpaper") == false,
+                     "Native wallpaper preservation opt-out must use the injected defaults")
+        controller.preservesNativeWallpaper = true
+        precondition(controller.preservesNativeWallpaper,
+                     "Native wallpaper preservation must be re-enableable without replacing the selection")
         var errors: [String] = []
         controller.onError = { errors.append($0) }
         func wait(timeout: TimeInterval = 15, line: UInt = #line, until condition: () -> Bool) {
