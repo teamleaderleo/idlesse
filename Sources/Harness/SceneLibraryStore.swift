@@ -241,11 +241,66 @@ final class SceneLibraryStore {
             return start < end ? minute >= start && minute < end : minute >= start || minute < end
         }
     }
+    struct SceneSelection: Codable, Equatable, Hashable, Sendable {
+        var sceneID: String
+        var variantID: UUID?
+
+        init(sceneID: String, variantID: UUID? = nil) {
+            self.sceneID = sceneID
+            self.variantID = variantID
+        }
+    }
     struct Collection: Codable, Equatable {
         var id: String = UUID().uuidString
         var name: String
-        var sceneIDs: [String] = []
+        var items: [SceneSelection] = []
         var playback: Playback?
+
+        /// Compatibility view for callers that only understand the original
+        /// scene-only collection model. Assigning it deliberately resets those
+        /// selections to the default variant.
+        var sceneIDs: [String] {
+            get { items.map(\.sceneID) }
+            set { items = newValue.map { SceneSelection(sceneID: $0) } }
+        }
+
+        init(id: String = UUID().uuidString, name: String, sceneIDs: [String] = [], playback: Playback? = nil) {
+            self.id = id
+            self.name = name
+            self.items = sceneIDs.map { SceneSelection(sceneID: $0) }
+            self.playback = playback
+        }
+
+        init(id: String = UUID().uuidString, name: String, items: [SceneSelection], playback: Playback? = nil) {
+            self.id = id
+            self.name = name
+            self.items = items
+            self.playback = playback
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, name, items, sceneIDs, playback }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+            name = try values.decode(String.self, forKey: .name)
+            if let decoded = try values.decodeIfPresent([SceneSelection].self, forKey: .items) {
+                items = decoded
+            } else {
+                items = try values.decodeIfPresent([String].self, forKey: .sceneIDs)?.map {
+                    SceneSelection(sceneID: $0)
+                } ?? []
+            }
+            playback = try values.decodeIfPresent(Playback.self, forKey: .playback)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(id, forKey: .id)
+            try values.encode(name, forKey: .name)
+            try values.encode(items, forKey: .items)
+            try values.encodeIfPresent(playback, forKey: .playback)
+        }
     }
     struct UserStack: Codable, Equatable, Sendable {
         var id: String = UUID().uuidString
@@ -445,7 +500,7 @@ final class SceneLibraryStore {
         next.entries.removeAll { $0.sourceID == id }
         next.favorites.subtract(removed)
         for entryID in removed { next.recent.removeValue(forKey: entryID) }
-        for index in next.collections.indices { next.collections[index].sceneIDs.removeAll { removed.contains($0) } }
+        for index in next.collections.indices { next.collections[index].items.removeAll { removed.contains($0.sceneID) } }
         Self.pruneStacks(&next.stacks, removing: removed)
         try save(next)
     }
@@ -468,7 +523,7 @@ final class SceneLibraryStore {
         next.entries.removeAll { $0.id == id }
         next.favorites.remove(id)
         next.recent.removeValue(forKey: id)
-        for i in next.collections.indices { next.collections[i].sceneIDs.removeAll { $0 == id } }
+        for i in next.collections.indices { next.collections[i].items.removeAll { $0.sceneID == id } }
         Self.pruneStacks(&next.stacks, removing: [id])
         try save(next)
     }
@@ -772,7 +827,7 @@ final class SceneLibraryStore {
         guard value.collections.count <= 32,
               Set(value.collections.map(\.id)).count == value.collections.count,
               Set(value.collections.map { $0.name.lowercased() }).count == value.collections.count,
-              value.collections.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.utf8.count <= 120 && $0.id.utf8.count <= 128 && $0.sceneIDs.count <= 256 && Set($0.sceneIDs).count == $0.sceneIDs.count && $0.sceneIDs.allSatisfy { $0.utf8.count <= 128 } })
+              value.collections.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.utf8.count <= 120 && $0.id.utf8.count <= 128 && $0.items.count <= 256 && Set($0.items).count == $0.items.count && $0.items.allSatisfy { !$0.sceneID.isEmpty && $0.sceneID.utf8.count <= 128 } })
         else { throw failure("Use unique collection names (1–120 bytes), with at most 32 collections and 256 scenes each.") }
     }
 

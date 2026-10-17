@@ -291,7 +291,12 @@ enum SceneLibrarySQLiteCatalog {
         root["collections"] = catalog.collections.enumerated().map { ordinal, collection -> [String: Any] in
             var value: [String: Any] = [
                 "ordinal": ordinal, "id": collection.id, "name": collection.name,
-                "sceneIDs": collection.sceneIDs
+                "sceneIDs": collection.sceneIDs,
+                "items": collection.items.map { item in
+                    var object: [String: Any] = ["sceneID": item.sceneID]
+                    if let variantID = item.variantID { object["variantID"] = variantID.uuidString }
+                    return object
+                }
             ]
             if let playback = collection.playback {
                 var object: [String: Any] = ["minutes": playback.minutes, "shuffle": playback.shuffle]
@@ -722,9 +727,10 @@ enum SceneLibrarySQLiteCatalog {
         }
         let clearItems = try db.prepare("DELETE FROM collection_items WHERE collection_id=?")
         try clearItems.bind(value.id, at: 1); try clearItems.stepDone()
-        let item = try db.prepare("INSERT INTO collection_items(collection_id, ordinal, scene_id, variant_id) VALUES(?, ?, ?, NULL)")
-        for (itemOrdinal, sceneID) in value.sceneIDs.enumerated() {
-            try item.bind(value.id, at: 1); try item.bind(itemOrdinal, at: 2); try item.bind(sceneID, at: 3)
+        let item = try db.prepare("INSERT INTO collection_items(collection_id, ordinal, scene_id, variant_id) VALUES(?, ?, ?, ?)")
+        for (itemOrdinal, selection) in value.items.enumerated() {
+            try item.bind(value.id, at: 1); try item.bind(itemOrdinal, at: 2); try item.bind(selection.sceneID, at: 3)
+            try item.bind(selection.variantID?.uuidString, at: 4)
             try item.stepDone(); item.reset()
         }
     }
@@ -881,12 +887,20 @@ enum SceneLibrarySQLiteCatalog {
             guard let id = weekdayRows.text(0) else { throw failure("A collection weekday row is invalid.") }
             weekdays[id, default: []].insert(weekdayRows.int(1))
         }
-        var items: [String: [(Int, String)]] = [:]
+        var items: [String: [(Int, SceneLibraryStore.SceneSelection)]] = [:]
         let itemRows = try db.prepare("SELECT collection_id, ordinal, scene_id, variant_id FROM collection_items ORDER BY collection_id, ordinal")
         while try itemRows.stepRow() {
             guard let id = itemRows.text(0), let sceneID = itemRows.text(2) else { throw failure("A collection item row is invalid.") }
-            guard itemRows.isNull(3) else { throw failure("This Library database contains variant-aware collection items that require a newer catalog model.") }
-            items[id, default: []].append((itemRows.int(1), sceneID))
+            let variantID: UUID?
+            if itemRows.isNull(3) {
+                variantID = nil
+            } else {
+                guard let raw = itemRows.text(3), let parsed = UUID(uuidString: raw) else {
+                    throw failure("A collection item contains an invalid variant identifier.")
+                }
+                variantID = parsed
+            }
+            items[id, default: []].append((itemRows.int(1), .init(sceneID: sceneID, variantID: variantID)))
         }
         let statement = try db.prepare("""
             SELECT id, name, playback_present, playback_minutes, playback_shuffle,
@@ -904,7 +918,7 @@ enum SceneLibrarySQLiteCatalog {
                     weekdays: statement.int(7) == 1 ? (weekdays[id] ?? []) : nil)
             } else { playback = nil }
             result.append(.init(id: id, name: name,
-                sceneIDs: (items[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), playback: playback))
+                items: (items[id] ?? []).sorted { $0.0 < $1.0 }.map(\.1), playback: playback))
         }
         return result
     }

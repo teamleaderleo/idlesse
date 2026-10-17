@@ -15,10 +15,10 @@ struct LibrarySQLiteChecks {
         try failedTransactionRollsBack()
         try corruptSelectedDatabaseFailsClosed()
         try failedCandidateLeavesJSONUntouched()
-        try reservedVariantIntentFailsClosed()
+        try variantAwareCollectionItemsRoundTrip()
         try jsonOverrideCannotBypassSelectedSQLite()
         try unknownSelectorFailsClosed()
-        print("Library SQLite checks passed: verified migration, schema/indexes, deterministic export, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, fail-closed recovery/variant intent, candidate safety, backend authority and selector versioning")
+        print("Library SQLite checks passed: verified migration, schema/indexes, deterministic export, exact optional state, row-local mutations, stale-writer rebasing, ordinal repair, rollback, variant-aware collection persistence, candidate safety, backend authority and selector versioning")
     }
 
     static func expectFailure(_ message: String, _ action: () throws -> Void) {
@@ -333,19 +333,54 @@ struct LibrarySQLiteChecks {
         precondition(reopened.catalog == originalCatalog)
     }
 
-    private static func reservedVariantIntentFailsClosed() throws {
-        let dir = try folder("variant-reserve")
+    private static func variantAwareCollectionItemsRoundTrip() throws {
+        let dir = try folder("variant-aware-collection")
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("index.json")
         _ = try writeJSON(sampleCatalog(), to: file)
         let store = try SceneLibraryStore(file: file)
         try store.favorite("present")
+        let variantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         try SceneLibrarySQLiteCatalog.testingExecute(
-            "UPDATE collection_items SET variant_id='11111111-1111-1111-1111-111111111111' WHERE collection_id='collection-a' AND ordinal=0",
+            "UPDATE collection_items SET variant_id='\(variantID.uuidString)' WHERE collection_id='collection-a' AND ordinal=0",
             for: file)
-        expectFailure("Current model silently discarded reserved collection variant intent") {
-            _ = try SceneLibraryStore(file: file)
-        }
+        let reopened = try SceneLibraryStore(file: file)
+        let collection = reopened.catalog.collections.first(where: { $0.id == "collection-a" })!
+        precondition(collection.items == [
+            .init(sceneID: "present", variantID: variantID),
+            .init(sceneID: "missing"),
+            .init(sceneID: "builtin.Undertow")
+        ], "SQLite dropped or reordered variant-aware collection selections")
+
+        let legacy = Data("""
+        {"id":"legacy","name":"Legacy","sceneIDs":["present","missing"]}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(SceneLibraryStore.Collection.self, from: legacy)
+        precondition(decoded.items == [.init(sceneID: "present"), .init(sceneID: "missing")],
+                     "Legacy sceneIDs did not decode as default selections")
+
+        var edited = reopened.catalog
+        edited.collections[0].items = [
+            .init(sceneID: "missing"),
+            .init(sceneID: "present", variantID: variantID)
+        ]
+        try reopened.commitCatalog(edited)
+        let editedStore = try SceneLibraryStore(file: file)
+        precondition(editedStore.catalog.collections[0].items == edited.collections[0].items,
+                     "Collection selection order did not survive a catalog mutation")
+        try editedStore.remove("present")
+        let removedStore = try SceneLibraryStore(file: file)
+        precondition(removedStore.catalog.collections[0].items == [.init(sceneID: "missing")],
+                     "Removing a scene left a stale variant selection in its collection")
+
+        var proposed = sampleCatalog()
+        proposed.collections[0].items[0] = .init(sceneID: "present", variantID: variantID)
+        var disk = sampleCatalog()
+        disk.collections[0].items.append(.init(sceneID: "present", variantID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!))
+        let merged = SceneLibraryStore.rebase(proposed, from: sampleCatalog(), onto: disk)
+        precondition(merged.collections[0].items.contains(where: { $0.variantID == variantID }) &&
+                     merged.collections[0].items.contains(where: { $0.variantID?.uuidString == "22222222-2222-2222-2222-222222222222" }),
+                     "Concurrent collection variant selections were not preserved during rebase")
     }
 
     private static func jsonOverrideCannotBypassSelectedSQLite() throws {

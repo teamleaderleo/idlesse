@@ -137,7 +137,7 @@ extension SceneLibraryStore {
         let gone = Set((base.entries + disk.entries + proposed.entries).map(\.id)).subtracting(kept)
         result.favorites.subtract(gone)
         for key in gone { result.recent.removeValue(forKey: key) }
-        for index in result.collections.indices { result.collections[index].sceneIDs.removeAll { gone.contains($0) } }
+        for index in result.collections.indices { result.collections[index].items.removeAll { gone.contains($0.sceneID) } }
         pruneStacks(&result.stacks, removing: gone)
         while result.recent.count > 256, let oldest = result.recent.min(by: { $0.value < $1.value })?.key {
             result.recent.removeValue(forKey: oldest)
@@ -208,8 +208,8 @@ extension SceneLibraryStore {
             var merged = result[index]
             if local.name != old.name { merged.name = local.name }
             if local.playback != old.playback { merged.playback = local.playback }
-            if local.sceneIDs != old.sceneIDs {
-                merged.sceneIDs = mergeOrderedIDs(proposed: local.sceneIDs, base: old.sceneIDs, disk: merged.sceneIDs)
+            if local.items != old.items {
+                merged.items = mergeOrderedSelections(proposed: local.items, base: old.items, disk: merged.items)
             }
             result[index] = merged
         }
@@ -239,6 +239,31 @@ extension SceneLibraryStore {
         let touched = Set(ordered)
         var iterator = ordered.makeIterator()
         return result.map { touched.contains($0) ? (iterator.next() ?? $0) : $0 }
+    }
+
+    /// Replays ordered collection membership deltas while treating a variant
+    /// choice as part of the item's identity. A local replacement removes only
+    /// the old selection; a variant another writer added remains intact.
+    private static func mergeOrderedSelections(proposed: [SceneSelection], base: [SceneSelection], disk: [SceneSelection]) -> [SceneSelection] {
+        let baseSet = Set(base)
+        let proposedSet = Set(proposed)
+        let removed = baseSet.subtracting(proposedSet)
+        var result = disk.filter { !removed.contains($0) }
+
+        for item in proposed where !baseSet.contains(item) && !result.contains(item) { result.append(item) }
+
+        let baseCommon = base.filter { proposedSet.contains($0) }
+        let proposedCommon = proposed.filter { baseSet.contains($0) }
+        guard baseCommon != proposedCommon else { return result }
+
+        let resultSet = Set(result)
+        let ordered = proposedCommon.filter { resultSet.contains($0) }
+        let touched = Set(ordered)
+        var iterator = ordered.makeIterator()
+        for index in result.indices where touched.contains(result[index]) {
+            if let item = iterator.next() { result[index] = item }
+        }
+        return result
     }
 
     // MARK: Durable writes and removals
