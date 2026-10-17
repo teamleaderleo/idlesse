@@ -22,6 +22,9 @@ library = (root / "Sources/Harness/SceneLibraryController.swift").read_text()
 assert "panel.canChooseDirectories = true" in library
 assert "Folders become rescan-able Library Sources" in library
 assert "self.importSource(directory)" in library
+assert "superseded" in library
+assert "let selectedVideos = Dictionary(grouping: videos" in library
+assert "let selectedImages = Dictionary(grouping: images.filter" in library
 
 # Smoke the visible shell contract without requiring real monitors/media.
 for token in [

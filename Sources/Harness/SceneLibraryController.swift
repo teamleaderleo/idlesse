@@ -1507,7 +1507,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             throw SceneLibraryStore.libraryFailure("The Source folder could not be scanned.")
         }
         var visited = 0
-        var entries: [SceneLibraryStore.SourceEntry] = []
+        typealias Candidate = (url: URL, values: URLResourceValues)
+        var sceneEntries: [SceneLibraryStore.SourceEntry] = []
+        var mediaCandidates: [Candidate] = []
         while let candidate = enumerator.nextObject() as? URL {
             try Task.checkCancellation()
             visited += 1
@@ -1516,26 +1518,68 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
             }
             let values = try candidate.resourceValues(forKeys: Set(keys))
             let ext = candidate.pathExtension.lowercased()
+            let archived = candidate.pathComponents.contains { $0.lowercased().hasPrefix("superseded") }
+            if archived {
+                if values.isDirectory == true { enumerator.skipDescendants() }
+                continue
+            }
             if values.isDirectory == true {
                 if ext == "idlesse" {
                     let relative = try SceneLibraryStore.relativePath(from: root, to: candidate)
-                    entries.append(.init(relativeMediaPath: relative,
+                    sceneEntries.append(.init(relativeMediaPath: relative,
                         title: candidate.deletingPathExtension().lastPathComponent, mediaType: "scene",
                         observation: packageObservation(candidate, modifiedAt: values.contentModificationDate)))
                     enumerator.skipDescendants()
                 }
             } else if sourceNativeExtensions.contains(ext) {
-                let relative = try SceneLibraryStore.relativePath(from: root, to: candidate)
-                let type = ext == "idlesse" ? "scene" : (["mp4", "mov"].contains(ext) ? "video" : "image")
-                entries.append(.init(relativeMediaPath: relative,
-                    title: candidate.deletingPathExtension().lastPathComponent, mediaType: type,
-                    observation: .init(byteLength: values.fileSize.map(Int64.init), modifiedAt: values.contentModificationDate)))
+                mediaCandidates.append((candidate, values))
             }
-            guard entries.count <= SceneLibraryStore.maxSourceEntries else {
+            guard sceneEntries.count + mediaCandidates.count <= SceneLibraryStore.maxSourceEntries else {
                 throw SceneLibraryStore.libraryFailure("The Library supports up to 4096 source-backed entries.")
             }
         }
         if let enumerationError { throw enumerationError }
+
+        // A wallpaper folder commonly contains a live video plus a JPG poster,
+        // and old exports may retain several superseded encodes. Those are
+        // representations of one wallpaper, not separate Library items.
+        func mediaKey(_ url: URL) -> String {
+            var key = url.deletingPathExtension().lastPathComponent.lowercased()
+            for suffix in ["-restored-4k-hevc", "-restored-4k60", "-restored-4k", "-4k-hevc", "-4k60", "-restored", "-4k"] {
+                if key.hasSuffix(suffix) {
+                    key.removeLast(suffix.count)
+                    break
+                }
+            }
+            return key
+        }
+        func largest(_ candidates: [Candidate]) -> Candidate {
+            candidates.max {
+                let left = $0.values.fileSize ?? 0
+                let right = $1.values.fileSize ?? 0
+                if left != right { return left < right }
+                return $0.url.path.localizedStandardCompare($1.url.path) == .orderedDescending
+            }!
+        }
+        let videos = mediaCandidates.filter { ["mp4", "mov"].contains($0.url.pathExtension.lowercased()) }
+        let selectedVideos = Dictionary(grouping: videos, by: { mediaKey($0.url) }).values.map(largest)
+        let videoKeys = Set(selectedVideos.map { mediaKey($0.url) })
+        let images = mediaCandidates.filter { !["mp4", "mov"].contains($0.url.pathExtension.lowercased()) }
+        let selectedImages = Dictionary(grouping: images.filter { !videoKeys.contains(mediaKey($0.url)) },
+                                        by: { mediaKey($0.url) }).values.map(largest)
+        let selectedMedia = selectedVideos + selectedImages
+        var entries = sceneEntries
+        for (url, values) in selectedMedia {
+            let ext = url.pathExtension.lowercased()
+            let relative = try SceneLibraryStore.relativePath(from: root, to: url)
+            let type = ["mp4", "mov"].contains(ext) ? "video" : "image"
+            entries.append(.init(relativeMediaPath: relative,
+                title: url.deletingPathExtension().lastPathComponent, mediaType: type,
+                observation: .init(byteLength: values.fileSize.map(Int64.init), modifiedAt: values.contentModificationDate)))
+        }
+        guard entries.count <= SceneLibraryStore.maxSourceEntries else {
+            throw SceneLibraryStore.libraryFailure("The Library supports up to 4096 source-backed entries.")
+        }
         return entries.sorted { $0.relativeMediaPath.localizedStandardCompare($1.relativeMediaPath) == .orderedAscending }
     }
 
