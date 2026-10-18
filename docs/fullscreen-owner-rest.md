@@ -9,3 +9,7 @@ hysteretic coverage path.
 Fullscreen rest is tracked separately from ordinary coverage rest. It resumes
 on the next sample when the owner disappears, while shared video playback
 still stays alive for any display that remains visible.
+
+Desktop qualification reports also record measured loop-boundary intervals per
+display. The first loop establishes a baseline; later samples report elapsed
+seconds per loop without changing the playback path.

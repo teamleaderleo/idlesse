@@ -27,17 +27,24 @@ enum DesktopQualification {
             try require(controller.surfaces.count == NSScreen.screens.count, "Missing desktop surface")
         }
         var samples: [[String: Any]] = []
+        var loopTiming: [String: LoopBoundaryTiming] = [:]
+        var loopIntervals: [String: [Double]] = [:]
         let began = ProcessInfo.processInfo.systemUptime
         func record(_ phase: String, _ cycle: Int) {
+            let now = ProcessInfo.processInfo.systemUptime - began
             let memory = PlaybackBenchmark.memory()
             var row: [String: Any] = ["phase": phase, "cycle": cycle,
-                "seconds": ProcessInfo.processInfo.systemUptime - began,
+                "seconds": now,
                 "processCPUSeconds": Double(Darwin.clock()) / Double(CLOCKS_PER_SEC),
                 "footprintBytes": memory["footprint"]!, "residentBytes": memory["resident"]!,
                 "surfaceCount": controller.surfaces.count]
             row["displays"] = controller.surfaces.map { surface -> [String: Any] in
+                let id = WallpaperController.persistentDisplayIdentifier(surface.displayID)
+                if let interval = loopTiming[id, default: LoopBoundaryTiming()].record(loopCount: surface.diagnostics.loopCount, at: now) {
+                    loopIntervals[id, default: []].append(interval)
+                }
                 var display: [String: Any] = [
-                    "displayID": WallpaperController.persistentDisplayIdentifier(surface.displayID),
+                    "displayID": id,
                     "screenNumber": surface.displayID,
                     "frame": NSStringFromRect(surface.window.frame),
                     "coverageResting": surface.isCoverageResting,
@@ -103,6 +110,7 @@ enum DesktopQualification {
             "screens": NSScreen.screens.map { ["frame": NSStringFromRect($0.frame),
                 "scale": $0.backingScaleFactor, "maximumFramesPerSecond": $0.maximumFramesPerSecond] as [String: Any] },
             "samples": samples,
+            "loopBoundaryIntervalsSeconds": loopIntervals,
             "limitations": ["Synthetic lifecycle calls, not physical sleep or hotplug", "No energy or decoder-specific memory counter", "No HDR qualification", "Presented frame counts can be zero when the desktop is occluded or locked"]]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output, options: .withoutOverwriting)
     }
