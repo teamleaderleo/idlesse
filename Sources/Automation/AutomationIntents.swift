@@ -37,6 +37,18 @@ struct ApplyAmbientSetIntent: AppIntent {
     }
 }
 
+struct ApplyCollectionIntent: AppIntent {
+    static var title: LocalizedStringResource = "Apply Wallpaper Collection"
+    static var description = IntentDescription("Start a named Idlesse Library collection using its normal rotation and variant semantics.")
+
+    @Parameter(title: "Collection ID or Name") var collection: String
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let response = try await AutomationIntentRunner.run(.init(action: .applyCollection, target: collection))
+        return .result(dialog: IntentDialog(stringLiteral: response.message))
+    }
+}
+
 struct SetWallpaperIntent: AppIntent {
     static var title: LocalizedStringResource = "Set Wallpaper"
     static var description = IntentDescription("Set an Idlesse Library wallpaper by ID, title, catalog ID, or path.")
@@ -117,6 +129,9 @@ struct IdlesseAppShortcuts: AppShortcutsProvider {
         AppShortcut(intent: ApplyAmbientSetIntent(),
                     phrases: ["Apply Ambient Set in \(.applicationName)"],
                     shortTitle: "Apply Ambient Set", systemImageName: "sparkles")
+        AppShortcut(intent: ApplyCollectionIntent(),
+                    phrases: ["Apply wallpaper collection in \(.applicationName)"],
+                    shortTitle: "Apply Collection", systemImageName: "rectangle.stack")
         AppShortcut(intent: SetWallpaperIntent(),
                     phrases: ["Set wallpaper in \(.applicationName)"],
                     shortTitle: "Set Wallpaper", systemImageName: "photo")
