@@ -46,6 +46,8 @@ PREVIEW_RUNTIME_SOURCES=(
   "$ROOT/Sources/Runtime/ImagePreparation.swift"
   "$ROOT/Sources/Runtime/GradientRenderer.swift"
   "$ROOT/Sources/Runtime/MetalSceneRenderer.swift"
+  "$ROOT/Sources/Runtime/ShaderEffectCompiler.swift"
+  "$ROOT/Sources/Runtime/ShaderInputs.swift"
   "$ROOT/Sources/Runtime/ScenePreviewPolicy.swift"
   "$ROOT/Sources/Runtime/ScenePreviewRuntime.swift"
   "$ROOT/Sources/Shared/ScalingMode.swift"
