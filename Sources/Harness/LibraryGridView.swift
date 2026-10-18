@@ -341,6 +341,8 @@ final class LibraryCardView: NSView, NSDraggingSource {
     @objc private func showQuickMenu() {
         guard let item, let menu = onMenu?(item) else { return }
         onClick?(item)
+        hovered = false
+        updateHover()
         menu.popUp(positioning: nil, at: NSPoint(x: quickMenu.frame.minX, y: quickMenu.frame.maxY), in: self)
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -354,6 +356,8 @@ final class LibraryCardView: NSView, NSDraggingSource {
         let point = convert(event.locationInWindow, from: nil)
         guard hypot(point.x-origin.x, point.y-origin.y) > 5, let url = onDragURL?(item) else { return }
         mouseOrigin = nil
+        hovered = false
+        updateHover()
         let dragging = NSDraggingItem(pasteboardWriter: url as NSURL)
         dragging.setDraggingFrame(thumbnailView.frame, contents: thumbnailView.image)
         beginDraggingSession(with: [dragging], event: event, source: self)
