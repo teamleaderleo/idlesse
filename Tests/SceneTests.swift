@@ -701,6 +701,25 @@ import Foundation
         var invalidFocus = focused
         invalidFocus.focus = SceneFocus(x: .nan, y: 0)
         do { _ = try invalidFocus.evaluated(); fatalError("Accepted nonfinite focus") } catch is SceneError {}
+        let attentionNode = SceneNode(content: .gradient)
+        let attention = SceneDescriptor(title: "Attention", nodes: [attentionNode], bindings: [
+            .init(target: .init(nodeID: attentionNode.id, property: .opacity), scale: 0.8, offset: 0.1, signal: .desktopAttention, smoothing: 1)
+        ])
+        let attentionPackage = root.appendingPathComponent("Attention.idlesse")
+        try ScenePackageWriter.write(attention, to: attentionPackage)
+        let attentionManifestURL = attentionPackage.appendingPathComponent("manifest.json")
+        var attentionManifest = try JSONSerialization.jsonObject(with: Data(contentsOf: attentionManifestURL)) as! [String: Any]
+        precondition((attentionManifest["capabilities"] as? [String])?.contains("desktop-attention") == true,
+                     "Desktop-attention packages must opt in explicitly")
+        let attentionRead = try await source.resolve(attentionPackage)
+        var exposed = SceneSignals(); exposed.desktopAttention = 1
+        var covered = SceneSignals(); covered.desktopAttention = 0
+        let exposedOpacity = try attentionRead.evaluated(signals: exposed).nodes[0].opacity
+        let coveredOpacity = try attentionRead.evaluated(signals: covered).nodes[0].opacity
+        precondition(exposedOpacity > coveredOpacity, "Desktop attention must reach signal bindings")
+        attentionManifest["capabilities"] = [] as [String]
+        try JSONSerialization.data(withJSONObject: attentionManifest).write(to: attentionManifestURL)
+        do { _ = try await source.resolve(attentionPackage); fatalError("Accepted desktop attention without capability") } catch is SceneError {}
         print("Scene tests passed: legacy formats, typed controls, features, text, shapes, shaders, independent presets, budgets and audio capabilities")
     }
 }

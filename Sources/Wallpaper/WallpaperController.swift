@@ -63,9 +63,12 @@ final class WallpaperSurface {
     var menuStripFrames: Int { menuStrip?.frames ?? 0 }
     var menuStripTiming: String { menuStrip?.timing.summary ?? "disabled" }
     var menuStripWindowNumber: Int? { menuStrip?.window.windowNumber }
+    private(set) var usesDesktopAttention: Bool
+    private(set) var desktopAttention = DesktopAttentionSignal.exposed
     func updateScene(_ scene: SceneDescriptor) -> Bool {
         guard renderer.updateScene(scene) else { return false }
         sceneDescriptor = scene
+        usesDesktopAttention = scene.usesDesktopAttention
         return true
     }
 
@@ -77,6 +80,7 @@ final class WallpaperSurface {
         self.sourceURL = sourceURL?.standardizedFileURL
         self.requestedVariantID = requestedVariantID
         self.sceneDescriptor = playable
+        self.usesDesktopAttention = playable.usesDesktopAttention
         self.usesSharedVideoHub = sharedHub != nil
         self.securityScope = securityScope
         window = DesktopWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -129,6 +133,12 @@ final class WallpaperSurface {
             metal.mirrorFrame = { [weak strip] command, drawable in strip?.copy(command: command, source: drawable) }
         }
         updateFrameRate()
+    }
+
+    func setDesktopAttention(_ value: Double) {
+        desktopAttention = value.isFinite ? min(1, max(0, value)) : DesktopAttentionSignal.exposed
+        guard usesDesktopAttention else { return }
+        renderer.setDesktopAttention(desktopAttention)
     }
 
     func setCleanDesktop(_ enabled: Bool, hideWidgets: Bool = false, click: @escaping () -> Void, menu: @escaping () -> NSMenu) {
@@ -1185,7 +1195,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
 
     private func pollCoverage() {
         guard desktopReveal.allowsCoverage(at: ProcessInfo.processInfo.systemUptime) else { return }
-        guard presentsWindows, coveragePauseEnabled, !surfaces.isEmpty, !suspended else { return }
+        let attentionActive = surfaces.contains(where: \.usesDesktopAttention)
+        guard presentsWindows, !surfaces.isEmpty, !suspended,
+              coveragePauseEnabled || (attentionActive && !shouldPause) else { return }
         var own = Set<CGWindowID>()
         for surface in surfaces {
             own.insert(CGWindowID(surface.window.windowNumber))
@@ -1194,9 +1206,13 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         var changed = false
         let pid = Int(ProcessInfo.processInfo.processIdentifier)
         for surface in surfaces {
+            let feedAttention = surface.usesDesktopAttention && !shouldPause
+            guard coveragePauseEnabled || feedAttention else { continue }
             let measurement = coverageMonitor.measurement(of: surface.window.frame,
                 above: surface.window.level.rawValue, excluding: own, ownPID: pid)
+            if feedAttention { surface.setDesktopAttention(DesktopAttentionSignal.value(coverageFraction: measurement.fraction)) }
             let key = Self.persistentDisplayIdentifier(surface.displayID)
+            guard coveragePauseEnabled else { continue }
             let decision = coverageMonitor.evaluate(displayKey: key, fraction: measurement.fraction,
                 currentResting: surface.isCovered)
             let candidate = decision.candidate.map { $0 ? "rest" : "resume" } ?? "hold"

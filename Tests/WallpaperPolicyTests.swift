@@ -117,6 +117,15 @@ enum WallpaperPolicyTests {
         ])
         precondition(union == 1, "Overlapping window bounds must be measured as a union")
 
+        precondition(DesktopAttentionSignal.value(coverageFraction: 0) == 1)
+        precondition(DesktopAttentionSignal.value(coverageFraction: 1) == 0)
+        precondition(DesktopAttentionSignal.value(coverageFraction: 0.25) == 0.75)
+        precondition(DesktopAttentionSignal.value(coverageFraction: -.infinity) == 1,
+                     "Invalid coverage must fail open for creative input")
+        precondition(!CoverageRestPolicy.shouldRestSharedPlayback(
+            globalPause: false, displayResting: []),
+            "Attention sampling must not turn coverage-rest back on")
+
         let suite = "Idlesse.DisplayAssignmentStoreTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
