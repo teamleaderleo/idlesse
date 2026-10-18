@@ -151,6 +151,18 @@ struct WallpaperStateIntent: AppIntent {
     }
 }
 
+struct LaunchAtLoginIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Launch at Login"
+    static var description = IntentDescription("Enable or disable keeping Idlesse available after sign-in.")
+
+    @Parameter(title: "Enabled") var enabled: Bool
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let response = try await AutomationIntentRunner.run(.init(action: .setLoginItem, enabled: enabled))
+        return .result(dialog: IntentDialog(stringLiteral: response.message))
+    }
+}
+
 struct IdlesseAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: ApplyAmbientSetIntent(),
@@ -186,6 +198,9 @@ struct IdlesseAppShortcuts: AppShortcutsProvider {
         AppShortcut(intent: WallpaperStateIntent(),
                     phrases: ["Get wallpaper state in \(.applicationName)"],
                     shortTitle: "Wallpaper State", systemImageName: "info.circle")
+        AppShortcut(intent: LaunchAtLoginIntent(),
+                    phrases: ["Set launch at login"],
+                    shortTitle: "Launch at Login", systemImageName: "arrow.forward.to.line.compact")
     }
 }
 #endif
