@@ -605,6 +605,13 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         more.menu?.autoenablesItems = false
         more.target = self; more.action = #selector(moreAction)
         favorite.isBordered = false; favorite.setAccessibilityLabel("Favorite wallpaper")
+        livePreviewButton.setAccessibilityLabel("Play wallpaper preview")
+        adjust.setAccessibilityLabel("Adjust wallpaper framing")
+        edit.setAccessibilityLabel("Edit wallpaper in Studio")
+        more.setAccessibilityLabel("More wallpaper actions")
+        clearSearchButton.setAccessibilityLabel("Clear wallpaper search")
+        apply.setAccessibilityLabel("Set wallpaper on desktop")
+        remove.setAccessibilityLabel("Remove wallpaper from Library")
         let heading = NSStackView(views: [titleLabel, NSView(), favorite])
         heading.orientation = .horizontal
         livePreviewButton.target = self
