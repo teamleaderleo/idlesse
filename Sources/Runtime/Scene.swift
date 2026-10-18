@@ -1178,7 +1178,12 @@ struct LocalSceneSource: SceneSource {
         } else if manifest.features != nil || manifest.metadata != nil {
             throw SceneError.invalid("Feature declarations and metadata require revision 21.")
         }
-        guard Set(manifest.capabilities).count == manifest.capabilities.count, manifest.capabilities.allSatisfy({ ($0 == "pointer" && manifest.version >= 8) || ($0 == "audio" && manifest.version >= 14) }) else { throw SceneError.invalid("Unsupported scene capability.") }
+        guard Set(manifest.capabilities).count == manifest.capabilities.count,
+              manifest.capabilities.allSatisfy({
+                  ($0 == "pointer" && manifest.version >= 8) ||
+                  ($0 == "audio" && manifest.version >= 14) ||
+                  ($0 == "desktop-attention" && manifest.version == SceneFormat.revision)
+              }) else { throw SceneError.invalid("Unsupported scene capability.") }
         let scene = try json(Scene.self, name: "scene.json", root: root)
         guard (manifest.version == 1 ? scene.nodes == nil : scene.layers == nil),
               let descriptions = manifest.version == 1 ? scene.layers : scene.nodes,
