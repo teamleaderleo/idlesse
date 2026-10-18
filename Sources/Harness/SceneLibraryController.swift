@@ -196,8 +196,11 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let thumbnailQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "Idlesse.library.thumbnails"
-        queue.qualityOfService = .userInitiated
-        queue.maxConcurrentOperationCount = 3
+        // Thumbnail work is opportunistic browsing work. Keep it below the
+        // wallpaper/rendering path so a large Air Blue source cannot starve the
+        // resident menu-bar app or desktop compositor while the Library opens.
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 2
         return queue
     }()
     private let thumbnails = NSCache<NSString, NSImage>()
