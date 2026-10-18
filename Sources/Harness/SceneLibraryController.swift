@@ -30,6 +30,8 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private var selectionByScope: [Scope: String] = [:]
     private var homeNavigation = false
     var onScopeChange: ((Scope) -> Void)?
+    var onTogglePlayback: (() -> Void)?
+    var onCyclePlayback: ((Int) -> Void)?
     private let mediaFilter = LibraryFilterButton()
     private let importButton = LibraryHoverButton(title: "Add Wallpapers…", target: nil, action: nil)
 
@@ -240,12 +242,30 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
     private let taskStatusRow = NSStackView()
     private var browserBottom: NSLayoutConstraint?
     private let desktopStatus = NSTextField(labelWithString: "✓ On Desktop")
+    private let pausePlayback = LibraryHoverButton(title: "Pause", target: nil, action: nil)
+    private let previousPlayback = LibraryHoverButton(frame: .zero)
+    private let nextPlayback = LibraryHoverButton(frame: .zero)
     private var playingURL: URL?
     func updatePlayingURL(_ url: URL?) {
         let next = url?.standardizedFileURL
         guard next != playingURL else { return }
         playingURL = next
         updateApplyState()
+        updatePlaybackControls()
+    }
+    func updatePlaybackState(paused: Bool, canCycle: Bool) {
+        pausePlayback.title = paused ? "Resume" : "Pause"
+        pausePlayback.toolTip = paused ? "Resume the wallpaper" : "Pause the wallpaper"
+        let enabled = playingURL != nil
+        pausePlayback.isEnabled = enabled
+        previousPlayback.isEnabled = enabled && canCycle
+        nextPlayback.isEnabled = enabled && canCycle
+    }
+    private func updatePlaybackControls() {
+        let enabled = playingURL != nil
+        pausePlayback.isEnabled = enabled
+        previousPlayback.isEnabled = enabled
+        nextPlayback.isEnabled = enabled
     }
     private func updateApplyState() {
         let isPlaying: Bool
@@ -597,7 +617,24 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         livePreviewButton.isBordered = false
         livePreviewButton.image = NSImage(systemSymbolName: "play.circle.fill", accessibilityDescription: "Preview")
         livePreviewButton.imagePosition = .imageLeading
+        pausePlayback.target = self
+        pausePlayback.action = #selector(togglePlayback)
+        pausePlayback.bezelStyle = .rounded
+        pausePlayback.isBordered = false
+        previousPlayback.target = self
+        previousPlayback.action = #selector(previousPlaybackAction)
+        previousPlayback.isBordered = false
+        previousPlayback.image = NSImage(systemSymbolName: "backward.end.fill", accessibilityDescription: "Previous wallpaper")
+        previousPlayback.toolTip = "Previous wallpaper"
+        nextPlayback.target = self
+        nextPlayback.action = #selector(nextPlaybackAction)
+        nextPlayback.isBordered = false
+        nextPlayback.image = NSImage(systemSymbolName: "forward.end.fill", accessibilityDescription: "Next wallpaper")
+        nextPlayback.toolTip = "Next wallpaper"
         let playbackActions = NSStackView(views: [livePreviewButton, NSView(), desktopStatus, apply])
+        playbackActions.insertArrangedSubview(previousPlayback, at: 0)
+        playbackActions.insertArrangedSubview(nextPlayback, at: 1)
+        playbackActions.insertArrangedSubview(pausePlayback, at: 2)
         playbackActions.spacing = 8
         adjust.isBordered = false
         adjust.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)
@@ -724,6 +761,7 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         ])
         pane.isCollapsed = inspectorButton.state == .off
         viewModeChanged()
+        updatePlaybackControls()
     }
 
     @objc private func viewModeChanged() {
@@ -1891,6 +1929,9 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         catch { reportTask(error.localizedDescription) }
     }
     @objc private func useScene() { act(editing: false) }
+    @objc private func togglePlayback() { onTogglePlayback?() }
+    @objc private func previousPlaybackAction() { onCyclePlayback?(-1) }
+    @objc private func nextPlaybackAction() { onCyclePlayback?(1) }
     var hasCycleCandidates: Bool { items.count > 1 }
 
     private func cycleIndex(delta: Int, from playingURL: URL?) -> Int? {
@@ -2279,6 +2320,14 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         precondition(controller.apply.title == "✓ On Desktop" && !controller.apply.isEnabled && !controller.apply.isHidden)
         let playingMenu = controller.gridView.onMenu!(controller.selected!)
         precondition(playingMenu.item(at: 0)?.title == "On Desktop" && playingMenu.item(at: 0)?.isEnabled == false)
+        var toggles = 0
+        var cycles: [Int] = []
+        controller.onTogglePlayback = { toggles += 1 }
+        controller.onCyclePlayback = { cycles.append($0) }
+        controller.togglePlayback()
+        controller.previousPlaybackAction()
+        controller.nextPlaybackAction()
+        precondition(toggles == 1 && cycles == [-1, 1], "Inspector playback actions must delegate to the resident transport")
         precondition(!controller.adjust.isEnabled && playingMenu.item(at: 1)?.isEnabled == false,
                      "Package scenes use Studio, not raw-media adjustments")
         controller.updatePlayingURL(nil)

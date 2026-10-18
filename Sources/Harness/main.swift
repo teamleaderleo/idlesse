@@ -44,6 +44,11 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             })
         }
         library?.onFrame = { [weak self] url, access in self?.showFraming(url, access: access) }
+        library?.onTogglePlayback = { [weak self] in
+            self?.wallpaper.togglePause()
+            self?.refreshStatusItem()
+        }
+        library?.onCyclePlayback = { [weak self] delta in self?.stepWallpaper(delta: delta) }
         wallpaper.onManualSelection = { [weak self] in
             self?.library?.stopRotation()
             self?.library?.releaseActiveUseAccess()
@@ -387,6 +392,7 @@ final class IdlesseAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         statusNextItem?.isEnabled = snapshot.canCycle
         statusPreviousItem?.isEnabled = snapshot.canCycle
         statusRestoreItem?.isEnabled = snapshot.running
+        library?.updatePlaybackState(paused: snapshot.paused, canCycle: snapshot.canCycle)
         statusItem?.button?.toolTip = snapshot.running
             ? "Idlesse — \(snapshot.paused ? "Paused · " : "Playing · ")\(snapshot.title ?? "Wallpaper")"
             : "Idlesse — Ready"
