@@ -46,6 +46,8 @@ AUTOMATION_SRCS=(Sources/Automation/AutomationCommand.swift Sources/Automation/A
 needs_build build/tests/automation "${AUTOMATION_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AUTOMATION_SRCS[@]}" -o build/tests/automation & pids+=($!); }
 WALLPAPER_POLICY_SRCS=(Sources/Wallpaper/MirrorPresentationTiming.swift Sources/Wallpaper/CoverageRestPolicy.swift Sources/Wallpaper/CoverageMonitor.swift Sources/Wallpaper/DesktopAttentionSignal.swift Sources/Wallpaper/DisplayAssignmentStore.swift Tests/WallpaperPolicyTests.swift)
 needs_build build/tests/wallpaper-policy "${WALLPAPER_POLICY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${WALLPAPER_POLICY_SRCS[@]}" -framework AppKit -o build/tests/wallpaper-policy & pids+=($!); }
+PRESENTATION_POLICY_SRCS=(Sources/Wallpaper/WallpaperPresentationPolicy.swift Tests/WallpaperPresentationPolicyTests.swift)
+needs_build build/tests/wallpaper-presentation-policy "${PRESENTATION_POLICY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${PRESENTATION_POLICY_SRCS[@]}" -o build/tests/wallpaper-presentation-policy & pids+=($!); }
 DISPLAY_TOPOLOGY_SRCS=(Sources/Wallpaper/DisplayTopology.swift Sources/Wallpaper/DisplayAssignmentStore.swift Tests/DisplayTopologyTests.swift)
 needs_build build/tests/display-topology "${DISPLAY_TOPOLOGY_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${DISPLAY_TOPOLOGY_SRCS[@]}" -framework AppKit -o build/tests/display-topology & pids+=($!); }
 for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid"; done
@@ -68,5 +70,6 @@ build/tests/quick-look
 build/tests/studio-motion
 build/tests/automation
 build/tests/wallpaper-policy
+build/tests/wallpaper-presentation-policy
 build/tests/display-topology
 python3 Tests/HomeShellContractTests.py
