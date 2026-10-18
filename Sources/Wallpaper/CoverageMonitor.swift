@@ -9,6 +9,7 @@ final class CoverageMonitor {
         let consideredWindows: Int
         let ignoredChromeWindows: Int
         let ignoredTransparentWindows: Int
+        let fullscreenOwner: Bool
     }
 
     let policy: CoverageRestPolicy
@@ -52,21 +53,22 @@ final class CoverageMonitor {
         guard let mainHeight = NSScreen.main?.frame.height,
               rect.width > 0, rect.height > 0 else {
             return Measurement(fraction: 0, consideredWindows: 0,
-                               ignoredChromeWindows: 0, ignoredTransparentWindows: 0)
+                               ignoredChromeWindows: 0, ignoredTransparentWindows: 0, fullscreenOwner: false)
         }
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], CGWindowID(0)) as? [[String: Any]] else {
             return Measurement(fraction: 0, consideredWindows: 0,
-                               ignoredChromeWindows: 0, ignoredTransparentWindows: 0)
+                               ignoredChromeWindows: 0, ignoredTransparentWindows: 0, fullscreenOwner: false)
         }
         var covering: [NSRect] = []
         var considered = 0
         var ignoredChrome = 0
         var ignoredTransparent = 0
+        var fullscreenOwner = false
         for entry in list {
             guard let number = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
                   !ownNumbers.contains(CGWindowID(number)),
                   (entry[kCGWindowOwnerPID as String] as? NSNumber)?.intValue != ownPID,
-                  let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue, layer > level,
+                  let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue,
                   let bounds = entry[kCGWindowBounds as String] as? [String: Any],
                   let x = (bounds["X"] as? NSNumber)?.doubleValue,
                   let y = (bounds["Y"] as? NSNumber)?.doubleValue,
@@ -89,13 +91,19 @@ final class CoverageMonitor {
                 ignoredTransparent += 1
                 continue
             }
+            let windowName = entry[kCGWindowName as String] as? String ?? ""
+            fullscreenOwner = fullscreenOwner || FullscreenOwnerPolicy.qualifies(
+                layer: layer, surfaceLevel: level, windowName: windowName,
+                candidate: cocoa, display: rect, opaque: true)
+            guard layer > level else { continue }
             considered += 1
             covering.append(hit)
         }
         return Measurement(fraction: Self.coveredFraction(of: rect, by: covering, cells: cells),
                            consideredWindows: considered,
                            ignoredChromeWindows: ignoredChrome,
-                           ignoredTransparentWindows: ignoredTransparent)
+                           ignoredTransparentWindows: ignoredTransparent,
+                           fullscreenOwner: fullscreenOwner)
     }
 
     func coverage(of rect: NSRect, above level: Int,
