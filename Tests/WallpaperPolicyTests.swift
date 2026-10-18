@@ -128,6 +128,13 @@ enum WallpaperPolicyTests {
         precondition(!FullscreenOwnerPolicy.qualifies(layer: 110, surfaceLevel: 100, windowName: "Game",
                                                       candidate: NSRect(x: 0, y: 0, width: 1800, height: 1080), display: display, opaque: true))
 
+        var timing = LoopBoundaryTiming()
+        precondition(timing.record(loopCount: 0, at: 0) == nil)
+        precondition(timing.record(loopCount: 1, at: 2) == nil)
+        precondition(timing.record(loopCount: 3, at: 6) == 2)
+        precondition(timing.record(loopCount: 2, at: 8) == nil,
+                     "Loop counters moving backwards must not fabricate a boundary")
+
         precondition(DesktopAttentionSignal.value(coverageFraction: 0) == 1)
         precondition(DesktopAttentionSignal.value(coverageFraction: 1) == 0)
         precondition(DesktopAttentionSignal.value(coverageFraction: 0.25) == 0.75)
