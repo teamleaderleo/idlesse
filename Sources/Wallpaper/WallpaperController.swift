@@ -753,9 +753,9 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     }
     private func logState(_ site: String) {
         let b = { (v: Bool) in v ? 1 : 0 }
-        let line = String(format: "Idlesse-state %@: running=%d loading=%d suspended=%d shouldPause=%d (byUser=%d bedtime=%d lowPower=%d) surfaces=%d scene=%@",
-            site, b(isRunning), b(isLoading), b(suspended), b(shouldPause), b(pausedByUser),
-            b(dimmedForBedtime), b(ProcessInfo.processInfo.isLowPowerModeEnabled),
+        let line = String(format: "Idlesse-state %@: running=%d loading=%d suspended=%d shouldPause=%d reason=%@ (byUser=%d bedtime=%d lowPower=%d) surfaces=%d scene=%@",
+            site, b(isRunning), b(isLoading), b(suspended), b(shouldPause), presentationDecision.reason.rawValue,
+            b(pausedByUser), b(dimmedForBedtime), b(ProcessInfo.processInfo.isLowPowerModeEnabled),
             surfaces.count, playable?.title ?? selectedURL?.lastPathComponent ?? "none")
         NSLog("%@", line)
         if let data = (line + "\n").data(using: .utf8) {
@@ -777,6 +777,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
         Paused by user: \(pausedByUser)
         Suspended: \(suspended)
         Low Power Mode: \(ProcessInfo.processInfo.isLowPowerModeEnabled)
+        Presentation decision: \(presentationDecision.state.rawValue) · \(presentationDecision.reason.rawValue)
         Surfaces: \(surfaces.count)
         Retiring surfaces: \(retiring.count)
         Nodes: \(nodes.count)
@@ -868,7 +869,14 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
     /// Set by AmbientModesController while a scheduled scene is showing so the
     /// bedtime shade doesn't pause the night scene it just switched to.
     var modeOverrideActive = false
-    private var shouldPause: Bool { pausedByUser || (dimmedForBedtime && !modeOverrideActive) || ProcessInfo.processInfo.isLowPowerModeEnabled }
+    private var presentationDecision: WallpaperPresentationDecision {
+        .resolve(userPaused: pausedByUser,
+                 bedtime: dimmedForBedtime && !modeOverrideActive,
+                 lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                 displayAsleep: asleep || systemAsleep,
+                 sessionInactive: sessionInactive)
+    }
+    private var shouldPause: Bool { presentationDecision.pausesPlayback }
 
     override init() {
         super.init()
