@@ -125,7 +125,7 @@ done < <(find "$ROOT/Sources" -type f -name '*.swift' \
   ! -path "$ROOT/Sources/DesktopMenu/*" \
   ! -path "$ROOT/Sources/QuickLook/*" -print | LC_ALL=C sort)
 
-APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit Photos ScreenSaver ScreenCaptureKit ServiceManagement UniformTypeIdentifiers Carbon )
+APP_FRAMEWORKS=( AVFoundation ApplicationServices MetalKit Metal IOKit CoreLocation AppKit AppIntents Photos ScreenSaver ScreenCaptureKit ServiceManagement UniformTypeIdentifiers Carbon )
 
 app_framework_args() {
   local f

@@ -30,6 +30,7 @@ let package = Package(
                 .linkedFramework("IOKit"),
                 .linkedFramework("CoreLocation"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("AppIntents"),
                 .linkedFramework("Photos"),
                 .linkedFramework("ScreenSaver"),
                 .linkedFramework("ScreenCaptureKit"),
