@@ -703,7 +703,7 @@ import Foundation
         do { _ = try invalidFocus.evaluated(); fatalError("Accepted nonfinite focus") } catch is SceneError {}
         let attentionNode = SceneNode(content: .gradient)
         let attention = SceneDescriptor(title: "Attention", nodes: [attentionNode], bindings: [
-            .init(target: .init(nodeID: attentionNode.id, property: .opacity), signal: .desktopAttention, scale: 0.8, offset: 0.1, smoothing: 1)
+            .init(target: .init(nodeID: attentionNode.id, property: .opacity), scale: 0.8, offset: 0.1, signal: .desktopAttention, smoothing: 1)
         ])
         let attentionPackage = root.appendingPathComponent("Attention.idlesse")
         try ScenePackageWriter.write(attention, to: attentionPackage)
