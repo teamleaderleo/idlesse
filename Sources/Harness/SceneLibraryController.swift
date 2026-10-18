@@ -621,16 +621,19 @@ final class SceneLibraryController: NSWindowController, NSTableViewDataSource, N
         pausePlayback.action = #selector(togglePlayback)
         pausePlayback.bezelStyle = .rounded
         pausePlayback.isBordered = false
+        pausePlayback.setAccessibilityLabel("Pause or resume wallpaper")
         previousPlayback.target = self
         previousPlayback.action = #selector(previousPlaybackAction)
         previousPlayback.isBordered = false
         previousPlayback.image = NSImage(systemSymbolName: "backward.end.fill", accessibilityDescription: "Previous wallpaper")
         previousPlayback.toolTip = "Previous wallpaper"
+        previousPlayback.setAccessibilityLabel("Previous wallpaper")
         nextPlayback.target = self
         nextPlayback.action = #selector(nextPlaybackAction)
         nextPlayback.isBordered = false
         nextPlayback.image = NSImage(systemSymbolName: "forward.end.fill", accessibilityDescription: "Next wallpaper")
         nextPlayback.toolTip = "Next wallpaper"
+        nextPlayback.setAccessibilityLabel("Next wallpaper")
         let playbackActions = NSStackView(views: [livePreviewButton, NSView(), desktopStatus, apply])
         playbackActions.insertArrangedSubview(previousPlayback, at: 0)
         playbackActions.insertArrangedSubview(nextPlayback, at: 1)
