@@ -810,7 +810,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         }
         guard let nextShaderInputs,
               zip(nextInputs, zip(scene.allNodes, nextShaderInputs)).allSatisfy({ input, next in
-                  input.shaderInputs.map({ ($0.id, $0.slot) }) == next.1.map({ ($0.id, $0.slot) })
+                  input.shaderInputs.elementsEqual(next.1) { lhs, rhs in lhs.id == rhs.id && lhs.slot == rhs.slot }
               }) else { return false }
         roots = scene.nodes
         sourceScene = authored
