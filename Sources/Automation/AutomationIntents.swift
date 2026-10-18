@@ -135,6 +135,22 @@ struct ScreenShareStateIntent: AppIntent {
     }
 }
 
+struct WallpaperStateIntent: AppIntent {
+    static var title: LocalizedStringResource = "Get Wallpaper State"
+    static var description = IntentDescription("Read the current Idlesse wallpaper, playback, desktop, and launch-at-login state.")
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let response = try await AutomationIntentRunner.run(.init(action: .state))
+        guard let state = response.state else {
+            return .result(dialog: IntentDialog(stringLiteral: response.message))
+        }
+        let title = state.sceneTitle ?? "No wallpaper"
+        let playback = state.paused ? "paused" : "playing"
+        let login = state.loginItemEnabled == true ? "; launch at login on" : ""
+        return .result(dialog: IntentDialog(stringLiteral: "(title): (playback)\(login)"))
+    }
+}
+
 struct IdlesseAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: ApplyAmbientSetIntent(),
@@ -167,6 +183,9 @@ struct IdlesseAppShortcuts: AppShortcutsProvider {
         AppShortcut(intent: ScreenShareStateIntent(),
                     phrases: ["Check screen sharing"],
                     shortTitle: "Screen Sharing", systemImageName: "rectangle.inset.filled.and.person.filled")
+        AppShortcut(intent: WallpaperStateIntent(),
+                    phrases: ["Get wallpaper state in \(.applicationName)"],
+                    shortTitle: "Wallpaper State", systemImageName: "info.circle")
     }
 }
 #endif
