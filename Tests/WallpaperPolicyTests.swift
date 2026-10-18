@@ -117,6 +117,17 @@ enum WallpaperPolicyTests {
         ])
         precondition(union == 1, "Overlapping window bounds must be measured as a union")
 
+        let display = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        precondition(FullscreenOwnerPolicy.qualifies(layer: 110, surfaceLevel: 100, windowName: "Game",
+                                                     candidate: display, display: display, opaque: true))
+        precondition(FullscreenOwnerPolicy.qualifies(layer: 0, surfaceLevel: 100, windowName: "",
+                                                     candidate: display, display: display, opaque: true))
+        precondition(!FullscreenOwnerPolicy.qualifies(layer: 0, surfaceLevel: 100, windowName: "Document",
+                                                      candidate: display, display: display, opaque: true),
+                     "Titled maximized windows must not enter fullscreen rest")
+        precondition(!FullscreenOwnerPolicy.qualifies(layer: 110, surfaceLevel: 100, windowName: "Game",
+                                                      candidate: NSRect(x: 0, y: 0, width: 1800, height: 1080), display: display, opaque: true))
+
         precondition(DesktopAttentionSignal.value(coverageFraction: 0) == 1)
         precondition(DesktopAttentionSignal.value(coverageFraction: 1) == 0)
         precondition(DesktopAttentionSignal.value(coverageFraction: 0.25) == 0.75)

@@ -190,11 +190,19 @@ final class WallpaperSurface {
     /// Set by the coverage monitor: a fully covered display rests its own
     /// renderer without affecting other displays or the pause state.
     private var covered = false
-    var isCovered: Bool { covered }
+    private var fullscreenCovered = false
+    var isCovered: Bool { covered || fullscreenCovered }
+    var isCoverageResting: Bool { covered }
+    var isFullscreenResting: Bool { fullscreenCovered }
     func setCovered(_ value: Bool) {
         guard covered != value else { return }
         covered = value
-        renderer.setPaused(pausedState || covered)
+        renderer.setPaused(pausedState || covered || fullscreenCovered)
+    }
+    func setFullscreenCovered(_ value: Bool) {
+        guard fullscreenCovered != value else { return }
+        fullscreenCovered = value
+        renderer.setPaused(pausedState || covered || fullscreenCovered)
     }
     func setMuted(_ muted: Bool) { renderer.setMuted(muted) }
 
@@ -1184,6 +1192,7 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             if !newValue {
                 coverageMonitor.reset()
                 surfaces.forEach { $0.setCovered(false) }
+                surfaces.forEach { $0.setFullscreenCovered(false) }
                 applySharedHubPause()
             }
             pollCoverage()
@@ -1219,10 +1228,19 @@ final class WallpaperController: NSObject, NSMenuItemValidation {
             let measurement = coverageMonitor.measurement(of: surface.window.frame,
                 above: surface.window.level.rawValue, excluding: own, ownPID: pid)
             if feedAttention { surface.setDesktopAttention(DesktopAttentionSignal.value(coverageFraction: measurement.fraction)) }
+            let fullscreenOwner = coveragePauseEnabled && measurement.fullscreenOwner
+            let fullscreenChanged = surface.isFullscreenResting != fullscreenOwner
+            surface.setFullscreenCovered(fullscreenOwner)
+            if fullscreenOwner {
+                Self.appendLine(String(format: "Idlesse-fullscreen-rest display=%@ frame=%@", Self.persistentDisplayIdentifier(surface.displayID), NSStringFromRect(surface.window.frame)))
+                changed = changed || fullscreenChanged
+                continue
+            }
+            changed = changed || fullscreenChanged
             let key = Self.persistentDisplayIdentifier(surface.displayID)
             guard coveragePauseEnabled else { continue }
             let decision = coverageMonitor.evaluate(displayKey: key, fraction: measurement.fraction,
-                currentResting: surface.isCovered)
+                currentResting: surface.isCoverageResting)
             let candidate = decision.candidate.map { $0 ? "rest" : "resume" } ?? "hold"
             Self.appendLine(String(format:
                 "Idlesse-coverage display=%@ frame=%@ fraction=%.2f resting=%d candidate=%@ stable=%d/%d windows=%d chrome=%d transparent=%d thresholds=%.2f/%.2f",
