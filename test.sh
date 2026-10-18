@@ -38,6 +38,8 @@ AMBIENT_SET_SRCS=(Sources/Wallpaper/AmbientSet.swift Sources/Wallpaper/AmbientSe
 needs_build build/tests/ambient-sets "${AMBIENT_SET_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${AMBIENT_SET_SRCS[@]}" -o build/tests/ambient-sets & pids+=($!); }
 VARIANT_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Tests/VariantTests.swift)
 needs_build build/tests/variants "${VARIANT_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${VARIANT_SRCS[@]}" -framework CoreGraphics -o build/tests/variants & pids+=($!); }
+SHADER_EFFECT_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Tests/ShaderEffectSceneTests.swift)
+needs_build build/tests/shader-effects "${SHADER_EFFECT_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${SHADER_EFFECT_SRCS[@]}" -framework CoreGraphics -o build/tests/shader-effects & pids+=($!); }
 QUICKLOOK_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Runtime/ScenePreviewPolicy.swift Sources/Harness/DocumentOpenRouter.swift Tests/QuickLookTests.swift)
 needs_build build/tests/quick-look "${QUICKLOOK_SRCS[@]}" && { xcrun swiftc "$OPT_FLAG" "${QUICKLOOK_SRCS[@]}" -framework CoreGraphics -o build/tests/quick-look & pids+=($!); }
 STUDIO_MOTION_SRCS=("${SCENE_GEOMETRY_SRCS[@]}" Sources/Runtime/Scene.swift Sources/Harness/StudioMotionAuthoring.swift Tests/StudioMotionTests.swift)
@@ -66,6 +68,7 @@ build/tests/library-benchmark
 build/tests/library-grid
 build/tests/ambient-sets
 build/tests/variants
+build/tests/shader-effects
 build/tests/quick-look
 build/tests/studio-motion
 build/tests/automation
