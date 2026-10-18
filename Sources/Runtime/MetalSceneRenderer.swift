@@ -190,7 +190,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         var node: SceneNode
         var texture: MTLTexture?
         var shaderPipeline: MTLRenderPipelineState?
-        var shaderEffectPipelines: [UUID: MTLRenderPipelineState] = [:]
         var videoTexture: CVMetalTexture?
         var pixelBuffer: CVPixelBuffer?
         var maskTexture: MTLTexture?
@@ -286,10 +285,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             throw SceneError.invalid("Shader pipeline failed: \(error.localizedDescription)")
         }
     }
-    private static func compileShaderEffect(_ shader: SceneNode.Shader, device: MTLDevice,
-                                            vertex: MTLFunction) throws -> MTLRenderPipelineState {
-        try MetalShaderEffectCompiler.makePipeline(shader, inputs: [], device: device, vertex: vertex)
-    }
     private let presentations = PresentedFrameCounter()
     var presentedFrameCount: Int? { presentations.total }
     var gpuTotals: (seconds: Double, frames: Int)? { presentations.gpuTotals }
@@ -344,9 +339,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             throw SceneError.invalid("Metal is unavailable on this Mac.")
         }
         let library = try device.makeLibrary(source: Self.shader, options: nil)
-        guard let sceneQuad = library.makeFunction(name: "sceneQuad") else {
-            throw SceneError.invalid("The scene quad vertex function is unavailable.")
-        }
         let spec = MTLRenderPipelineDescriptor()
         spec.vertexFunction = library.makeFunction(name: "sceneQuad")
         spec.fragmentFunction = library.makeFunction(name: "shade")
@@ -428,10 +420,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             case .gradient, .group, .particles: break
             case .shader(let shader):
                 input.shaderPipeline = try Self.compileShader(shader, device: device, library: library)
-            }
-            for effect in node.style.effects {
-                guard let shader = effect.shader, let id = effect.id else { continue }
-                input.shaderEffectPipelines[id] = try Self.compileShaderEffect(shader, device: device, vertex: sceneQuad)
             }
             for (url, isMask) in [(node.maskAsset, true), (node.sprite, false)] {
                 guard let url else { continue }
@@ -589,27 +577,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             encoder.endEncoding()
             return true
         }
-        func shaderEffectPass(source: MTLTexture, destination: MTLTexture,
-                              pipeline: MTLRenderPipelineState, amount: Float) -> Bool {
-            guard let encoder = command.makeRenderCommandEncoder(descriptor: renderPass(destination)) else { return false }
-            var u = Uniforms(transform: SIMD4(0, 0, 1, 0), media: SIMD4(1, 1, 1, 0),
-                viewport: SIMD4(sceneAspect, Float(clock.time.truncatingRemainder(dividingBy: 3600)), 0, amount),
-                style: SIMD4(0, 0, 1, 0))
-            var effectUniforms = ShaderEffectUniforms(
-                viewport: SIMD4(Float(clock.time.truncatingRemainder(dividingBy: 3600)),
-                                Float(destination.width), Float(destination.height), amount),
-                signals: SIMD4(Float(lastSignals.pointerX), Float(lastSignals.pointerY),
-                                Float(lastSignals.audio.level), 0))
-            var inputs = MetalShaderInputUniforms([])
-            encoder.setRenderPipelineState(pipeline)
-            encoder.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-            encoder.setFragmentBytes(&effectUniforms, length: MemoryLayout<ShaderEffectUniforms>.stride, index: 1)
-            encoder.setFragmentBytes(&inputs, length: MemoryLayout<MetalShaderInputUniforms>.stride, index: 2)
-            encoder.setFragmentTexture(source, index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            encoder.endEncoding()
-            return true
-        }
         func encodeNodes(_ nodes: [SceneNode], into target: MTLRenderPassDescriptor, root: Bool = false, isolated: Bool = false) -> Bool {
             // Children finish their offscreen passes before their parent encoder begins.
             for node in nodes where node.visible && node.kind == .group && !isolated {
@@ -636,13 +603,6 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
                 for effect in node.style.effects {
                     let available = scratch.filter { $0 !== current }
                     let amount = Float(effect.amount)
-                    if effect.shader != nil, let id = effect.id,
-                       let effectPipeline = byID[node.id]?.shaderEffectPipelines[id] {
-                        guard shaderEffectPass(source: current, destination: available[0],
-                                               pipeline: effectPipeline, amount: amount) else { return false }
-                        current = available[0]
-                        continue
-                    }
                     switch effect.type {
                     case .blur, .bloom:
                         if amount == 0 { continue }
