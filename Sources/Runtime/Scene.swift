@@ -163,6 +163,7 @@ struct SceneDescriptor: Codable, Sendable {
     var usesDrivers: Bool { bindings.contains { !$0.modifiers.isEmpty } }
     var usesAudio: Bool { bindings.contains { $0.signal?.rawValue.hasPrefix("audio.") == true } }
     var usesPointer: Bool { bindings.contains { $0.signal == .pointerX || $0.signal == .pointerY } }
+    var usesDesktopAttention: Bool { bindings.contains { $0.signal == .desktopAttention } }
     var usesTime: Bool { usesTracks || bindings.contains { $0.signal == .time || $0.signal == .sine } }
     var requiresMetal: Bool { parameters.values.contains { !$0.targets.isEmpty } || canvas == .desktopSpan || timeline != nil || usesDrivers || usesSignals || allNodes.contains { $0.style != .plain || [.particles, .text, .shape, .shader].contains($0.kind) || $0.needsComposition } || bindings.contains { [.exposure, .saturation, .vignette].contains($0.target.property) } }
     var animated: Bool {
@@ -275,6 +276,7 @@ struct SceneDescriptor: Codable, Sendable {
                 case .audioBass: source = signals.audio.bass
                 case .audioMid: source = signals.audio.mid
                 case .audioTreble: source = signals.audio.treble
+                case .desktopAttention: source = signals.desktopAttention
                 }
             } else {
                 guard let parameter = parameters[binding.parameter], parameter.type == .number else { throw SceneError.invalid("Motion bindings require a numeric parameter.") }
@@ -691,7 +693,7 @@ struct SceneParameterBinding: Codable, Sendable {
         var parameter: String? = nil
         var value: Double? = nil
     }
-    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble" }
+    enum Signal: String, Codable, Sendable { case time, sine, pointerX = "pointer.x", pointerY = "pointer.y", audioLevel = "audio.level", audioBass = "audio.bass", audioMid = "audio.mid", audioTreble = "audio.treble", desktopAttention = "desktop.attention" }
     var target: ScenePropertyAddress
     var parameter: String = ""
     var scale: Double = 1
@@ -733,6 +735,7 @@ struct SceneSignals: Sendable {
     var time: Double = 0
     var pointerX: Double = 0
     var pointerY: Double = 0
+    var desktopAttention: Double = 1
 }
 
 struct SceneNode: Codable, Sendable {
@@ -1300,6 +1303,9 @@ struct LocalSceneSource: SceneSource {
         }
         guard !result.usesAudio || (manifest.version >= 14 && manifest.capabilities.contains("audio")) else { throw SceneError.invalid("Audio bindings require v14 and the audio capability.") }
         guard !result.usesPointer || manifest.capabilities.contains("pointer") else { throw SceneError.invalid("Pointer bindings must declare the pointer capability.") }
+        guard !result.usesDesktopAttention || (manifest.version == SceneFormat.revision && manifest.capabilities.contains("desktop-attention")) else {
+            throw SceneError.invalid("Desktop-attention bindings require revision 21 and the desktop-attention capability.")
+        }
         _ = try result.evaluated()
         return result
     }
@@ -1513,9 +1519,12 @@ enum ScenePackageWriter {
         if !scene.variants.isEmpty {
             contents["variants"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(scene.variants))
         }
+        var capabilities: [String] = []
+        if scene.usesPointer { capabilities.append("pointer") }
+        if scene.usesAudio { capabilities.append("audio") }
+        if scene.usesDesktopAttention { capabilities.append("desktop-attention") }
         var manifest: [String: Any] = ["version": SceneFormat.revision, "title": scene.title,
-            "features": SceneFormat.features(scene).sorted(),
-            "capabilities": (scene.usesPointer ? ["pointer"] : []) + (scene.usesAudio ? ["audio"] : [])]
+            "features": SceneFormat.features(scene).sorted(), "capabilities": capabilities]
         if let metadata = scene.metadata {
             manifest["metadata"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata))
         }

@@ -132,6 +132,8 @@ protocol SceneRenderer: AnyObject {
     /// Opt-in audible video. Default implementation ignores it (stills, Metal
     /// composites without a player); players override. Muted by default.
     func setMuted(_ muted: Bool)
+    /// Opt-in privacy-preserving desktop exposure input; non-Metal renderers ignore it.
+    func setDesktopAttention(_ value: Double)
     func releaseResources()
     func updateScene(_ scene: SceneDescriptor) -> Bool
     func refreshSceneTime()
@@ -141,6 +143,7 @@ extension SceneRenderer {
     var isReadyForDisplay: Bool { true }
     func refreshSceneTime() { view.needsDisplay = true }
     func setMuted(_ muted: Bool) {}
+    func setDesktopAttention(_ value: Double) {}
     func updateScene(_ scene: SceneDescriptor) -> Bool { false }
     var presentedFrameCount: Int? { nil }
     var gpuTotals: (seconds: Double, frames: Int)? { nil }

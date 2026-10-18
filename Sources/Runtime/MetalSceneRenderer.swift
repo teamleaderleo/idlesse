@@ -862,10 +862,12 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
         // A completed once scene has no moving clock. Independent videos,
         // pointer input and smoothing may still change its final composition.
         let independentVideo = inputs.contains { visibleIDs.contains($0.node.id) && $0.node.kind == .video && !$0.followsClock }
-        let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true || (sourceScene?.usesPointer == true && clock.pointerEnabled)
+        let reactive = (sourceScene?.usesAudio == true && clock.audioEnabled) || sourceScene?.usesSmoothing == true ||
+            (sourceScene?.usesPointer == true && clock.pointerEnabled) || sourceScene?.usesDesktopAttention == true
         let finished = clock.isAtEnd && !independentVideo && !reactive
         metal.isPaused = diagnostics.state != .running || !diagnostics.animated || finished
     }
+    private var desktopAttention = 1.0
     private var lastSignals = SceneSignals(time: 0)
     private func sampledSignals() -> SceneSignals {
         let signals = currentSignals()
@@ -874,6 +876,7 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
     }
     private func currentSignals() -> SceneSignals {
         var signals = SceneSignals(time: clock.time)
+        signals.desktopAttention = desktopAttention
         if sourceScene?.usesAudio == true, clock.audioEnabled { signals.audio = clock.audioLevels() }
         if sourceScene?.usesPointer == true, clock.pointerEnabled, let window = metal.window {
             if sourceScene?.canvas == .desktopSpan, let world = desktopFrame {
@@ -888,6 +891,13 @@ final class MetalSceneRenderer: NSObject, SceneRenderer, MTKViewDelegate {
             signals.pointerY = min(1, max(-1, metal.isFlipped ? -y : y))
         }
         return signals
+    }
+
+    func setDesktopAttention(_ value: Double) {
+        desktopAttention = value.isFinite ? min(1, max(0, value)) : 1
+        guard sourceScene?.usesDesktopAttention == true else { return }
+        updateSignals(currentSignals())
+        metal.draw()
     }
     private func updateSignals(_ signals: SceneSignals) {
         guard let sourceScene, sourceScene.usesSignals else { return }
