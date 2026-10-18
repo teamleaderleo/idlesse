@@ -124,6 +124,17 @@ struct CleanDesktopIntent: AppIntent {
     }
 }
 
+struct ScreenShareStateIntent: AppIntent {
+    static var title: LocalizedStringResource = "Check Screen Sharing"
+    static var description = IntentDescription("Check whether another application currently exposes an active screen-sharing window.")
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let response = try await AutomationIntentRunner.run(.init(action: .screenShareState))
+        let state = response.state?.screenShare.rawValue ?? "unknown"
+        return .result(dialog: IntentDialog(stringLiteral: "Screen sharing: \(state)"))
+    }
+}
+
 struct IdlesseAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: ApplyAmbientSetIntent(),
@@ -153,6 +164,9 @@ struct IdlesseAppShortcuts: AppShortcutsProvider {
         AppShortcut(intent: CleanDesktopIntent(),
                     phrases: ["Clean desktop with \(.applicationName)"],
                     shortTitle: "Clean Desktop", systemImageName: "rectangle.dashed")
+        AppShortcut(intent: ScreenShareStateIntent(),
+                    phrases: ["Check screen sharing"],
+                    shortTitle: "Screen Sharing", systemImageName: "rectangle.inset.filled.and.person.filled")
     }
 }
 #endif
